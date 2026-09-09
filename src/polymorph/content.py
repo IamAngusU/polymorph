@@ -198,7 +198,9 @@ class MagikaClassifier:
     def classify(self, path: Path) -> ClassifierEvidence:
         result = self._magika.identify_path(path)
         output = result.output
-        score = getattr(result, "score", getattr(output, "score", None))
+        score = getattr(result, "score", None)
+        if score is None:
+            score = getattr(output, "score", None)
         return ClassifierEvidence(
             provider="magika",
             label=str(output.label),
@@ -338,9 +340,15 @@ class ContentInspector:
                     signals = (*signals, f"classifier unavailable: {type(exc).__name__}")
                 else:
                     classifier_kind = self._classifier_kind(classifier)
+                    compatible_json_probe = (
+                        kind is ContentKind.TEXT
+                        and classifier_kind is ContentKind.JSON
+                        and any(signal.startswith("JSON-like") for signal in signals)
+                    )
                     if (
                         classifier_kind is not None
                         and classifier_kind is not kind
+                        and not compatible_json_probe
                         and classifier.score is not None
                         and classifier.score >= self.policy.classifier_disagreement_threshold
                     ):
@@ -355,6 +363,8 @@ class ContentInspector:
                             )
                         )
                         signals = (*signals, "independent content detectors disagree")
+                    elif compatible_json_probe:
+                        signals = (*signals, "classifier also reported JSON for bounded probe")
 
             if source_handle is not None:
                 try:

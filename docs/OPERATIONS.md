@@ -71,7 +71,21 @@ raw formula text. Polymorph does not silently prefix or mutate the value.
 
 ## Audit
 
-Audit records contain delivery metadata and cryptographic digests only. They intentionally do not accept arbitrary dictionaries, raw errors or record values. `polymorph audit verify` checks the hash chain and can additionally verify Ed25519 signatures when a trusted public key is supplied.
+Built-in audit records contain delivery metadata and cryptographic digests only. The API accepts a
+fixed, bounded structure rather than arbitrary dictionaries or raw exception text. Integrators
+must still keep record values out of identifier fields. `polymorph audit verify` checks the hash
+chain and can additionally verify Ed25519 signatures when a trusted public key is supplied.
+
+`polymorph audit summary` verifies that chain before returning counts by event type, status and
+reason code. It does not expose record IDs. `polymorph explain REASON_CODE` returns the stable
+meaning, retry policy and next operator action for known reasons. CLI verification refuses a
+missing path instead of silently creating an empty audit database.
+
+The audit hook is optional and currently covers final destination delivery, replay and force-replay
+receipts only. `DeliveryReceipt.audit_status` distinguishes `disabled`, `recorded` and
+`append_failed`; an append failure cannot turn an already committed write into an apparent
+retryable failure. This is not yet a complete source-to-relay-to-destination event stream,
+alerting service or metrics backend.
 
 ## Quarantine
 

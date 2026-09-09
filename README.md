@@ -23,6 +23,8 @@ Stable protocol and persisted-state namespaces are intentionally decoupled from 
 - Deterministic schema matching remains the automatic authority. Optional local embeddings and a multilingual cross-encoder reranker can improve candidate order, but neither can independently authorize a write mapping.
 - One-command `prepare` flow for content inspection, mapping, recipe reuse and full no-write preflight.
 - Versioned local recipes. A recipe is reusable memory, not permission: it is structurally matched, rebound to the current exact schemas, assigned a new plan digest and validated again before use.
+- Metadata-only recipe outcomes drive a conservative reuse circuit. Repeated rejected runs suspend
+  the old recipe and fall back to fresh mapping instead of silently changing it.
 - Full-scan preflight exercises source transforms and optional read-only foreign-key resolution without destination writes. Sampled scans can inform review but cannot auto-promote a recipe.
 - Opt-in resource benchmarks and labelled mapping-corpus evaluation. Normal runs do not enable tracing or RSS polling.
 - Full-record blind transport using X25519, HKDF-SHA256 and ChaCha20-Poly1305.
@@ -37,6 +39,7 @@ Stable protocol and persisted-state namespaces are intentionally decoupled from 
 - CSV exports reject spreadsheet formula-like values by default. HTTP redirects never count as a
   committed write.
 - Ed25519-signed capabilities and a hash-chained metadata-only audit log.
+- Reason-code explanations plus verified audit and recipe-health summaries for operator diagnosis.
 - Credential references and encrypted destination recipient key files.
 
 ## Trust model
@@ -86,8 +89,9 @@ python scripts/dev.py doctor
 
 The two model profiles use about 247 MB on disk. They verify eagerly but allocate ONNX sessions
 only when a genuinely ambiguous mapping needs model evidence. On the current Windows reference
-machine, the full seven-case model smoke peaked at about 435 MiB RSS, roughly 362 MiB above its
-starting RSS. Treat that as a local measurement, not a cross-platform guarantee. The core works
+machine, the full seven-case model smoke peaked at 437.8 MiB RSS. The fully durable, signed and
+audited local transport moved 1,000 seven-field records at 65.88 records/s with a memory sink.
+Treat those as local measurements, not cross-platform guarantees. The core works
 without the models:
 
 ```bash
@@ -155,6 +159,9 @@ polymorph inspect auto ./unknown-upload --magika
 polymorph doctor
 polymorph benchmark inspect ./unknown-upload --records 10000 --magika
 polymorph benchmark mapping ./benchmarks/safety-smoke.json --require-auto-precision 1.0
+polymorph recipe health
+polymorph audit summary ./audit.sqlite
+polymorph explain write_outcome_unknown
 ```
 
 The benchmark commands are explicit diagnostics. Production code paths do not start Python allocation tracing or memory polling.
@@ -166,9 +173,12 @@ The benchmark commands are explicit diagnostics. Production code paths do not st
 - [File trust gate](https://github.com/IamAngusU/polymorph/blob/main/docs/FILE_TRUST.md)
 - [Recipes](https://github.com/IamAngusU/polymorph/blob/main/docs/RECIPES.md)
 - [Benchmarking](https://github.com/IamAngusU/polymorph/blob/main/docs/BENCHMARKING.md)
+- [Measured performance baseline](https://github.com/IamAngusU/polymorph/blob/main/docs/PERFORMANCE_BASELINE.md)
 - [Protocol](https://github.com/IamAngusU/polymorph/blob/main/docs/PROTOCOL.md)
 - [Threat model](https://github.com/IamAngusU/polymorph/blob/main/docs/THREAT_MODEL.md)
 - [Operations and replay safety](https://github.com/IamAngusU/polymorph/blob/main/docs/OPERATIONS.md)
+- [Operational visibility](https://github.com/IamAngusU/polymorph/blob/main/docs/OBSERVABILITY.md)
+- [Ecosystem and dataset review](https://github.com/IamAngusU/polymorph/blob/main/docs/ECOSYSTEM_REVIEW.md)
 - [Security reporting](https://github.com/IamAngusU/polymorph/blob/main/SECURITY.md)
 - [Roadmap](https://github.com/IamAngusU/polymorph/blob/main/docs/ROADMAP.md)
 - [Product direction](https://github.com/IamAngusU/polymorph/blob/main/docs/PRODUCT.md)
@@ -186,6 +196,10 @@ per-tenant queue quota and no external audit checkpoint against log-suffix trunc
 URLs can also leak credentials through shell history, so production automation should use
 `DatabaseEndpoint` plus a secret provider. Automatic-promotion policy still needs a large,
 source-separated adversarial corpus and independent security review.
+
+The alpha is not fully self-monitoring. Destination audit is optional, and there is no complete
+event stream, alerting service or queue metric exporter. Recipe health is a real closed safety
+loop, but its only automatic response is to reduce trust after repeated rejected runs.
 
 ## License
 

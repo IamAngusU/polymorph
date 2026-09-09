@@ -46,6 +46,18 @@ Polymorph itself is licensed separately under the terms in `LICENSE`.
 - Upstream license: BSD 3-Clause
 - Purpose: opt-in RSS measurements during explicit benchmark commands only.
 
+## CSV parser regression fixtures
+
+- Component: csv-spectrum 2.0.0
+- Upstream: https://github.com/max-mapper/csv-spectrum
+- Pinned commit: `d30e80f8b99d2eecb3778f1d7b9ed1cb425502ec`
+- Upstream license declaration: BSD-2-Clause
+- Upstream author: Max Ogden
+- Purpose: 11 small CSV and expected-JSON pairs used as test fixtures only.
+- Provenance and exact SHA-256 checksums: `tests/fixtures/csv-spectrum/PROVENANCE.md`
+- Redistributed license terms: `tests/fixtures/csv-spectrum/LICENSE.txt`
+- No JavaScript code or npm dependency is included.
+
 ## Runtime dependencies
 
 Python dependencies listed in `pyproject.toml` retain their respective upstream licenses. Optional extras are not bundled merely by cloning this repository.

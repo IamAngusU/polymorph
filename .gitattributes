@@ -3,11 +3,19 @@
 
 *.py text eol=lf
 *.toml text eol=lf
+*.in text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
 *.json text eol=lf
 *.md text eol=lf
 *.txt text eol=lf
+
+# csv-spectrum encodes newline behavior in the fixture names. Keep its source
+# cases byte-stable on every platform instead of applying local autocrlf rules.
+tests/fixtures/csv-spectrum/csvs/*.csv text eol=lf
+tests/fixtures/csv-spectrum/csvs/*_crlf.csv text eol=crlf
+tests/fixtures/csv-spectrum/csvs/*.csv -whitespace
+tests/fixtures/csv-spectrum/SHA256SUMS text eol=lf
 
 *.png binary
 *.webp binary

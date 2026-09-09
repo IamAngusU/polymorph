@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import sqlite3
+from collections import Counter
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -30,6 +31,29 @@ class AuditEvent:
     timestamp: datetime | None = None
 
     def canonical_dict(self) -> dict[str, object]:
+        machine_fields = {
+            "event_type": (self.event_type, 64),
+            "status": (self.status, 64),
+        }
+        for label, (value, maximum) in machine_fields.items():
+            if not value or len(value) > maximum or not value.replace("_", "").isalnum():
+                raise ValueError(f"audit {label} must be a short machine-readable identifier")
+        metadata_fields = {
+            "actor": (self.actor, 128),
+            "tenant": (self.tenant, 128),
+            "connector_id": (self.connector_id, 128),
+            "transfer_id": (self.transfer_id, 256),
+            "record_id": (self.record_id, 256),
+        }
+        for label, (value, maximum) in metadata_fields.items():
+            if not value or len(value) > maximum or not value.isprintable():
+                raise ValueError(f"audit {label} must be bounded printable metadata")
+        for label, value in {
+            "record_digest": self.record_digest,
+            "plan_digest": self.plan_digest,
+        }.items():
+            if len(value) != 64 or any(char not in "0123456789abcdefABCDEF" for char in value):
+                raise ValueError(f"audit {label} must be a SHA-256 hex digest")
         timestamp = self.timestamp or datetime.now(UTC)
         if timestamp.tzinfo is None:
             timestamp = timestamp.replace(tzinfo=UTC)
@@ -65,26 +89,75 @@ class AuditRecord:
     signature: bytes | None
 
 
+@dataclass(frozen=True, slots=True)
+class AuditSummary:
+    events: int
+    event_types: dict[str, int]
+    statuses: dict[str, int]
+    reasons: dict[str, int]
+    signature_fields_present: int
+    signature_fields_absent: int
+    signatures_verified: bool
+    first_timestamp: str | None
+    last_timestamp: str | None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "events": self.events,
+            "event_types": self.event_types,
+            "statuses": self.statuses,
+            "reasons": self.reasons,
+            "signature_fields_present": self.signature_fields_present,
+            "signature_fields_absent": self.signature_fields_absent,
+            "signatures_verified": self.signatures_verified,
+            "first_timestamp": self.first_timestamp,
+            "last_timestamp": self.last_timestamp,
+        }
+
+
 class AuditLog:
     """Tamper-evident metadata audit trail with optional Ed25519 signatures.
 
-    The API intentionally accepts a fixed event structure instead of arbitrary dictionaries,
-    preventing callers from casually placing payload values in the audit store.
+    The API accepts a bounded event structure instead of arbitrary dictionaries. This reduces
+    accidental payload logging, but callers must still treat every supplied identifier as
+    potentially sensitive metadata.
     """
 
-    def __init__(self, path: str | Path, *, signer: SigningKeyPair | None = None) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        signer: SigningKeyPair | None = None,
+        create: bool = True,
+    ) -> None:
         self.path = Path(path)
         self.signer = signer
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._initialize()
-        if os.name == "posix":
-            os.chmod(self.path, 0o600)
+        self._read_only = not create
+        if create:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._initialize()
+            if os.name == "posix":
+                os.chmod(self.path, 0o600)
+        else:
+            if not self.path.is_file():
+                raise IntegrityError("audit store does not exist")
+            self._validate_existing_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=10.0, isolation_level=None)
+        if self._read_only:
+            database = f"{self.path.resolve().as_uri()}?mode=ro"
+            connection = sqlite3.connect(
+                database,
+                timeout=10.0,
+                isolation_level=None,
+                uri=True,
+            )
+        else:
+            connection = sqlite3.connect(self.path, timeout=10.0, isolation_level=None)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA busy_timeout = 10000")
-        configure_sqlite_durability(connection)
+        if not self._read_only:
+            configure_sqlite_durability(connection)
         return connection
 
     def _initialize(self) -> None:
@@ -101,6 +174,23 @@ class AuditLog:
                 """
             )
 
+    def _validate_existing_schema(self) -> None:
+        try:
+            with closing(self._connect()) as connection:
+                rows = connection.execute("PRAGMA table_info(audit_events)").fetchall()
+        except sqlite3.DatabaseError as exc:
+            raise IntegrityError("audit store is not a valid SQLite database") from exc
+        required = {
+            "sequence",
+            "event_json",
+            "previous_hash",
+            "event_hash",
+            "signature",
+        }
+        columns = {str(row["name"]) for row in rows}
+        if not required.issubset(columns):
+            raise IntegrityError("audit store schema is missing or incompatible")
+
     @staticmethod
     def _hash(previous_hash: str, event: dict[str, object]) -> str:
         encoded = json.dumps(
@@ -112,6 +202,8 @@ class AuditLog:
         return hashlib.sha256(previous_hash.encode("ascii") + b"\x00" + encoded).hexdigest()
 
     def append(self, event: AuditEvent) -> AuditRecord:
+        if self._read_only:
+            raise IntegrityError("cannot append to a read-only audit store")
         payload = event.canonical_dict()
         connection = self._connect()
         try:
@@ -146,19 +238,32 @@ class AuditLog:
         finally:
             connection.close()
 
-    def verify(self, *, trusted_public_key: bytes | None = None) -> int:
+    def _read_rows(self) -> list[sqlite3.Row]:
         with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN")
             rows = connection.execute(
                 "SELECT sequence, event_json, previous_hash, event_hash, signature "
                 "FROM audit_events ORDER BY sequence"
             ).fetchall()
+        return rows
 
+    def _verify_rows(
+        self,
+        rows: list[sqlite3.Row],
+        *,
+        trusted_public_key: bytes | None = None,
+    ) -> int:
         previous_hash = "0" * 64
         expected_sequence = 1
         for row in rows:
             if int(row["sequence"]) != expected_sequence:
                 raise IntegrityError("audit sequence contains a gap")
-            event = json.loads(row["event_json"])
+            try:
+                event = json.loads(row["event_json"])
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise IntegrityError("audit event JSON is invalid") from exc
+            if not isinstance(event, dict):
+                raise IntegrityError("audit event JSON is not an object")
             if row["previous_hash"] != previous_hash:
                 raise IntegrityError("audit hash chain is broken")
             expected_hash = self._hash(previous_hash, event)
@@ -172,6 +277,46 @@ class AuditLog:
             previous_hash = expected_hash
             expected_sequence += 1
         return len(rows)
+
+    def verify(self, *, trusted_public_key: bytes | None = None) -> int:
+        return self._verify_rows(
+            self._read_rows(),
+            trusted_public_key=trusted_public_key,
+        )
+
+    def summary(self, *, trusted_public_key: bytes | None = None) -> AuditSummary:
+        """Verify the chain, then aggregate metadata without exposing event identifiers."""
+
+        rows = self._read_rows()
+        count = self._verify_rows(rows, trusted_public_key=trusted_public_key)
+        event_types: Counter[str] = Counter()
+        statuses: Counter[str] = Counter()
+        reasons: Counter[str] = Counter()
+        timestamps: list[str] = []
+        signature_fields_present = 0
+        for row in rows:
+            event = json.loads(row["event_json"])
+            event_types[str(event.get("event_type", "unknown"))] += 1
+            statuses[str(event.get("status", "unknown"))] += 1
+            reason = event.get("reason_code")
+            if reason is not None:
+                reasons[str(reason)] += 1
+            timestamp = event.get("timestamp")
+            if isinstance(timestamp, str):
+                timestamps.append(timestamp)
+            if row["signature"] is not None:
+                signature_fields_present += 1
+        return AuditSummary(
+            events=count,
+            event_types=dict(sorted(event_types.items())),
+            statuses=dict(sorted(statuses.items())),
+            reasons=dict(sorted(reasons.items())),
+            signature_fields_present=signature_fields_present,
+            signature_fields_absent=count - signature_fields_present,
+            signatures_verified=trusted_public_key is not None,
+            first_timestamp=timestamps[0] if timestamps else None,
+            last_timestamp=timestamps[-1] if timestamps else None,
+        )
 
     def export_jsonl(self) -> str:
         with closing(self._connect()) as connection, connection:

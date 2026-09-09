@@ -31,6 +31,30 @@ If the current route needs review, recipe activation stops.
 
 Manual `polymorph recipe remember` is a separate operator action. It validates the plan but represents explicit operator approval rather than automatic promotion.
 
+Every real `prepare` reuse records the metadata-only preflight outcome. A newly remembered recipe
+also starts with its successful full-scan observation. Inspect the history-derived status with:
+
+```bash
+polymorph recipe health --store ./recipes.sqlite3
+polymorph recipe health RECIPE_ID --store ./recipes.sqlite3
+```
+
+`recipe find` also reports the matched recipe's health and whether automatic reuse is allowed. It
+still permits exporting a rebound plan for manual inspection; `prepare` is the command that
+enforces the automatic-reuse circuit.
+
+Health is `unobserved`, `healthy`, `degraded` or `suspended`. Review and sampled outcomes are
+visible as degraded health, but do not open the automatic-reuse circuit. Three consecutive
+rejected runs suspend reuse by default. `prepare` then falls back to a fresh conservative mapping
+instead of trusting the unhealthy recipe. The threshold is configurable, and a successful
+observation or a newly approved recipe version provides a recovery path.
+
+Parser iteration and destination-probe availability failures are recorded as quarantined
+observations, not recipe rejections. They remain visible but do not poison the reuse circuit.
+
+This adaptation only reduces automation. It does not mutate a mapping from production data,
+raise confidence scores or approve a replacement plan by itself.
+
 ## Drift behavior
 
 Recipes do not use file path, workbook name or display name as their primary identity. This allows the same approved structure to be reused for periodic imports whose filenames change.

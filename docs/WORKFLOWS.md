@@ -50,7 +50,8 @@ old ciphertext remains bound to it.
 
 The runtime records `UNKNOWN`, preserves the sealed record and refuses a blind non-idempotent retry.
 The next action is destination-specific reconciliation. An authorized operator may force a retry,
-but that is a separate capability and an auditable event.
+but that is a separate capability. When a destination audit log is configured, its final receipt
+uses the distinct `force_replay` event type instead of looking like an ordinary delivery.
 
 ## 5. Hostile or weird input
 

@@ -24,6 +24,7 @@ from .connectors.database import DatabaseConnector
 from .connectors.excel import ExcelConnector
 from .connectors.json_file import JsonFileConnector
 from .content import ContentInspector, ContentKind, FileInspection, MagikaClassifier
+from .diagnostics import explain_reason
 from .errors import PolymorphError
 from .keys import EncryptedRecipientKeyFile
 from .matching.hybrid import HybridMatcher
@@ -39,8 +40,13 @@ from .models.mapping import MappingDecision
 from .models.schema import SchemaDescriptor
 from .paths import model_home, recipe_store_path
 from .planning import build_plan
-from .preflight import PreflightRunner
-from .recipes import RecipeStore
+from .preflight import PreflightReport, PreflightRunner
+from .recipes import (
+    DEFAULT_RECIPE_REJECTION_THRESHOLD,
+    RecipeHealth,
+    RecipeRunOutcome,
+    RecipeStore,
+)
 from .repair import RepairSeverity, propose_plan_repair
 from .serialization import (
     load_plan,
@@ -122,6 +128,45 @@ def _emit(payload: object, *, output: str | None = None) -> None:
         path.write_text(text + "\n", encoding="utf-8")
     else:
         print(text)
+
+
+def _diagnostic_payload(reason_code: str) -> dict[str, str]:
+    return explain_reason(reason_code).as_dict()
+
+
+def _recipe_health_payload(health: RecipeHealth) -> dict[str, object]:
+    payload = health.as_dict()
+    if health.last_reason_code is not None:
+        payload["last_diagnostic"] = _diagnostic_payload(health.last_reason_code)
+    return payload
+
+
+def _recipe_observation(report: PreflightReport) -> tuple[RecipeRunOutcome, str]:
+    if report.promotable:
+        return RecipeRunOutcome.SUCCESS, "preflight_promotable"
+    if not report.valid:
+        for finding in report.plan_validation.findings:
+            if finding.severity.value == "blocking":
+                return RecipeRunOutcome.REJECTED, finding.code
+        for preflight_finding in report.findings:
+            if preflight_finding.severity.value == "blocking":
+                outcome = (
+                    RecipeRunOutcome.QUARANTINED
+                    if preflight_finding.code
+                    in {"foreign_key_lookup_failed", "source_iteration_failed"}
+                    else RecipeRunOutcome.REJECTED
+                )
+                return outcome, preflight_finding.code
+        return RecipeRunOutcome.REJECTED, "preflight_not_promotable"
+    for finding in report.plan_validation.findings:
+        if finding.severity.value == "review":
+            return RecipeRunOutcome.QUARANTINED, finding.code
+    for preflight_finding in report.findings:
+        if preflight_finding.severity.value == "review":
+            return RecipeRunOutcome.QUARANTINED, preflight_finding.code
+    if not report.complete_scan:
+        return RecipeRunOutcome.QUARANTINED, "sampled_scan"
+    return RecipeRunOutcome.QUARANTINED, "preflight_not_promotable"
 
 
 def _emit_schema(schema: SchemaDescriptor, args: argparse.Namespace) -> None:
@@ -340,14 +385,40 @@ def _model_install(args: argparse.Namespace) -> None:
 
 
 def _audit_verify(args: argparse.Namespace) -> None:
+    path = Path(args.path).expanduser().resolve()
+    if not path.is_file():
+        raise PolymorphError(f"audit store does not exist: {path}")
     public_key = bytes.fromhex(args.public_key_hex) if args.public_key_hex else None
-    count = AuditLog(args.path).verify(trusted_public_key=public_key)
-    _emit({"valid": True, "events": count})
+    count = AuditLog(path, create=False).verify(trusted_public_key=public_key)
+    _emit(
+        {
+            "valid": True,
+            "events": count,
+            "verification": "hash_chain_and_signatures" if public_key else "hash_chain_only",
+        }
+    )
+
+
+def _audit_summary(args: argparse.Namespace) -> None:
+    path = Path(args.path).expanduser().resolve()
+    if not path.is_file():
+        raise PolymorphError(f"audit store does not exist: {path}")
+    public_key = bytes.fromhex(args.public_key_hex) if args.public_key_hex else None
+    summary = AuditLog(path, create=False).summary(trusted_public_key=public_key)
+    payload = summary.as_dict()
+    payload["verification"] = "hash_chain_and_signatures" if public_key else "hash_chain_only"
+    payload["reason_diagnostics"] = [
+        {"count": count, **_diagnostic_payload(code)} for code, count in summary.reasons.items()
+    ]
+    _emit(payload)
 
 
 def _audit_export(args: argparse.Namespace) -> None:
     _protect_write_path(args.output, args.path)
-    text = AuditLog(args.path).export_jsonl()
+    path = Path(args.path).expanduser().resolve()
+    if not path.is_file():
+        raise PolymorphError(f"audit store does not exist: {path}")
+    text = AuditLog(path, create=False).export_jsonl()
     output = Path(args.output).expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(text, encoding="utf-8")
@@ -366,11 +437,16 @@ def _quarantine_list(args: argparse.Namespace) -> None:
                 "record_id": item.record_id,
                 "plan_digest": item.plan_digest,
                 "reason_code": item.reason_code,
+                "diagnostic": _diagnostic_payload(item.reason_code),
                 "quarantined_at": item.quarantined_at,
             }
             for item in entries
         ]
     )
+
+
+def _explain(args: argparse.Namespace) -> None:
+    _emit(_diagnostic_payload(args.reason_code))
 
 
 def _key_generate(args: argparse.Namespace) -> None:
@@ -495,15 +571,26 @@ def _preflight_file(args: argparse.Namespace) -> None:
     payload = {"content": content.as_dict(), "preflight": report.as_dict()}
     if args.remember:
         if not report.promotable:
-            payload["recipe"] = {"remembered": False, "reason": "preflight_not_promotable"}
+            payload["recipe"] = {
+                "remembered": False,
+                "reason": "preflight_not_promotable",
+                "diagnostic": _diagnostic_payload("preflight_not_promotable"),
+            }
         else:
             store = RecipeStore(args.recipe_store)
             recipe = store.remember(plan, source, target, approved_by=args.approved_by)
+            store.record_run(
+                recipe,
+                plan,
+                RecipeRunOutcome.SUCCESS,
+                reason_code="preflight_promotable",
+            )
             payload["recipe"] = {
                 "remembered": True,
                 "id": recipe.id,
                 "version": recipe.version,
                 "store": str(Path(args.recipe_store).expanduser().resolve()),
+                "health": _recipe_health_payload(store.health(recipe)),
             }
     _emit(payload, output=args.output)
     if not report.valid:
@@ -515,6 +602,8 @@ def _preflight_file(args: argparse.Namespace) -> None:
 def _prepare(args: argparse.Namespace) -> None:
     """One-command, no-write readiness workflow for a file-to-schema route."""
 
+    if args.recipe_rejection_threshold < 1:
+        raise ValueError("recipe rejection threshold must be at least one")
     resolver_path = _sqlite_database_path(args.resolver_db_url)
     _protect_write_path(
         args.recipe_store,
@@ -550,23 +639,84 @@ def _prepare(args: argparse.Namespace) -> None:
     source = connector.inspect_schema()
     target = load_schema(args.target_schema)
     store = RecipeStore(args.recipe_store)
-    recipe = store.find(source, target)
+    candidate = store.find(source, target)
+    recipe = None
+    candidate_health: RecipeHealth | None = None
+    active_health: RecipeHealth | None = None
+    adaptation_code: str | None = None
+    adaptation_event_recorded = False
+    preflight_event_recorded = False
     decisions = None
-    route_source = "recipe"
-    if recipe is not None:
-        plan = recipe.rebind(source, target)
-    else:
-        route_source = "fresh_mapping"
+    route_source = "fresh_mapping"
+    if candidate is not None:
+        candidate_health = store.health(
+            candidate,
+            rejection_threshold=args.recipe_rejection_threshold,
+        )
+        if not candidate_health.auto_reuse_allowed:
+            adaptation_code = "recipe_auto_reuse_suspended"
+        else:
+            try:
+                plan = candidate.rebind(source, target)
+            except PolymorphError:
+                store.record_run(
+                    candidate,
+                    candidate.plan,
+                    RecipeRunOutcome.REJECTED,
+                    reason_code="recipe_rebind_failed",
+                )
+                adaptation_event_recorded = True
+                candidate_health = store.health(
+                    candidate,
+                    rejection_threshold=args.recipe_rejection_threshold,
+                )
+                adaptation_code = "recipe_rebind_failed"
+            else:
+                recipe = candidate
+                route_source = "recipe"
+    if recipe is None:
         decisions = _matcher_for_args(args).propose(source, target)
         plan = build_plan(source, target, decisions, allow_review=False)
 
     if not plan.rules:
+        if recipe is not None:
+            store.record_run(
+                recipe,
+                plan,
+                RecipeRunOutcome.REJECTED,
+                reason_code="no_auto_approved_mapping_rules",
+            )
+            preflight_event_recorded = True
+            active_health = store.health(
+                recipe,
+                rejection_threshold=args.recipe_rejection_threshold,
+            )
         payload = {
             "ready": False,
             "content": content.as_dict(),
             "route_source": route_source,
             "reason": "no_auto_approved_mapping_rules",
+            "diagnostic": _diagnostic_payload("no_auto_approved_mapping_rules"),
             "decisions": [_decision_dict(item) for item in decisions or []],
+            "recipe_monitoring": {
+                "candidate_id": candidate.id if candidate is not None else None,
+                "used": recipe is not None,
+                "adaptation": (
+                    _diagnostic_payload(adaptation_code) if adaptation_code is not None else None
+                ),
+                "events_recorded": {
+                    "adaptation": adaptation_event_recorded,
+                    "preflight": preflight_event_recorded,
+                },
+                "candidate_health": (
+                    _recipe_health_payload(candidate_health)
+                    if candidate_health is not None
+                    else None
+                ),
+                "active_health": (
+                    _recipe_health_payload(active_health) if active_health is not None else None
+                ),
+            },
         }
         _emit(payload, output=args.output)
         raise SystemExit(3)
@@ -585,12 +735,37 @@ def _prepare(args: argparse.Namespace) -> None:
         if resolver is not None:
             resolver.close()
     ready = report.promotable
+    observation_outcome, observation_reason = _recipe_observation(report)
     remembered = False
     remembered_recipe_id = recipe.id if recipe is not None else None
+    if recipe is not None:
+        store.record_run(
+            recipe,
+            plan,
+            observation_outcome,
+            reason_code=observation_reason,
+        )
+        preflight_event_recorded = True
+        active_health = store.health(
+            recipe,
+            rejection_threshold=args.recipe_rejection_threshold,
+        )
+        candidate_health = active_health
     if ready and recipe is None and args.remember:
         remembered_recipe = store.remember(plan, source, target, approved_by=args.approved_by)
+        store.record_run(
+            remembered_recipe,
+            plan,
+            RecipeRunOutcome.SUCCESS,
+            reason_code="preflight_promotable",
+        )
+        preflight_event_recorded = True
         remembered = True
         remembered_recipe_id = remembered_recipe.id
+        active_health = store.health(
+            remembered_recipe,
+            rejection_threshold=args.recipe_rejection_threshold,
+        )
 
     saved_plan = None
     if ready and args.output_plan:
@@ -612,6 +787,26 @@ def _prepare(args: argparse.Namespace) -> None:
         },
         "decisions": [_decision_dict(item) for item in decisions or []],
         "preflight": report.as_dict(),
+        "recipe_monitoring": {
+            "candidate_id": candidate.id if candidate is not None else None,
+            "used": recipe is not None,
+            "events_recorded": {
+                "adaptation": adaptation_event_recorded,
+                "preflight": preflight_event_recorded,
+            },
+            "preflight_outcome": observation_outcome.value,
+            "preflight_reason": observation_reason,
+            "preflight_diagnostic": _diagnostic_payload(observation_reason),
+            "adaptation": (
+                _diagnostic_payload(adaptation_code) if adaptation_code is not None else None
+            ),
+            "candidate_health": (
+                _recipe_health_payload(candidate_health) if candidate_health is not None else None
+            ),
+            "active_health": (
+                _recipe_health_payload(active_health) if active_health is not None else None
+            ),
+        },
     }
     _emit(payload, output=args.output)
     if not report.valid:
@@ -645,7 +840,8 @@ def _recipe_remember(args: argparse.Namespace) -> None:
 
 
 def _recipe_list(args: argparse.Namespace) -> None:
-    recipes = RecipeStore(args.store).list(limit=args.limit)
+    store = RecipeStore(args.store)
+    recipes = store.list(limit=args.limit)
     _emit(
         [
             {
@@ -656,9 +852,43 @@ def _recipe_list(args: argparse.Namespace) -> None:
                 "target_structural_fingerprint": recipe.target_structural_fingerprint,
                 "approved_by": recipe.approved_by,
                 "created_at": recipe.created_at.isoformat(),
+                "health": _recipe_health_payload(store.health(recipe)),
             }
             for recipe in recipes
         ]
+    )
+
+
+def _recipe_health(args: argparse.Namespace) -> None:
+    if args.rejection_threshold < 1:
+        raise ValueError("recipe rejection threshold must be at least one")
+    store = RecipeStore(args.store)
+    if args.recipe_id is not None:
+        recipe = store.get(args.recipe_id)
+        if recipe is None:
+            _emit({"found": False, "recipe_id": args.recipe_id})
+            raise SystemExit(4)
+        recipes = [recipe]
+    else:
+        recipes = store.list(limit=args.limit)
+    _emit(
+        {
+            "rejection_threshold": args.rejection_threshold,
+            "recipes": [
+                {
+                    "id": recipe.id,
+                    "version": recipe.version,
+                    "plan_digest": recipe.plan.digest(),
+                    "health": _recipe_health_payload(
+                        store.health(
+                            recipe,
+                            rejection_threshold=args.rejection_threshold,
+                        )
+                    ),
+                }
+                for recipe in recipes
+            ],
+        }
     )
 
 
@@ -679,10 +909,12 @@ def _recipe_find(args: argparse.Namespace) -> None:
     )
     source = load_schema(args.source_schema)
     target = load_schema(args.target_schema)
-    recipe = RecipeStore(args.store).find(source, target)
+    store = RecipeStore(args.store)
+    recipe = store.find(source, target)
     if recipe is None:
         _emit({"found": False})
         raise SystemExit(4)
+    health = store.health(recipe, rejection_threshold=args.rejection_threshold)
     plan = recipe.rebind(source, target)
     if args.output_plan:
         save_plan(args.output_plan, plan)
@@ -691,6 +923,8 @@ def _recipe_find(args: argparse.Namespace) -> None:
             "found": True,
             "recipe_id": recipe.id,
             "recipe_version": recipe.version,
+            "automatic_reuse_allowed": health.auto_reuse_allowed,
+            "health": _recipe_health_payload(health),
             "rebound_plan_id": plan.id,
             "rebound_plan_digest": plan.digest(),
             "output_plan": str(Path(args.output_plan).expanduser().resolve())
@@ -749,6 +983,15 @@ def _doctor(args: argparse.Namespace) -> None:
             "content_trust_gate": True,
             "excel_xml_hardening": _excel_xml_hardening_status(),
             "preflight_contract_sandbox": True,
+            "operational_visibility": {
+                "destination_receipt_audit": "optional",
+                "audit_event_types": ["delivery", "replay", "force_replay"],
+                "recipe_outcomes_recorded_by_prepare": True,
+                "recipe_rejection_threshold": DEFAULT_RECIPE_REJECTION_THRESHOLD,
+                "adaptive_recipe_guard": True,
+                "complete_event_stream": False,
+                "alerting_service": False,
+            },
             "sqlite": {
                 "version": sqlite3.sqlite_version,
                 "journal_mode": selected_journal_mode(),
@@ -771,16 +1014,22 @@ def _benchmark_inspect(args: argparse.Namespace) -> None:
     report, content_metrics = benchmark_call(
         "content_inspection",
         lambda: _inspector(args.magika).inspect(args.path),
+        trace_python_allocations=args.tracemalloc,
     )
     metric_payloads = [content_metrics.as_dict()]
     payload: dict[str, object] = {
         "content": report.as_dict(),
+        "measurement": _benchmark_measurement_payload(args.tracemalloc),
         "metrics": metric_payloads,
     }
     if report.safe:
         connector = _connector_for_inspection(args.path, report)
         if connector is not None:
-            schema, schema_metrics = benchmark_call("schema_inspection", connector.inspect_schema)
+            schema, schema_metrics = benchmark_call(
+                "schema_inspection",
+                connector.inspect_schema,
+                trace_python_allocations=args.tracemalloc,
+            )
             payload["schema"] = schema_to_dict(schema)
             metric_payloads.append(schema_metrics.as_dict())
             if args.records > 0:
@@ -797,6 +1046,7 @@ def _benchmark_inspect(args: argparse.Namespace) -> None:
                     "record_read",
                     read_records,
                     result_count=len,
+                    trace_python_allocations=args.tracemalloc,
                 )
                 metric_payloads.append(records_metrics.as_dict())
     _emit(payload, output=args.output)
@@ -844,8 +1094,13 @@ def _benchmark_mapping(args: argparse.Namespace) -> None:
         "mapping_corpus",
         lambda: benchmark_mapping_cases(cases, matcher),
         result_count=lambda result: result.fields_scored,
+        trace_python_allocations=args.tracemalloc,
     )
-    result = {"mapping": report.as_dict(), "resources": metrics.as_dict()}
+    result = {
+        "mapping": report.as_dict(),
+        "measurement": _benchmark_measurement_payload(args.tracemalloc),
+        "resources": metrics.as_dict(),
+    }
     _emit(result, output=args.output)
 
     if args.require_auto_precision is not None:
@@ -864,6 +1119,18 @@ def _add_model_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--models", action="store_true", help="use both installed CPU profiles")
     parser.add_argument("--model-dir")
     parser.add_argument("--reranker-dir")
+
+
+def _benchmark_measurement_payload(trace_python_allocations: bool) -> dict[str, object]:
+    return {
+        "mode": "python_allocation_trace" if trace_python_allocations else "standard",
+        "python_allocation_tracing": trace_python_allocations,
+        "observer_effect": (
+            "CPython allocation tracing is enabled and may materially increase wall time"
+            if trace_python_allocations
+            else "wall time, CPU time and optional sampled process RSS only"
+        ),
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -989,6 +1256,12 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--resolver-db-table")
     prepare.add_argument("--resolver-db-schema")
     prepare.add_argument("--recipe-store", default=str(recipe_store_path()))
+    prepare.add_argument(
+        "--recipe-rejection-threshold",
+        type=int,
+        default=DEFAULT_RECIPE_REJECTION_THRESHOLD,
+        help="suspend automatic recipe reuse after this many consecutive rejected runs",
+    )
     prepare.add_argument("--remember", action="store_true")
     prepare.add_argument("--approved-by", default="local-user")
     prepare.add_argument("--output-plan")
@@ -1008,11 +1281,27 @@ def build_parser() -> argparse.ArgumentParser:
     recipe_list.add_argument("--store", default=str(recipe_store_path()))
     recipe_list.add_argument("--limit", type=int, default=100)
     recipe_list.set_defaults(func=_recipe_list)
+    recipe_health = recipe_sub.add_parser("health")
+    recipe_health.add_argument("recipe_id", nargs="?")
+    recipe_health.add_argument("--store", default=str(recipe_store_path()))
+    recipe_health.add_argument("--limit", type=int, default=100)
+    recipe_health.add_argument(
+        "--rejection-threshold",
+        type=int,
+        default=DEFAULT_RECIPE_REJECTION_THRESHOLD,
+    )
+    recipe_health.set_defaults(func=_recipe_health)
     recipe_find = recipe_sub.add_parser("find")
     recipe_find.add_argument("source_schema")
     recipe_find.add_argument("target_schema")
     recipe_find.add_argument("--store", default=str(recipe_store_path()))
     recipe_find.add_argument("--output-plan")
+    recipe_find.add_argument(
+        "--rejection-threshold",
+        type=int,
+        default=DEFAULT_RECIPE_REJECTION_THRESHOLD,
+        help="report automatic reuse as suspended after this many consecutive rejections",
+    )
     recipe_find.set_defaults(func=_recipe_find)
 
     doctor = sub.add_parser(
@@ -1028,6 +1317,11 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_inspect.add_argument("path")
     benchmark_inspect.add_argument("--records", type=int, default=1000)
     benchmark_inspect.add_argument("--magika", action="store_true")
+    benchmark_inspect.add_argument(
+        "--tracemalloc",
+        action="store_true",
+        help="trace CPython allocations; intrusive and may materially distort wall time",
+    )
     _add_output(benchmark_inspect)
     benchmark_inspect.set_defaults(func=_benchmark_inspect)
     benchmark_mapping = benchmark_sub.add_parser(
@@ -1037,6 +1331,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_model_options(benchmark_mapping)
     benchmark_mapping.add_argument("--require-auto-precision", type=float)
     benchmark_mapping.add_argument("--max-unsafe-auto", type=int, default=0)
+    benchmark_mapping.add_argument(
+        "--tracemalloc",
+        action="store_true",
+        help="trace CPython allocations; intrusive and may materially distort wall time",
+    )
     _add_output(benchmark_mapping)
     benchmark_mapping.set_defaults(func=_benchmark_mapping)
 
@@ -1062,6 +1361,10 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("path")
     export.add_argument("--output", "-o", required=True)
     export.set_defaults(func=_audit_export)
+    audit_summary = audit_sub.add_parser("summary")
+    audit_summary.add_argument("path")
+    audit_summary.add_argument("--public-key-hex")
+    audit_summary.set_defaults(func=_audit_summary)
 
     quarantine = sub.add_parser("quarantine", help="inspect sealed quarantine metadata")
     quarantine_sub = quarantine.add_subparsers(dest="quarantine_command", required=True)
@@ -1069,6 +1372,10 @@ def build_parser() -> argparse.ArgumentParser:
     list_parser.add_argument("path")
     list_parser.add_argument("--limit", type=int, default=100)
     list_parser.set_defaults(func=_quarantine_list)
+
+    explain = sub.add_parser("explain", help="explain a machine reason code and safe next action")
+    explain.add_argument("reason_code")
+    explain.set_defaults(func=_explain)
 
     return parser
 

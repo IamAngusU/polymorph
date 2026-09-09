@@ -29,7 +29,8 @@ class BenchmarkResult:
     name: str
     wall_ms: float
     cpu_ms: float
-    peak_python_bytes: int
+    peak_python_bytes: int | None
+    python_allocation_tracing: bool = False
     result_count: int | None = None
     pid: int = 0
     rss_before_bytes: int | None = None
@@ -44,6 +45,9 @@ class BenchmarkResult:
 
     def as_dict(self) -> dict[str, object]:
         payload = asdict(self)
+        payload["measurement_mode"] = (
+            "python_allocation_trace" if self.python_allocation_tracing else "standard"
+        )
         payload["throughput_per_second"] = self.throughput_per_second
         return payload
 
@@ -102,15 +106,20 @@ def benchmark_call(
     operation: Callable[[], T],
     *,
     result_count: Callable[[T], int] | None = None,
+    trace_python_allocations: bool = False,
 ) -> tuple[T, BenchmarkResult]:
     """Measure one explicit diagnostic operation.
 
     There is intentionally no global instrumentation hook. Production paths pay no tracing,
     RSS polling or allocation-accounting overhead unless this function is called directly.
+    CPython allocation tracing is separately opt-in because its observer effect can materially
+    distort parser wall time.
     """
 
     rss = _RssSampler()
-    tracemalloc.start()
+    tracing_started_here = trace_python_allocations and not tracemalloc.is_tracing()
+    if tracing_started_here:
+        tracemalloc.start()
     rss.start()
     wall_start = time.perf_counter_ns()
     cpu_start = time.process_time_ns()
@@ -118,16 +127,18 @@ def benchmark_call(
         result = operation()
         wall_ms = (time.perf_counter_ns() - wall_start) / 1_000_000
         cpu_ms = (time.process_time_ns() - cpu_start) / 1_000_000
-        _, peak = tracemalloc.get_traced_memory()
+        peak = tracemalloc.get_traced_memory()[1] if trace_python_allocations else None
     finally:
         rss.finish()
-        tracemalloc.stop()
+        if tracing_started_here:
+            tracemalloc.stop()
     count = result_count(result) if result_count is not None else None
     return result, BenchmarkResult(
         name=name,
         wall_ms=wall_ms,
         cpu_ms=cpu_ms,
         peak_python_bytes=peak,
+        python_allocation_tracing=trace_python_allocations,
         result_count=count,
         pid=os.getpid(),
         rss_before_bytes=rss.before,

@@ -26,7 +26,7 @@ def _selected_files(directory: Path, suffixes: set[str]) -> set[Path]:
     return {
         path
         for path in directory.rglob("*")
-        if path.is_file() and (path.suffix in suffixes or path.name == "py.typed")
+        if path.is_file() and (path.suffix in suffixes or path.name in {"py.typed", "SHA256SUMS"})
     }
 
 
@@ -37,7 +37,7 @@ def expected_release_paths(root: Path = ROOT) -> set[str]:
     paths.update(_selected_files(root / "benchmarks", {".json", ".md"}))
     paths.update(_selected_files(root / "docs", {".md", ".png", ".webp"}))
     paths.update(_selected_files(root / "scripts", {".py"}))
-    paths.update(_selected_files(root / "tests", {".py"}))
+    paths.update(_selected_files(root / "tests", {".py", ".csv", ".json", ".md", ".txt"}))
     paths.update(_selected_files(root / "src" / "polymorph", {".py"}))
     missing_local = sorted(path for path in paths if not path.is_file())
     if missing_local:

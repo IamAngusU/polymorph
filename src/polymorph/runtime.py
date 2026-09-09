@@ -39,6 +39,12 @@ class DeliveryStatus(StrEnum):
     AMBIGUOUS = "ambiguous"
 
 
+class AuditWriteStatus(StrEnum):
+    DISABLED = "disabled"
+    RECORDED = "recorded"
+    APPEND_FAILED = "append_failed"
+
+
 @dataclass(frozen=True, slots=True)
 class DeliveryReceipt:
     status: DeliveryStatus
@@ -52,6 +58,7 @@ class DeliveryReceipt:
     reason_code: str | None = None
     retry_safe: bool = False
     audit_recorded: bool = False
+    audit_status: AuditWriteStatus = AuditWriteStatus.DISABLED
 
 
 def _idempotency_key(record: BlindTransportRecord) -> str:
@@ -148,13 +155,15 @@ class DestinationRuntime:
         *,
         reason_code: str | None = None,
         retry_safe: bool | None = None,
+        event_type: str = "delivery",
     ) -> DeliveryReceipt:
         audit_recorded = False
+        audit_status = AuditWriteStatus.DISABLED
         if self.audit is not None:
             try:
                 self.audit.append(
                     AuditEvent(
-                        event_type="delivery",
+                        event_type=event_type,
                         actor=self.actor_id,
                         status=status.value,
                         tenant=record.tenant,
@@ -167,10 +176,12 @@ class DestinationRuntime:
                     )
                 )
                 audit_recorded = True
+                audit_status = AuditWriteStatus.RECORDED
             except Exception:
                 # Delivery state is authoritative in the ledger. An audit failure must never
                 # make a caller retry an already committed non-idempotent write.
                 audit_recorded = False
+                audit_status = AuditWriteStatus.APPEND_FAILED
         return DeliveryReceipt(
             status=status,
             tenant=record.tenant,
@@ -187,6 +198,7 @@ class DestinationRuntime:
                 else retry_safe
             ),
             audit_recorded=audit_recorded,
+            audit_status=audit_status,
         )
 
     def deliver(self, record: BlindTransportRecord) -> DeliveryReceipt:
@@ -279,6 +291,8 @@ class DestinationRuntime:
         record: BlindTransportRecord,
         reason_code: str,
         claim_token: str,
+        *,
+        event_type: str = "delivery",
     ) -> DeliveryReceipt:
         try:
             self.ledger.mark_quarantined(record, reason_code, claim_token)
@@ -290,18 +304,22 @@ class DestinationRuntime:
                 DeliveryStatus.AMBIGUOUS,
                 reason_code="delivery_claim_lost",
                 retry_safe=False,
+                event_type=event_type,
             )
         self.spool.quarantine(record, reason_code)
         return self._receipt(
             record,
             DeliveryStatus.QUARANTINED,
             reason_code=reason_code,
+            event_type=event_type,
         )
 
     def _deliver_claimed(
         self,
         record: BlindTransportRecord,
         claim_token: str,
+        *,
+        event_type: str = "delivery",
     ) -> DeliveryReceipt:
         try:
             plaintext_record = self.agent.open_record(record)
@@ -313,6 +331,7 @@ class DestinationRuntime:
                 record,
                 "transport_verification_failed",
                 claim_token,
+                event_type=event_type,
             )
         if not self._record_uses_runtime_plan(record) or not self._payload_has_exact_mapped_fields(
             plaintext_record
@@ -322,6 +341,7 @@ class DestinationRuntime:
                 record,
                 "destination_contract_failed",
                 claim_token,
+                event_type=event_type,
             )
         try:
             plaintext_record = self._apply_destination_transforms(record, plaintext_record)
@@ -333,6 +353,7 @@ class DestinationRuntime:
                 record,
                 "destination_resolution_failed",
                 claim_token,
+                event_type=event_type,
             )
         if not self._payload_satisfies_target_contract(plaintext_record):
             del plaintext_record
@@ -340,6 +361,7 @@ class DestinationRuntime:
                 record,
                 "destination_contract_failed",
                 claim_token,
+                event_type=event_type,
             )
 
         context = DeliveryContext(
@@ -359,6 +381,7 @@ class DestinationRuntime:
                 DeliveryStatus.AMBIGUOUS,
                 reason_code="delivery_claim_lost",
                 retry_safe=False,
+                event_type=event_type,
             )
         try:
             written = self.connector.write_records([plaintext_record], context=context)
@@ -378,6 +401,7 @@ class DestinationRuntime:
                     DeliveryStatus.QUARANTINED,
                     reason_code="write_not_committed",
                     retry_safe=True,
+                    event_type=event_type,
                 )
             self.ledger.mark_uncertain(record, "write_outcome_unknown", claim_token)
             self.spool.quarantine(record, "write_outcome_unknown")
@@ -385,6 +409,7 @@ class DestinationRuntime:
                 record,
                 DeliveryStatus.QUARANTINED,
                 reason_code="write_outcome_unknown",
+                event_type=event_type,
             )
         except Exception:
             # Unknown connector exceptions provide no durability proof. The safe default is
@@ -395,6 +420,7 @@ class DestinationRuntime:
                 record,
                 DeliveryStatus.QUARANTINED,
                 reason_code="write_outcome_unknown",
+                event_type=event_type,
             )
         finally:
             # This removes the normal Python reference. It is not a secure memory wipe and
@@ -413,26 +439,28 @@ class DestinationRuntime:
                 record,
                 DeliveryStatus.AMBIGUOUS,
                 reason_code="delivery_outcome_record_failed",
+                event_type=event_type,
             )
         self.spool.remove(record.digest())
-        return self._receipt(record, DeliveryStatus.DELIVERED)
+        return self._receipt(record, DeliveryStatus.DELIVERED, event_type=event_type)
 
     def replay(self, record_digest: str, *, force_uncertain: bool = False) -> DeliveryReceipt:
         record = self.spool.get(record_digest)
         if record is None:
             raise KeyError("sealed quarantine record does not exist")
-        if force_uncertain and self.authorizer is None:
-            raise PolicyViolation(
-                "forced uncertain replay requires an explicit capability authorizer"
-            )
         self._authorize_capability(CapabilityOperation.REPLAY, record)
         entry = self.ledger.get(record)
         if entry is None:
             raise IntegrityError("quarantine record has no delivery ledger entry")
+        ambiguous_write_states = (DeliveryState.UNCERTAIN, DeliveryState.WRITE_STARTED)
+        requires_force = force_uncertain and entry.state in (
+            *ambiguous_write_states,
+            DeliveryState.CLAIMED,
+        )
+        event_type = "force_replay" if requires_force else "replay"
         if entry.state is DeliveryState.COMMITTED:
             self.spool.remove(record_digest)
-            return self._receipt(record, DeliveryStatus.DUPLICATE)
-        ambiguous_write_states = (DeliveryState.UNCERTAIN, DeliveryState.WRITE_STARTED)
+            return self._receipt(record, DeliveryStatus.DUPLICATE, event_type=event_type)
         if (
             entry.state in ambiguous_write_states
             and not self.connector.capabilities.supports_idempotency
@@ -443,7 +471,11 @@ class DestinationRuntime:
             )
         if entry.state is DeliveryState.CLAIMED and not force_uncertain:
             raise PolicyViolation("ambiguous claimed delivery requires explicit recovery")
-        if force_uncertain and entry.state in (*ambiguous_write_states, DeliveryState.CLAIMED):
+        if requires_force:
+            if self.authorizer is None:
+                raise PolicyViolation(
+                    "forced uncertain replay requires an explicit capability authorizer"
+                )
             self._authorize_capability(CapabilityOperation.FORCE_UNCERTAIN_REPLAY, record)
         rearmed = self.ledger.rearm_for_retry(
             record,
@@ -452,4 +484,4 @@ class DestinationRuntime:
         )
         if rearmed.claim_token is None:
             raise IntegrityError("delivery ledger issued an unfenced retry claim")
-        return self._deliver_claimed(record, rearmed.claim_token)
+        return self._deliver_claimed(record, rearmed.claim_token, event_type=event_type)

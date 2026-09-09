@@ -45,7 +45,10 @@
 - OS/HSM-backed key-provider interfaces
 - parser-worker isolation with explicit containment level
 - connector-account least-privilege policy checks
+- metadata-only recipe outcome health with conservative suspension after repeated rejected runs
+- verified audit summaries and stable reason-code explanations
 - backpressure, health/readiness and metrics without payload labels
+- complete source-to-relay-to-destination operational journal and alerts
 - optional distributed relay backend after SQLite/spool benchmarks establish the need
 
 ## v0.5 contract ingestion

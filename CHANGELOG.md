@@ -4,6 +4,32 @@ All notable changes to this alpha are documented here.
 
 ## Unreleased
 
+### Added
+
+- metadata-only recipe outcome tracking and a conservative automatic-reuse circuit after repeated
+  rejected runs
+- verified audit summaries, reason-code explanations and safe next-action guidance
+- distinct destination audit event types for normal delivery, replay and force replay
+- pinned csv-spectrum parser regressions with byte-level integrity and provenance checks
+- a measured file, model and full secure-transport performance baseline
+
+### Changed
+
+- standard benchmarks no longer enable high-overhead CPython allocation tracing unless explicitly
+  requested
+- delivery receipts distinguish disabled, recorded and failed audit writes
+- audit metadata and recipe reason codes now enforce their documented bounded machine format
+- audit summaries and recipe health use one consistent SQLite read snapshot
+
+### Fixed
+
+- current Magika score handling no longer touches its removed legacy fallback field or pollutes
+  standard error during valid inspection
+- a compatible Magika JSON report no longer rejects a large bounded JSON-like probe as a
+  classifier conflict
+- audit verification and export no longer create a missing database and report it as a valid empty
+  log
+
 ## 0.4.0a1 - 2026-09-09
 
 ### Added

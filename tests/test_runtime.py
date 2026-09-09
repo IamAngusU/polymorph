@@ -12,6 +12,7 @@ from polymorph.agents import (
     PayloadCodec,
     SealedField,
 )
+from polymorph.audit import AuditLog
 from polymorph.capabilities import (
     CapabilityAuthorizer,
     CapabilityGrant,
@@ -26,7 +27,7 @@ from polymorph.ledger import ClaimDisposition, DeliveryLedger, DeliveryState
 from polymorph.models.mapping import MappingPlan, MappingRule
 from polymorph.models.schema import FieldDescriptor, SchemaDescriptor
 from polymorph.models.types import DataType, Sensitivity
-from polymorph.runtime import DeliveryStatus, DestinationRuntime
+from polymorph.runtime import AuditWriteStatus, DeliveryStatus, DestinationRuntime
 from polymorph.signing import SigningKeyPair, SourceTrustStore, TrustedSourceKey
 from polymorph.spool import SealedSpool
 
@@ -84,6 +85,28 @@ class MutableClock:
 
     def advance(self, delta: timedelta) -> None:
         self.current += delta
+
+
+def test_audit_append_failure_is_visible_without_retrying_committed_write(
+    tmp_path, monkeypatch
+) -> None:
+    destination = MemoryDestination()
+    record, runtime = _runtime(tmp_path, destination)
+    audit = AuditLog(tmp_path / "audit.db")
+
+    def fail_append(_event):
+        raise OSError("simulated audit disk failure")
+
+    monkeypatch.setattr(audit, "append", fail_append)
+    runtime.audit = audit
+
+    receipt = runtime.deliver(record)
+
+    assert receipt.status is DeliveryStatus.DELIVERED
+    assert not receipt.audit_recorded
+    assert receipt.audit_status is AuditWriteStatus.APPEND_FAILED
+    assert destination.calls == 1
+    assert runtime.ledger.get(record).state is DeliveryState.COMMITTED
 
 
 def _transport(secret: str = "s3cr3t"):
@@ -598,9 +621,11 @@ def test_known_not_committed_write_is_safe_to_replay(tmp_path) -> None:
     receipt = runtime.deliver(transport)
     assert receipt.reason_code == "write_not_committed"
     assert receipt.retry_safe is True
-    replayed = runtime.replay(transport.digest())
+    runtime.audit = AuditLog(tmp_path / "replay-audit.db")
+    replayed = runtime.replay(transport.digest(), force_uncertain=True)
     assert replayed.status is DeliveryStatus.DELIVERED
     assert len(connector.records) == 1
+    assert runtime.audit.summary().event_types == {"replay": 1}
 
 
 def test_validly_signed_malformed_payload_is_quarantined_without_write(tmp_path) -> None:
@@ -793,10 +818,12 @@ def test_write_started_recovery_requires_explicit_force_capability(tmp_path) -> 
         subject=runtime.actor_id,
         expected_issuer="operator",
     )
+    runtime.audit = AuditLog(tmp_path / "audit.db")
 
     receipt = runtime.replay(record.digest(), force_uncertain=True)
     assert receipt.status is DeliveryStatus.DELIVERED
     assert destination.calls == 1
+    assert runtime.audit.summary().event_types == {"force_replay": 1}
 
 
 def test_legacy_unfenced_claim_fails_closed(tmp_path) -> None:

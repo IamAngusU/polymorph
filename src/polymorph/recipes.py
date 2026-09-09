@@ -24,6 +24,50 @@ class RecipeRunOutcome(StrEnum):
     REJECTED = "rejected"
 
 
+class RecipeHealthState(StrEnum):
+    UNOBSERVED = "unobserved"
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    SUSPENDED = "suspended"
+
+
+DEFAULT_RECIPE_REJECTION_THRESHOLD = 3
+
+
+@dataclass(frozen=True, slots=True)
+class RecipeHealth:
+    recipe_id: str
+    state: RecipeHealthState
+    auto_reuse_allowed: bool
+    rejection_threshold: int
+    total_runs: int
+    successful_runs: int
+    quarantined_runs: int
+    rejected_runs: int
+    consecutive_rejections: int
+    last_outcome: RecipeRunOutcome | None = None
+    last_reason_code: str | None = None
+    last_occurred_at: datetime | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "recipe_id": self.recipe_id,
+            "state": self.state.value,
+            "auto_reuse_allowed": self.auto_reuse_allowed,
+            "rejection_threshold": self.rejection_threshold,
+            "total_runs": self.total_runs,
+            "successful_runs": self.successful_runs,
+            "quarantined_runs": self.quarantined_runs,
+            "rejected_runs": self.rejected_runs,
+            "consecutive_rejections": self.consecutive_rejections,
+            "last_outcome": self.last_outcome.value if self.last_outcome is not None else None,
+            "last_reason_code": self.last_reason_code,
+            "last_occurred_at": (
+                self.last_occurred_at.isoformat() if self.last_occurred_at is not None else None
+            ),
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class Recipe:
     id: str
@@ -205,8 +249,10 @@ class RecipeStore:
         *,
         reason_code: str | None = None,
     ) -> None:
-        if reason_code is not None and len(reason_code) > 128:
-            raise ValueError("recipe reason code is too long")
+        if reason_code is not None and (
+            not reason_code or len(reason_code) > 128 or not reason_code.replace("_", "").isalnum()
+        ):
+            raise ValueError("recipe reason code must be a short machine-readable identifier")
         with closing(self._connect()) as connection, connection:
             connection.execute(
                 """
@@ -221,6 +267,110 @@ class RecipeStore:
                     datetime.now(UTC).isoformat(),
                 ),
             )
+
+    def health(
+        self,
+        recipe: Recipe,
+        *,
+        rejection_threshold: int = DEFAULT_RECIPE_REJECTION_THRESHOLD,
+    ) -> RecipeHealth:
+        """Summarize metadata-only outcomes and gate unsafe automatic reuse.
+
+        Only consecutive rejected executions open the circuit. Review outcomes remain visible as
+        degraded health, but do not punish a recipe for an intentionally sampled preflight.
+        A later successful observation closes the circuit. Approving a new recipe version also
+        starts with independent health history.
+        """
+
+        if rejection_threshold < 1:
+            raise ValueError("recipe rejection threshold must be at least one")
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN")
+            totals = connection.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_runs,
+                    SUM(CASE WHEN outcome = ? THEN 1 ELSE 0 END) AS successful_runs,
+                    SUM(CASE WHEN outcome = ? THEN 1 ELSE 0 END) AS quarantined_runs,
+                    SUM(CASE WHEN outcome = ? THEN 1 ELSE 0 END) AS rejected_runs
+                FROM recipe_runs
+                WHERE recipe_id = ?
+                """,
+                (
+                    RecipeRunOutcome.SUCCESS.value,
+                    RecipeRunOutcome.QUARANTINED.value,
+                    RecipeRunOutcome.REJECTED.value,
+                    recipe.id,
+                ),
+            ).fetchone()
+            last = connection.execute(
+                """
+                SELECT outcome, reason_code, occurred_at
+                FROM recipe_runs
+                WHERE recipe_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (recipe.id,),
+            ).fetchone()
+            streak = connection.execute(
+                """
+                SELECT COUNT(*) AS consecutive_rejections
+                FROM recipe_runs
+                WHERE recipe_id = ? AND outcome = ? AND id > COALESCE(
+                    (
+                        SELECT MAX(id)
+                        FROM recipe_runs
+                        WHERE recipe_id = ? AND outcome != ?
+                    ),
+                    0
+                )
+                """,
+                (
+                    recipe.id,
+                    RecipeRunOutcome.REJECTED.value,
+                    recipe.id,
+                    RecipeRunOutcome.REJECTED.value,
+                ),
+            ).fetchone()
+
+        total_runs = int(totals["total_runs"] or 0)
+        last_outcome: RecipeRunOutcome | None = None
+        last_reason_code: str | None = None
+        last_occurred_at: datetime | None = None
+        if last is not None:
+            try:
+                last_outcome = RecipeRunOutcome(str(last["outcome"]))
+                last_occurred_at = datetime.fromisoformat(str(last["occurred_at"]))
+            except ValueError as exc:
+                raise IntegrityError("stored recipe run metadata is invalid") from exc
+            stored_reason = last["reason_code"]
+            last_reason_code = str(stored_reason) if stored_reason is not None else None
+
+        consecutive_rejections = int(streak["consecutive_rejections"] or 0)
+        suspended = consecutive_rejections >= rejection_threshold
+        if total_runs == 0:
+            state = RecipeHealthState.UNOBSERVED
+        elif suspended:
+            state = RecipeHealthState.SUSPENDED
+        elif last_outcome is RecipeRunOutcome.SUCCESS:
+            state = RecipeHealthState.HEALTHY
+        else:
+            state = RecipeHealthState.DEGRADED
+        return RecipeHealth(
+            recipe_id=recipe.id,
+            state=state,
+            auto_reuse_allowed=not suspended,
+            rejection_threshold=rejection_threshold,
+            total_runs=total_runs,
+            successful_runs=int(totals["successful_runs"] or 0),
+            quarantined_runs=int(totals["quarantined_runs"] or 0),
+            rejected_runs=int(totals["rejected_runs"] or 0),
+            consecutive_rejections=consecutive_rejections,
+            last_outcome=last_outcome,
+            last_reason_code=last_reason_code,
+            last_occurred_at=last_occurred_at,
+        )
 
     @staticmethod
     def _row_to_recipe(row: sqlite3.Row) -> Recipe:

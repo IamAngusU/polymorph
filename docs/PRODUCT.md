@@ -101,9 +101,23 @@ bundle distribution remains part of the deployable-agent work.
 
 ### Parser quorum
 
-For a precision profile, native XLSX can be inspected independently with openpyxl and calamine.
-Sheet names, dimensions, headers, types and normalized values must agree before the second parser
-adds confidence. Disagreement reduces automation.
+For a precision profile, a second parser may inspect the same bounded workbook inside a
+crash-isolated worker. Sheet names, dimensions, headers, types and normalized values must agree
+before it adds confidence. Disagreement reduces automation. Current Calamine releases have open
+process-aborting allocation bugs, so they are not eligible for in-process use. See the
+[ecosystem review](https://github.com/IamAngusU/polymorph/blob/main/docs/ECOSYSTEM_REVIEW.md).
+
+### Failure-aware automation budget
+
+Repeated failures should spend trust, not trigger increasingly creative guesses. Recipe health now
+suspends automatic reuse after consecutive rejected runs. The same pattern can later govern parser
+packs, connectors and model profiles with explicit half-open probes and operator-visible recovery.
+
+### Reproducible file lab
+
+A manifest-driven local lab should replay valid, malformed, polyglot and resource-hostile fixtures
+against every parser version. It records hashes, decisions, disagreements, exit codes, timeouts,
+latency and peak RSS. This makes parser upgrades evidence-backed instead of a dependency bot gamble.
 
 ### Business glossary and units
 

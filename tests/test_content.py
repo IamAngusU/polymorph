@@ -144,6 +144,21 @@ def test_high_confidence_classifier_disagreement_blocks_parser_selection(tmp_pat
     assert any(item.code is RiskCode.CLASSIFIER_DISAGREEMENT for item in report.risks)
 
 
+def test_classifier_confirmation_does_not_reject_large_json_probe(tmp_path) -> None:
+    class FakeClassifier:
+        def classify(self, path):
+            return ClassifierEvidence("test", "json", "application/json", 0.99)
+
+    path = tmp_path / "large-json.bin"
+    path.write_text('[{"value":"' + ("x" * (4 * 1024 * 1024)) + '"}]', encoding="utf-8")
+
+    report = ContentInspector(classifier=FakeClassifier()).inspect(path)
+
+    assert report.kind is ContentKind.TEXT
+    assert report.safe
+    assert "classifier also reported JSON for bounded probe" in report.signals
+
+
 def test_duplicate_archive_entries_are_blocking(tmp_path) -> None:
     path = tmp_path / "duplicate.xlsx"
     with zipfile.ZipFile(path, "w") as archive:
@@ -162,10 +177,18 @@ def test_magika_adapter_reads_score_from_prediction_object() -> None:
 
     from polymorph.content import MagikaClassifier
 
+    class Output:
+        label = "json"
+        mime_type = "application/json"
+
+        @property
+        def score(self):
+            raise AssertionError("removed output.score fallback must not be read eagerly")
+
     class FakeMagika:
         def identify_path(self, path):
             return SimpleNamespace(
-                output=SimpleNamespace(label="json", mime_type="application/json"),
+                output=Output(),
                 score=0.987,
             )
 
