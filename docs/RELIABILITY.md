@@ -1,0 +1,83 @@
+# Reliability model
+
+Polymorph treats automation as a privilege earned by evidence. The system is designed to abstain when the available information cannot prove a safe route.
+
+## The accuracy target
+
+A universal claim of 100% semantic accuracy is not meaningful for arbitrary source data. Two different business meanings can be represented by the same bytes, labels can be wrong, dates can be ambiguous and a valid foreign key can still point to the wrong business entity.
+
+The operational target is therefore stricter and measurable:
+
+**No incorrect automatic promotions in the validated operating domain.**
+
+Automation coverage is measured separately. A route that needs review is not counted as a failure of correctness. An incorrect `AUTO` decision is.
+
+The benchmark gate reports at least:
+
+- automatic-decision precision
+- automatic coverage over mappable fields
+- suggestion accuracy
+- incorrect automatic decisions on explicitly unmappable fields
+- p50 and p95 case latency
+- opt-in CPU, wall-clock, Python-allocation and process-RSS diagnostics
+
+A release or deployment can require `auto_precision == 1.0` on its labelled corpus while still accepting lower automation coverage.
+
+## Evidence hierarchy
+
+Evidence is deliberately asymmetric. Stronger evidence can promote a route; weaker evidence may improve ordering but cannot manufacture authorization.
+
+1. Explicit operator configuration and current destination contracts.
+2. Exact schema identity, data types, sensitivity labels, field roles and verified relationship metadata.
+3. Previously approved recipe structure, rebound to the current exact schemas.
+4. Deterministic name and alias evidence.
+5. Local embedding similarity.
+6. Local reranker score.
+
+The final two items are advisory. The matcher requires independently strong deterministic evidence before an `AUTO` decision is allowed. If a reranker changes the winner away from the deterministic winner, the result is review-required.
+
+## Preflight before promotion
+
+`polymorph prepare` and `polymorph preflight` run a no-write contract sandbox. It validates the exact immutable plan and scans source records without invoking a destination write method.
+
+The preflight checks:
+
+- record shape against the inspected source schema
+- required source and destination values
+- registered source transformations
+- runtime output types after transformation
+- optional read-only foreign-key resolution
+- spreadsheet formula-cache uncertainty
+- completeness of the scan
+
+Secret and opaque values are not inspected. Preflight checks only their presence/nullability where required.
+
+A bounded sample can be useful for diagnosis but cannot automatically promote or remember a recipe. Automatic recipe promotion requires a complete scan.
+
+## Recipes are memory, not truth
+
+A recipe stores a previously validated plan together with structural source and target fingerprints. A structural match only locates a candidate recipe.
+
+Before reuse, Polymorph:
+
+1. compares the current structural fingerprints
+2. creates a new plan bound to the current exact schema IDs and fingerprints
+3. creates a new plan digest
+4. validates every rule against the current policies and relationships
+5. runs preflight against the current input
+
+A recipe never bypasses current validation, capability checks or destination semantics.
+
+## Drift
+
+Schema drift is split into two categories.
+
+A mechanically explainable change, such as a moved spreadsheet column with the same semantic descriptor, may produce a repair proposal. The repair is a new immutable plan with a new digest.
+
+A semantic change, relationship change, sensitivity change, missing uniqueness proof or ambiguous replacement is review-required or blocking.
+
+## Delivery correctness
+
+Once a route is approved, transport reliability is still a separate problem. Polymorph therefore keeps a durable delivery identity, idempotency ledger and explicit write outcomes.
+
+`NOT_COMMITTED` means the connector can prove the write did not commit. `UNKNOWN` means the connector cannot prove whether a side effect happened. An unknown outcome is never converted into a retry-safe result merely because an exception was raised.

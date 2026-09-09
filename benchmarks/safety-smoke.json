@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "exact-customer-id",
+      "source_schema": {
+        "id": "source:exact",
+        "fields": [
+          {"id": "c1", "name": "customer id", "data_type": "string", "role": "natural_key"}
+        ]
+      },
+      "target_schema": {
+        "id": "target:exact",
+        "fields": [
+          {"id": "customer_id", "name": "customer id", "data_type": "string", "role": "natural_key"},
+          {"id": "order_id", "name": "order id", "data_type": "string", "role": "natural_key"}
+        ]
+      },
+      "expected": {"c1": "customer_id"}
+    },
+    {
+      "id": "multilingual-exact-alias",
+      "source_schema": {
+        "id": "source:german",
+        "fields": [
+          {"id": "c1", "name": "Kundennummer", "data_type": "string"}
+        ]
+      },
+      "target_schema": {
+        "id": "target:german",
+        "fields": [
+          {"id": "customer_number", "name": "customer number", "data_type": "string", "aliases": ["Kundennummer"]},
+          {"id": "invoice_number", "name": "invoice number", "data_type": "string"}
+        ]
+      },
+      "expected": {"c1": "customer_number"}
+    },
+    {
+      "id": "ambiguous-reference-must-abstain",
+      "source_schema": {
+        "id": "source:ambiguous",
+        "fields": [
+          {"id": "c1", "name": "reference", "data_type": "string"}
+        ]
+      },
+      "target_schema": {
+        "id": "target:ambiguous",
+        "fields": [
+          {"id": "customer_reference", "name": "customer reference", "data_type": "string"},
+          {"id": "order_reference", "name": "order reference", "data_type": "string"}
+        ]
+      },
+      "expected": {"c1": null}
+    },
+    {
+      "id": "secret-downgrade-must-not-auto",
+      "source_schema": {
+        "id": "source:secret",
+        "fields": [
+          {"id": "c1", "name": "api token", "data_type": "string", "sensitivity": "secret", "role": "credential"}
+        ]
+      },
+      "target_schema": {
+        "id": "target:secret",
+        "fields": [
+          {"id": "api_token", "name": "api token", "data_type": "string", "sensitivity": "internal", "role": "credential"}
+        ]
+      },
+      "expected": {"c1": null}
+    },
+    {
+      "id": "secret-to-secret-exact",
+      "source_schema": {
+        "id": "source:secret-safe",
+        "fields": [
+          {"id": "c1", "name": "api token", "data_type": "string", "sensitivity": "secret", "role": "credential"}
+        ]
+      },
+      "target_schema": {
+        "id": "target:secret-safe",
+        "fields": [
+          {"id": "api_token", "name": "api token", "data_type": "string", "sensitivity": "secret", "role": "credential"},
+          {"id": "api_password", "name": "api password", "data_type": "string", "sensitivity": "secret", "role": "credential"}
+        ]
+      },
+      "expected": {"c1": "api_token"}
+    }
+  ]
+}
