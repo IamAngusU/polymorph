@@ -6,21 +6,26 @@ import importlib.util
 import json
 import platform
 import shutil
+import sqlite3
 import sys
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from urllib.parse import unquote
+
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 from . import __version__
 from .audit import AuditLog
 from .benchmark import MappingBenchmarkCase, benchmark_call, benchmark_mapping_cases
-from .content import ContentInspector, ContentKind, MagikaClassifier
+from .connectors.base import SourceConnector
 from .connectors.csv_file import CsvConnector
 from .connectors.database import DatabaseConnector
 from .connectors.excel import ExcelConnector
 from .connectors.json_file import JsonFileConnector
-from .keys import EncryptedRecipientKeyFile
+from .content import ContentInspector, ContentKind, FileInspection, MagikaClassifier
 from .errors import PolymorphError
+from .keys import EncryptedRecipientKeyFile
 from .matching.hybrid import HybridMatcher
 from .matching.semantic import (
     MULTILINGUAL_CPU,
@@ -30,6 +35,8 @@ from .matching.semantic import (
     load_profile_reranker,
     verify_installed_profile,
 )
+from .models.mapping import MappingDecision
+from .models.schema import SchemaDescriptor
 from .paths import model_home, recipe_store_path
 from .planning import build_plan
 from .preflight import PreflightRunner
@@ -45,7 +52,66 @@ from .serialization import (
     schema_to_dict,
 )
 from .spool import SealedSpool
-from .validation import PlanValidator, ValidationSeverity
+from .sqlite_safety import selected_journal_mode, sqlite_wal_is_safe
+from .validation import PlanValidator
+
+
+def _resolved_file_path(value: str | Path) -> Path:
+    try:
+        return Path(value).expanduser().resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise PolymorphError("could not resolve a CLI file path safely") from exc
+
+
+def _paths_alias(left: Path, right: Path) -> bool:
+    if left == right:
+        return True
+    try:
+        return left.exists() and right.exists() and left.samefile(right)
+    except OSError:
+        return False
+
+
+def _protect_write_path(
+    output: str | Path | None,
+    *protected: str | Path | None,
+    label: str = "output",
+) -> None:
+    if output is None:
+        return
+    destination = _resolved_file_path(output)
+    for candidate in protected:
+        if candidate is None:
+            continue
+        if _paths_alias(destination, _resolved_file_path(candidate)):
+            raise PolymorphError(f"{label} path must not overwrite an input or state file")
+
+
+def _sqlite_database_path(url: str | None) -> str | None:
+    if not url:
+        return None
+    try:
+        parsed = make_url(url)
+    except ArgumentError:
+        return None
+    if parsed.get_backend_name() != "sqlite" or not parsed.database:
+        return None
+    mode = parsed.query.get("mode")
+    if parsed.database == ":memory:" or mode == "memory":
+        return None
+    database = parsed.database
+    if str(parsed.query.get("uri", "")).casefold() in {"1", "true", "yes"} and database.startswith(
+        "file:"
+    ):
+        database = unquote(database.removeprefix("file:"))
+        if (
+            len(database) >= 3
+            and database[0] == "/"
+            and database[1].isalpha()
+            and database[2] == ":"
+        ):
+            database = database[1:]
+    return database
 
 
 def _emit(payload: object, *, output: str | None = None) -> None:
@@ -58,7 +124,7 @@ def _emit(payload: object, *, output: str | None = None) -> None:
         print(text)
 
 
-def _emit_schema(schema, args: argparse.Namespace) -> None:
+def _emit_schema(schema: SchemaDescriptor, args: argparse.Namespace) -> None:
     if getattr(args, "output", None):
         save_schema(args.output, schema)
     else:
@@ -66,22 +132,26 @@ def _emit_schema(schema, args: argparse.Namespace) -> None:
 
 
 def _inspect_excel(args: argparse.Namespace) -> None:
+    _protect_write_path(args.output, args.path)
     connector = ExcelConnector(args.path, sheet=args.sheet, header_row=args.header_row)
     _emit_schema(connector.inspect_schema(), args)
 
 
 def _inspect_csv(args: argparse.Namespace) -> None:
+    _protect_write_path(args.output, args.path)
     connector = CsvConnector(args.path, delimiter=args.delimiter, encoding=args.encoding)
     _emit_schema(connector.inspect_schema(), args)
 
 
 def _inspect_json(args: argparse.Namespace) -> None:
+    _protect_write_path(args.output, args.path)
     _emit_schema(JsonFileConnector(args.path).inspect_schema(), args)
 
 
 def _inspect_db(args: argparse.Namespace) -> None:
-    connector = DatabaseConnector(args.url, args.table, schema=args.schema)
-    _emit_schema(connector.inspect_schema(), args)
+    _protect_write_path(args.output, _sqlite_database_path(args.url))
+    with DatabaseConnector(args.url, args.table, schema=args.schema) as connector:
+        _emit_schema(connector.inspect_schema(), args)
 
 
 def _matcher(model_dir: str | None, reranker_dir: str | None = None) -> HybridMatcher:
@@ -100,7 +170,16 @@ def _matcher(model_dir: str | None, reranker_dir: str | None = None) -> HybridMa
     return HybridMatcher(semantic=semantic, reranker=reranker)
 
 
-def _decision_dict(item) -> dict[str, object]:
+def _matcher_for_args(args: argparse.Namespace) -> HybridMatcher:
+    model_dir = getattr(args, "model_dir", None)
+    reranker_dir = getattr(args, "reranker_dir", None)
+    if getattr(args, "models", False):
+        model_dir = model_dir or str(model_home(MULTILINGUAL_CPU.name))
+        reranker_dir = reranker_dir or str(model_home(RERANKER_MULTILINGUAL_CPU.name))
+    return _matcher(model_dir, reranker_dir)
+
+
+def _decision_dict(item: MappingDecision) -> dict[str, object]:
     return {
         "source": item.source_field_id,
         "target": item.target_field_id,
@@ -112,16 +191,18 @@ def _decision_dict(item) -> dict[str, object]:
 
 
 def _map(args: argparse.Namespace) -> None:
+    _protect_write_path(args.output, args.source, args.target)
     source = load_schema(args.source)
     target = load_schema(args.target)
-    decisions = _matcher(args.model_dir, getattr(args, "reranker_dir", None)).propose(source, target)
+    decisions = _matcher_for_args(args).propose(source, target)
     _emit([_decision_dict(item) for item in decisions], output=args.output)
 
 
 def _plan_create(args: argparse.Namespace) -> None:
+    _protect_write_path(args.output, args.source, args.target)
     source = load_schema(args.source)
     target = load_schema(args.target)
-    decisions = _matcher(args.model_dir, getattr(args, "reranker_dir", None)).propose(source, target)
+    decisions = _matcher_for_args(args).propose(source, target)
     plan = build_plan(source, target, decisions, allow_review=args.allow_review)
     if not plan.rules:
         raise SystemExit("no mapping rules passed the requested approval threshold")
@@ -129,7 +210,9 @@ def _plan_create(args: argparse.Namespace) -> None:
     if not report.valid:
         raise SystemExit("generated plan failed validation")
     if report.requires_review and not args.allow_review:
-        raise SystemExit("generated plan requires review; rerun with --allow-review after inspection")
+        raise SystemExit(
+            "generated plan requires review; rerun with --allow-review after inspection"
+        )
     save_plan(args.output, plan)
     _emit(
         {
@@ -189,6 +272,14 @@ def _plan_show(args: argparse.Namespace) -> None:
 
 
 def _plan_repair(args: argparse.Namespace) -> None:
+    _protect_write_path(
+        args.output,
+        args.plan,
+        args.old_source,
+        args.new_source,
+        args.old_target,
+        args.new_target,
+    )
     plan = load_plan(args.plan)
     proposal = propose_plan_repair(
         plan,
@@ -196,9 +287,9 @@ def _plan_repair(args: argparse.Namespace) -> None:
         load_schema(args.new_source),
         load_schema(args.old_target),
         load_schema(args.new_target),
-        _matcher(args.model_dir, getattr(args, "reranker_dir", None)),
+        _matcher_for_args(args),
     )
-    payload: dict[str, Any] = {
+    payload: dict[str, object] = {
         "blocked": proposal.blocked,
         "auto_applicable": proposal.auto_applicable,
         "findings": [
@@ -222,9 +313,11 @@ def _plan_repair(args: argparse.Namespace) -> None:
     _emit(payload)
     if proposal.blocked:
         raise SystemExit(2)
-    if proposal.plan is not None and any(
-        item.severity is RepairSeverity.REVIEW for item in proposal.findings
-    ) and not args.allow_review:
+    if (
+        proposal.plan is not None
+        and any(item.severity is RepairSeverity.REVIEW for item in proposal.findings)
+        and not args.allow_review
+    ):
         raise SystemExit(3)
 
 
@@ -253,6 +346,7 @@ def _audit_verify(args: argparse.Namespace) -> None:
 
 
 def _audit_export(args: argparse.Namespace) -> None:
+    _protect_write_path(args.output, args.path)
     text = AuditLog(args.path).export_jsonl()
     output = Path(args.output).expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -279,17 +373,18 @@ def _quarantine_list(args: argparse.Namespace) -> None:
     )
 
 
-
 def _key_generate(args: argparse.Namespace) -> None:
     first = getpass.getpass("Key passphrase: ")
     second = getpass.getpass("Repeat passphrase: ")
     if first != second:
         raise SystemExit("passphrases do not match")
     public = EncryptedRecipientKeyFile.create(args.output, first)
-    _emit({
-        "key_file": str(Path(args.output).expanduser().resolve()),
-        "public_key_hex": public.hex(),
-    })
+    _emit(
+        {
+            "key_file": str(Path(args.output).expanduser().resolve()),
+            "public_key_hex": public.hex(),
+        }
+    )
 
 
 def _key_public(args: argparse.Namespace) -> None:
@@ -308,26 +403,34 @@ def _inspector(use_magika: bool) -> ContentInspector:
     return ContentInspector(classifier=classifier)
 
 
-def _auto_source(path: str, *, use_magika: bool = False):
+def _connector_for_inspection(path: str, report: FileInspection) -> SourceConnector | None:
+    if report.kind is ContentKind.XLSX:
+        return ExcelConnector(path, expected_source_identity=report.identity)
+    if report.kind in {ContentKind.JSON, ContentKind.JSON5}:
+        return JsonFileConnector(path, expected_source_identity=report.identity)
+    if report.kind is ContentKind.DELIMITED_TEXT:
+        return CsvConnector(path, expected_source_identity=report.identity)
+    if report.kind is ContentKind.TEXT and any(
+        signal.startswith("JSON-like") for signal in report.signals
+    ):
+        return JsonFileConnector(path, expected_source_identity=report.identity)
+    return None
+
+
+def _auto_source(
+    path: str,
+    *,
+    use_magika: bool = False,
+) -> tuple[FileInspection, SourceConnector | None]:
     report = _inspector(use_magika).inspect(path)
     if not report.safe:
         codes = ", ".join(item.code.value for item in report.blocking_risks)
         raise PolymorphError(f"input was rejected by the content trust gate: {codes}")
-    connector = None
-    if report.kind is ContentKind.XLSX:
-        connector = ExcelConnector(path)
-    elif report.kind in {ContentKind.JSON, ContentKind.JSON5}:
-        connector = JsonFileConnector(path)
-    elif report.kind is ContentKind.DELIMITED_TEXT:
-        connector = CsvConnector(path)
-    elif report.kind is ContentKind.TEXT and any(
-        signal.startswith("JSON-like") for signal in report.signals
-    ):
-        connector = JsonFileConnector(path)
-    return report, connector
+    return report, _connector_for_inspection(path, report)
 
 
 def _inspect_auto(args: argparse.Namespace) -> None:
+    _protect_write_path(args.output, args.path)
     report, connector = _auto_source(args.path, use_magika=args.magika)
     payload: dict[str, object] = {"content": report.as_dict(), "schema": None}
     if connector is not None:
@@ -335,7 +438,7 @@ def _inspect_auto(args: argparse.Namespace) -> None:
     _emit(payload, output=args.output)
 
 
-def _resolver_from_args(args: argparse.Namespace):
+def _resolver_from_args(args: argparse.Namespace) -> DatabaseConnector | None:
     resolver_db_url = getattr(args, "resolver_db_url", None)
     if not resolver_db_url:
         return None
@@ -350,6 +453,24 @@ def _resolver_from_args(args: argparse.Namespace):
 
 
 def _preflight_file(args: argparse.Namespace) -> None:
+    resolver_path = _sqlite_database_path(args.resolver_db_url)
+    _protect_write_path(
+        args.output,
+        args.source,
+        args.target_schema,
+        args.plan,
+        resolver_path,
+        args.recipe_store if args.remember else None,
+    )
+    if args.remember:
+        _protect_write_path(
+            args.recipe_store,
+            args.source,
+            args.target_schema,
+            args.plan,
+            resolver_path,
+            label="recipe store",
+        )
     content, connector = _auto_source(args.source, use_magika=args.magika)
     if connector is None:
         raise PolymorphError(
@@ -359,14 +480,18 @@ def _preflight_file(args: argparse.Namespace) -> None:
     target = load_schema(args.target_schema)
     plan = load_plan(args.plan)
     resolver = _resolver_from_args(args)
-    report = PreflightRunner().run(
-        connector.iter_records(),
-        source,
-        target,
-        plan,
-        max_records=args.max_records,
-        foreign_key_resolver=resolver,
-    )
+    try:
+        report = PreflightRunner().run(
+            connector.iter_records(),
+            source,
+            target,
+            plan,
+            max_records=args.max_records,
+            foreign_key_resolver=resolver,
+        )
+    finally:
+        if resolver is not None:
+            resolver.close()
     payload = {"content": content.as_dict(), "preflight": report.as_dict()}
     if args.remember:
         if not report.promotable:
@@ -390,6 +515,33 @@ def _preflight_file(args: argparse.Namespace) -> None:
 def _prepare(args: argparse.Namespace) -> None:
     """One-command, no-write readiness workflow for a file-to-schema route."""
 
+    resolver_path = _sqlite_database_path(args.resolver_db_url)
+    _protect_write_path(
+        args.recipe_store,
+        args.source,
+        args.target_schema,
+        resolver_path,
+        args.output,
+        args.output_plan,
+        label="recipe store",
+    )
+    _protect_write_path(
+        args.output_plan,
+        args.source,
+        args.target_schema,
+        resolver_path,
+        args.recipe_store,
+        args.output,
+        label="plan output",
+    )
+    _protect_write_path(
+        args.output,
+        args.source,
+        args.target_schema,
+        resolver_path,
+        args.recipe_store,
+        args.output_plan,
+    )
     content, connector = _auto_source(args.source, use_magika=args.magika)
     if connector is None:
         raise PolymorphError(
@@ -405,7 +557,7 @@ def _prepare(args: argparse.Namespace) -> None:
         plan = recipe.rebind(source, target)
     else:
         route_source = "fresh_mapping"
-        decisions = _matcher(args.model_dir, args.reranker_dir).propose(source, target)
+        decisions = _matcher_for_args(args).propose(source, target)
         plan = build_plan(source, target, decisions, allow_review=False)
 
     if not plan.rules:
@@ -420,14 +572,18 @@ def _prepare(args: argparse.Namespace) -> None:
         raise SystemExit(3)
 
     resolver = _resolver_from_args(args)
-    report = PreflightRunner().run(
-        connector.iter_records(),
-        source,
-        target,
-        plan,
-        max_records=args.max_records,
-        foreign_key_resolver=resolver,
-    )
+    try:
+        report = PreflightRunner().run(
+            connector.iter_records(),
+            source,
+            target,
+            plan,
+            max_records=args.max_records,
+            foreign_key_resolver=resolver,
+        )
+    finally:
+        if resolver is not None:
+            resolver.close()
     ready = report.promotable
     remembered = False
     remembered_recipe_id = recipe.id if recipe is not None else None
@@ -465,6 +621,13 @@ def _prepare(args: argparse.Namespace) -> None:
 
 
 def _recipe_remember(args: argparse.Namespace) -> None:
+    _protect_write_path(
+        args.store,
+        args.plan,
+        args.source_schema,
+        args.target_schema,
+        label="recipe store",
+    )
     source = load_schema(args.source_schema)
     target = load_schema(args.target_schema)
     recipe = RecipeStore(args.store).remember(
@@ -500,6 +663,20 @@ def _recipe_list(args: argparse.Namespace) -> None:
 
 
 def _recipe_find(args: argparse.Namespace) -> None:
+    _protect_write_path(
+        args.store,
+        args.source_schema,
+        args.target_schema,
+        args.output_plan,
+        label="recipe store",
+    )
+    _protect_write_path(
+        args.output_plan,
+        args.source_schema,
+        args.target_schema,
+        args.store,
+        label="plan output",
+    )
     source = load_schema(args.source_schema)
     target = load_schema(args.target_schema)
     recipe = RecipeStore(args.store).find(source, target)
@@ -539,7 +716,7 @@ def _doctor(args: argparse.Namespace) -> None:
         "magika": importlib.util.find_spec("magika") is not None,
         "clevercsv": importlib.util.find_spec("clevercsv") is not None,
         "onnxruntime": importlib.util.find_spec("onnxruntime") is not None,
-        "tokenizers": importlib.util.find_spec("tokenizers") is not None,
+        "sentencepiece": importlib.util.find_spec("sentencepiece") is not None,
         "keyring": importlib.util.find_spec("keyring") is not None,
     }
     models: dict[str, object] = {}
@@ -572,6 +749,11 @@ def _doctor(args: argparse.Namespace) -> None:
             "content_trust_gate": True,
             "excel_xml_hardening": _excel_xml_hardening_status(),
             "preflight_contract_sandbox": True,
+            "sqlite": {
+                "version": sqlite3.sqlite_version,
+                "journal_mode": selected_journal_mode(),
+                "wal_reset_fix_present": sqlite_wal_is_safe(),
+            },
             "parser_os_sandbox": {
                 "bubblewrap": shutil.which("bwrap") is not None,
                 "firejail": shutil.which("firejail") is not None,
@@ -585,21 +767,24 @@ def _doctor(args: argparse.Namespace) -> None:
 
 
 def _benchmark_inspect(args: argparse.Namespace) -> None:
+    _protect_write_path(args.output, args.path)
     report, content_metrics = benchmark_call(
         "content_inspection",
         lambda: _inspector(args.magika).inspect(args.path),
     )
+    metric_payloads = [content_metrics.as_dict()]
     payload: dict[str, object] = {
         "content": report.as_dict(),
-        "metrics": [content_metrics.as_dict()],
+        "metrics": metric_payloads,
     }
     if report.safe:
-        _, connector = _auto_source(args.path, use_magika=False)
+        connector = _connector_for_inspection(args.path, report)
         if connector is not None:
             schema, schema_metrics = benchmark_call("schema_inspection", connector.inspect_schema)
             payload["schema"] = schema_to_dict(schema)
-            payload["metrics"].append(schema_metrics.as_dict())
+            metric_payloads.append(schema_metrics.as_dict())
             if args.records > 0:
+
                 def read_records() -> list[Mapping[str, object]]:
                     rows = []
                     for index, record in enumerate(connector.iter_records()):
@@ -607,16 +792,18 @@ def _benchmark_inspect(args: argparse.Namespace) -> None:
                             break
                         rows.append(record)
                     return rows
+
                 _, records_metrics = benchmark_call(
                     "record_read",
                     read_records,
                     result_count=len,
                 )
-                payload["metrics"].append(records_metrics.as_dict())
+                metric_payloads.append(records_metrics.as_dict())
     _emit(payload, output=args.output)
 
 
 def _benchmark_mapping(args: argparse.Namespace) -> None:
+    _protect_write_path(args.output, args.manifest)
     manifest_path = Path(args.manifest).expanduser().resolve()
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or payload.get("version") != 1:
@@ -633,7 +820,9 @@ def _benchmark_mapping(args: argparse.Namespace) -> None:
         target_payload = raw.get("target_schema")
         expected_payload = raw.get("expected")
         if not isinstance(source_payload, dict) or not isinstance(target_payload, dict):
-            raise PolymorphError(f"benchmark case {index} must contain inline source/target schemas")
+            raise PolymorphError(
+                f"benchmark case {index} must contain inline source/target schemas"
+            )
         if not isinstance(expected_payload, dict) or not expected_payload:
             raise PolymorphError(f"benchmark case {index} must contain expected mappings")
         expected: dict[str, str | None] = {}
@@ -650,7 +839,7 @@ def _benchmark_mapping(args: argparse.Namespace) -> None:
             )
         )
 
-    matcher = _matcher(args.model_dir, args.reranker_dir)
+    matcher = _matcher_for_args(args)
     report, metrics = benchmark_call(
         "mapping_corpus",
         lambda: benchmark_mapping_cases(cases, matcher),
@@ -669,6 +858,12 @@ def _benchmark_mapping(args: argparse.Namespace) -> None:
 
 def _add_output(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output", "-o")
+
+
+def _add_model_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--models", action="store_true", help="use both installed CPU profiles")
+    parser.add_argument("--model-dir")
+    parser.add_argument("--reranker-dir")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -717,8 +912,7 @@ def build_parser() -> argparse.ArgumentParser:
     mapping = sub.add_parser("map", help="propose schema mappings without executing them")
     mapping.add_argument("source")
     mapping.add_argument("target")
-    mapping.add_argument("--model-dir")
-    mapping.add_argument("--reranker-dir")
+    _add_model_options(mapping)
     _add_output(mapping)
     mapping.set_defaults(func=_map)
 
@@ -729,8 +923,7 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("source")
     create.add_argument("target")
     create.add_argument("--output", "-o", required=True)
-    create.add_argument("--model-dir")
-    create.add_argument("--reranker-dir")
+    _add_model_options(create)
     create.add_argument("--allow-review", action="store_true")
     create.set_defaults(func=_plan_create)
 
@@ -751,8 +944,7 @@ def build_parser() -> argparse.ArgumentParser:
     repair.add_argument("old_target")
     repair.add_argument("new_target")
     repair.add_argument("--output", "-o", required=True)
-    repair.add_argument("--model-dir")
-    repair.add_argument("--reranker-dir")
+    _add_model_options(repair)
     repair.add_argument("--allow-review", action="store_true")
     repair.set_defaults(func=_plan_repair)
 
@@ -790,8 +982,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     prepare.add_argument("source")
     prepare.add_argument("target_schema")
-    prepare.add_argument("--model-dir")
-    prepare.add_argument("--reranker-dir")
+    _add_model_options(prepare)
     prepare.add_argument("--magika", action="store_true")
     prepare.add_argument("--max-records", type=int)
     prepare.add_argument("--resolver-db-url")
@@ -824,10 +1015,14 @@ def build_parser() -> argparse.ArgumentParser:
     recipe_find.add_argument("--output-plan")
     recipe_find.set_defaults(func=_recipe_find)
 
-    doctor = sub.add_parser("doctor", help="report local reliability and optional acceleration features")
+    doctor = sub.add_parser(
+        "doctor", help="report local reliability and optional acceleration features"
+    )
     doctor.set_defaults(func=_doctor)
 
-    benchmark = sub.add_parser("benchmark", help="opt-in resource diagnostics with no normal-run overhead")
+    benchmark = sub.add_parser(
+        "benchmark", help="opt-in resource diagnostics with no normal-run overhead"
+    )
     benchmark_sub = benchmark.add_subparsers(dest="benchmark_command", required=True)
     benchmark_inspect = benchmark_sub.add_parser("inspect")
     benchmark_inspect.add_argument("path")
@@ -839,8 +1034,7 @@ def build_parser() -> argparse.ArgumentParser:
         "mapping", help="score auto precision and coverage against a labelled schema corpus"
     )
     benchmark_mapping.add_argument("manifest")
-    benchmark_mapping.add_argument("--model-dir")
-    benchmark_mapping.add_argument("--reranker-dir")
+    _add_model_options(benchmark_mapping)
     benchmark_mapping.add_argument("--require-auto-precision", type=float)
     benchmark_mapping.add_argument("--max-unsafe-auto", type=int, default=0)
     _add_output(benchmark_mapping)

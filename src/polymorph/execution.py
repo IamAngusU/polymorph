@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
@@ -46,7 +46,9 @@ class DataPlaneExecutor:
                     output[target.id] = value
                     continue
                 if destination_public_key is None or transfer_contexts is None:
-                    raise PolicyViolation("opaque forwarding requires destination key and transfer context")
+                    raise PolicyViolation(
+                        "opaque forwarding requires destination key and transfer context"
+                    )
                 context = transfer_contexts[source.id]
                 raw = value if isinstance(value, bytes) else str(value).encode("utf-8")
                 output[target.id] = seal_for_recipient(raw, destination_public_key, context)

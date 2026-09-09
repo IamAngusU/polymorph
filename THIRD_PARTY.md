@@ -32,6 +32,13 @@ Polymorph itself is licensed separately under the terms in `LICENSE`.
 - Upstream license: MIT License
 - Purpose: an additional candidate in the bounded dialect ensemble. It is not trusted alone.
 
+## Optional model tokenization
+
+- Component: SentencePiece
+- Upstream: https://github.com/google/sentencepiece
+- Upstream license: Apache License 2.0
+- Purpose: compact local tokenization for the pinned XLM-R-compatible model profiles.
+
 ## Optional benchmark process metrics
 
 - Component: psutil

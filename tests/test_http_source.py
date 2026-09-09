@@ -6,12 +6,15 @@ import httpx
 import pytest
 
 from polymorph.connectors.http_json import (
+    HttpEndpoint,
+    HttpJsonConnector,
     HttpJsonSourceConnector,
     HttpPagination,
     HttpSourceEndpoint,
     PaginationMode,
 )
-from polymorph.errors import ConnectorError, ProtocolError
+from polymorph.errors import ConnectorError, ConnectorWriteError, ProtocolError, WriteOutcome
+from polymorph.models.schema import SchemaDescriptor
 from polymorph.models.types import DataType, Sensitivity
 
 
@@ -97,3 +100,77 @@ def test_http_source_rejects_cross_host_endpoint() -> None:
         HttpJsonSourceConnector(
             HttpSourceEndpoint("https://example.test/base", "https://evil.test/data")
         )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"data":[{"id":1,"id":2}]}',
+        b'{"data":[{"amount":NaN}]}',
+    ],
+)
+def test_http_source_rejects_noncanonical_json(body: bytes) -> None:
+    connector = HttpJsonSourceConnector(
+        HttpSourceEndpoint("https://example.test", "/data", records_pointer="/data"),
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                content=body,
+            )
+        ),
+    )
+
+    with pytest.raises(ConnectorError, match="invalid JSON"):
+        list(connector.iter_records())
+
+
+def test_http_idempotency_requires_an_explicit_endpoint_contract() -> None:
+    schema = SchemaDescriptor("target", ())
+    advisory = HttpJsonConnector(
+        HttpEndpoint(
+            "https://example.test",
+            "/records",
+            idempotency_header="Idempotency-Key",
+        ),
+        schema,
+    )
+    asserted = HttpJsonConnector(
+        HttpEndpoint(
+            "https://example.test",
+            "/records",
+            idempotency_header="Idempotency-Key",
+            idempotency_contract=True,
+        ),
+        schema,
+    )
+
+    assert not advisory.capabilities.supports_idempotency
+    assert asserted.capabilities.supports_idempotency
+
+
+@pytest.mark.parametrize("header", ["Bad Header", "Authorization", "Content-Length"])
+def test_http_idempotency_header_rejects_unsafe_names(header: str) -> None:
+    with pytest.raises(ValueError, match="header"):
+        HttpJsonConnector(
+            HttpEndpoint(
+                "https://example.test",
+                "/records",
+                idempotency_header=header,
+            ),
+            SchemaDescriptor("target", ()),
+        )
+
+
+@pytest.mark.parametrize("status", (301, 302, 307, 308))
+def test_http_destination_never_counts_redirect_as_committed(status: int) -> None:
+    connector = HttpJsonConnector(
+        HttpEndpoint("https://example.test", "/records"),
+        SchemaDescriptor("target", ()),
+        transport=httpx.MockTransport(lambda request: httpx.Response(status)),
+    )
+
+    with pytest.raises(ConnectorWriteError) as caught:
+        connector.write_records([{"value": "must-not-count"}])
+
+    assert caught.value.outcome is WriteOutcome.UNKNOWN

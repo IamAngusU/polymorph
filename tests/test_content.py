@@ -8,7 +8,7 @@ from openpyxl import Workbook
 
 from polymorph.connectors.excel import ExcelConnector
 from polymorph.connectors.json_file import JsonFileConnector
-from polymorph.content import ContentInspector, ContentKind, RiskCode
+from polymorph.content import ClassifierEvidence, ContentInspector, ContentKind, RiskCode
 from polymorph.errors import ConnectorError
 
 
@@ -21,6 +21,40 @@ def test_content_inspection_ignores_filename_for_json(tmp_path) -> None:
     assert report.kind is ContentKind.JSON
     assert report.safe
     assert list(JsonFileConnector(path).iter_records()) == [{"customer": "Acme"}]
+
+
+def test_content_inspection_reports_identity_of_opened_file(tmp_path) -> None:
+    path = tmp_path / "identity.json"
+    path.write_text('{"customer": "Acme"}', encoding="utf-8")
+
+    report = ContentInspector().inspect(path)
+    metadata = path.stat()
+
+    assert report.identity.device == metadata.st_dev
+    assert report.identity.inode == metadata.st_ino
+    assert report.identity.size_bytes == metadata.st_size
+    assert report.identity.mtime_ns == metadata.st_mtime_ns
+    assert report.as_dict()["identity"] == report.identity.as_dict()
+
+
+def test_content_inspection_blocks_file_changed_during_inspection(tmp_path) -> None:
+    path = tmp_path / "changing.json"
+    path.write_text('{"customer": "Acme"}', encoding="utf-8")
+
+    class MutatingClassifier:
+        def classify(self, candidate):
+            candidate.write_text(
+                '{"customer": "Mallory", "injected": true}',
+                encoding="utf-8",
+            )
+            return ClassifierEvidence("test", "json", "application/json", 0.99)
+
+    report = ContentInspector(classifier=MutatingClassifier()).inspect(path)
+
+    assert not report.safe
+    assert any(
+        risk.code is RiskCode.FILE_CHANGED_DURING_INSPECTION for risk in report.blocking_risks
+    )
 
 
 def test_json5_is_selected_by_content_not_extension(tmp_path) -> None:
@@ -96,8 +130,6 @@ def test_external_workbook_links_are_blocking_by_default(tmp_path) -> None:
 
 
 def test_high_confidence_classifier_disagreement_blocks_parser_selection(tmp_path) -> None:
-    from polymorph.content import ClassifierEvidence
-
     class FakeClassifier:
         def classify(self, path):
             return ClassifierEvidence("test", "executable", "application/x-executable", 0.99)

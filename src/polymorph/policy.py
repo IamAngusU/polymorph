@@ -18,7 +18,9 @@ class PolicyEngine:
     def field_policy(self, field: FieldDescriptor) -> FieldPolicy:
         return FieldPolicy.for_sensitivity(field.sensitivity)
 
-    def validate_route(self, source: FieldDescriptor, target: FieldDescriptor, transform: str) -> None:
+    def validate_route(
+        self, source: FieldDescriptor, target: FieldDescriptor, transform: str
+    ) -> None:
         source_policy = self.field_policy(source)
         target_policy = self.field_policy(target)
 

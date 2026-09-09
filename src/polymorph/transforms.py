@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -8,7 +8,7 @@ from enum import StrEnum
 
 from .errors import PolymorphError
 
-Transform = Callable[[object, dict[str, str]], object]
+Transform = Callable[[object, Mapping[str, str]], object]
 
 
 class TransformStage(StrEnum):
@@ -24,15 +24,15 @@ class TransformSpec:
     function: Transform | None = None
 
 
-def _copy(value: object, _: dict[str, str]) -> object:
+def _copy(value: object, _: Mapping[str, str]) -> object:
     return value
 
 
-def _trim(value: object, _: dict[str, str]) -> object:
+def _trim(value: object, _: Mapping[str, str]) -> object:
     return value.strip() if isinstance(value, str) else value
 
 
-def _parse_decimal(value: object, params: dict[str, str]) -> Decimal | None:
+def _parse_decimal(value: object, params: Mapping[str, str]) -> Decimal | None:
     if value is None or value == "":
         return None
     if isinstance(value, Decimal):
@@ -50,7 +50,7 @@ def _parse_decimal(value: object, params: dict[str, str]) -> Decimal | None:
         raise PolymorphError("decimal parsing failed") from exc
 
 
-def _parse_datetime(value: object, params: dict[str, str]) -> datetime | None:
+def _parse_datetime(value: object, params: Mapping[str, str]) -> datetime | None:
     if value is None or value == "":
         return None
     if isinstance(value, datetime):
@@ -89,7 +89,11 @@ def is_known_transform(name: str) -> bool:
     return name in TRANSFORM_SPECS
 
 
-def apply_transform(name: str, value: object, parameters: dict[str, str] | None = None) -> object:
+def apply_transform(
+    name: str,
+    value: object,
+    parameters: Mapping[str, str] | None = None,
+) -> object:
     try:
         spec = TRANSFORM_SPECS[name]
     except KeyError as exc:

@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from polymorph.crypto import RecipientKeyPair, TransferContext, open_envelope, seal_for_recipient
-from polymorph.errors import IntegrityError, TransferExpired
+from polymorph.errors import IntegrityError, ProtocolError, TransferExpired
 
 
 def context(record_id: str = "42", **kwargs) -> TransferContext:
@@ -23,10 +23,14 @@ def context(record_id: str = "42", **kwargs) -> TransferContext:
 
 def test_opaque_roundtrip_and_repr_redaction():
     recipient = RecipientKeyPair.generate()
-    envelope = seal_for_recipient(b"correct horse battery staple", recipient.public_bytes(), context())
+    envelope = seal_for_recipient(
+        b"correct horse battery staple", recipient.public_bytes(), context()
+    )
 
     assert "correct" not in repr(envelope)
-    assert open_envelope(envelope, recipient.private_key, context()) == b"correct horse battery staple"
+    assert (
+        open_envelope(envelope, recipient.private_key, context()) == b"correct horse battery staple"
+    )
 
 
 def test_route_metadata_is_authenticated():
@@ -63,3 +67,18 @@ def test_expired_context_is_rejected_before_use():
 
     with pytest.raises(TransferExpired):
         seal_for_recipient(b"secret", recipient.public_bytes(), expired)
+
+
+def test_wire_timestamps_must_be_timezone_aware() -> None:
+    wire = context().to_wire()
+    wire["issued_at"] = "2026-09-09T10:00:00"
+
+    with pytest.raises(ProtocolError, match="timezone"):
+        TransferContext.from_wire(wire)
+
+
+def test_inverted_transfer_validity_is_rejected() -> None:
+    now = datetime.now(UTC)
+
+    with pytest.raises(ProtocolError, match="inverted"):
+        context(issued_at=now, expires_at=now - timedelta(seconds=1))

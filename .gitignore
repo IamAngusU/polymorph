@@ -11,8 +11,9 @@ venv/
 .env
 *.sqlite
 *.db
-models/
+/models/
 .polymorph/
+.polymorph-write-*.lock
 dist/
 build/
 .DS_Store

@@ -9,7 +9,9 @@ from decimal import Decimal, InvalidOperation
 from polymorph.models.types import DataType, FieldRole
 
 _INTEGER = re.compile(r"^[+-]?(?:0|[1-9][0-9]*)$")
-_DECIMAL = re.compile(r"^[+-]?(?:[0-9]+\.[0-9]+|[0-9]+[eE][+-]?[0-9]+|[0-9]+\.[0-9]+[eE][+-]?[0-9]+)$")
+_DECIMAL = re.compile(
+    r"^[+-]?(?:[0-9]+\.[0-9]+|[0-9]+[eE][+-]?[0-9]+|[0-9]+\.[0-9]+[eE][+-]?[0-9]+)$"
+)
 
 
 def runtime_type(value: object) -> DataType:

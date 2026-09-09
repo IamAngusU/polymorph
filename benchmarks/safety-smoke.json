@@ -84,6 +84,39 @@
         ]
       },
       "expected": {"c1": "api_token"}
+    },
+    {
+      "id": "account-number-is-not-customer-number",
+      "source_schema": {
+        "id": "source:account",
+        "fields": [
+          {"id": "c1", "name": "account number", "data_type": "string"}
+        ]
+      },
+      "target_schema": {
+        "id": "target:customer",
+        "fields": [
+          {"id": "customer_number", "name": "customer number", "data_type": "string"}
+        ]
+      },
+      "expected": {"c1": null}
+    },
+    {
+      "id": "cyrillic-exact-name",
+      "source_schema": {
+        "id": "source:cyrillic",
+        "fields": [
+          {"id": "c1", "name": "Клиент", "data_type": "string"}
+        ]
+      },
+      "target_schema": {
+        "id": "target:cyrillic",
+        "fields": [
+          {"id": "client", "name": "Клиент", "data_type": "string"},
+          {"id": "invoice", "name": "Счет", "data_type": "string"}
+        ]
+      },
+      "expected": {"c1": "client"}
     }
   ]
 }

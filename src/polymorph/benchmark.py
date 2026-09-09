@@ -5,14 +5,23 @@ import statistics
 import threading
 import time
 import tracemalloc
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import Callable, TypeVar
+from typing import Protocol, TypeVar, cast
 
 from .matching.hybrid import HybridMatcher
 from .models.mapping import MappingStatus
 from .models.schema import SchemaDescriptor
 
 T = TypeVar("T")
+
+
+class _MemoryInfo(Protocol):
+    rss: int
+
+
+class _Process(Protocol):
+    def memory_info(self) -> _MemoryInfo: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +52,7 @@ class _RssSampler:
     """Optional process RSS sampler used only inside explicit benchmark commands."""
 
     def __init__(self) -> None:
-        self._process = None
+        self._process: _Process | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.before: int | None = None
@@ -53,18 +62,19 @@ class _RssSampler:
             import psutil
         except ImportError:
             return
-        self._process = psutil.Process(os.getpid())
+        self._process = cast(_Process, psutil.Process(os.getpid()))
 
     def start(self) -> None:
         if self._process is None:
             return
-        self.before = int(self._process.memory_info().rss)
+        process = self._process
+        self.before = int(process.memory_info().rss)
         self.peak = self.before
 
         def sample() -> None:
             while not self._stop.wait(0.005):
                 try:
-                    rss = int(self._process.memory_info().rss)
+                    rss = int(process.memory_info().rss)
                 except Exception:
                     return
                 if self.peak is None or rss > self.peak:

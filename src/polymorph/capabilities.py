@@ -35,9 +35,7 @@ class CapabilityGrant:
     operations: tuple[CapabilityOperation, ...]
     allowed_plan_digests: tuple[str, ...] = ()
     issued_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    expires_at: datetime = field(
-        default_factory=lambda: datetime.now(UTC) + timedelta(hours=1)
-    )
+    expires_at: datetime = field(default_factory=lambda: datetime.now(UTC) + timedelta(hours=1))
     protocol_version: int = 1
 
     def canonical_dict(self) -> dict[str, object]:
@@ -73,7 +71,7 @@ class CapabilityGrant:
         operations: tuple[CapabilityOperation, ...],
         allowed_plan_digests: tuple[str, ...] = (),
         ttl: timedelta = timedelta(hours=1),
-    ) -> "CapabilityGrant":
+    ) -> CapabilityGrant:
         now = datetime.now(UTC)
         return cls(
             id=str(uuid.uuid4()),
@@ -110,9 +108,10 @@ class CapabilityGrant:
             raise PolicyViolation("capability connector mismatch")
         if operation not in self.operations:
             raise PolicyViolation(f"capability does not allow {operation.value}")
-        if self.allowed_plan_digests:
-            if plan_digest is None or plan_digest not in self.allowed_plan_digests:
-                raise PolicyViolation("mapping plan is outside capability scope")
+        if self.allowed_plan_digests and (
+            plan_digest is None or plan_digest not in self.allowed_plan_digests
+        ):
+            raise PolicyViolation("mapping plan is outside capability scope")
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,7 +120,7 @@ class SignedCapabilityGrant:
     signature: bytes
 
     @classmethod
-    def sign(cls, grant: CapabilityGrant, signer: SigningKeyPair) -> "SignedCapabilityGrant":
+    def sign(cls, grant: CapabilityGrant, signer: SigningKeyPair) -> SignedCapabilityGrant:
         return cls(grant, signer.sign(grant.canonical_bytes()))
 
     def verify(self, trusted_public_key: bytes, *, expected_issuer: str | None = None) -> None:
@@ -136,8 +135,11 @@ class SignedCapabilityGrant:
         }
 
     @classmethod
-    def from_wire(cls, payload: dict[str, object]) -> "SignedCapabilityGrant":
-        raw = dict(payload["grant"])
+    def from_wire(cls, payload: dict[str, object]) -> SignedCapabilityGrant:
+        raw_payload = payload["grant"]
+        if not isinstance(raw_payload, dict):
+            raise ProtocolError("capability grant must be an object")
+        raw = {str(key): value for key, value in raw_payload.items()}
         operations = tuple(CapabilityOperation(item) for item in raw.get("operations", []))
         grant = CapabilityGrant(
             id=str(raw["id"]),
@@ -149,7 +151,7 @@ class SignedCapabilityGrant:
             allowed_plan_digests=tuple(str(item) for item in raw.get("allowed_plan_digests", [])),
             issued_at=datetime.fromisoformat(str(raw["issued_at"])),
             expires_at=datetime.fromisoformat(str(raw["expires_at"])),
-            protocol_version=int(raw.get("protocol_version", 1)),
+            protocol_version=int(str(raw.get("protocol_version", 1))),
         )
         try:
             signature = base64.b64decode(

@@ -10,10 +10,15 @@ polymorph benchmark inspect ./orders.xlsx --records 10000
 
 The report separates content inspection, schema inspection and bounded record reading. When `psutil` is available through the optional `benchmark` extra, it also samples process RSS during the operation. Python allocation peak is reported separately because native libraries such as ONNX Runtime do not allocate all memory through Python.
 
+Model profiles verify their pinned assets immediately but load their runtime lazily. A benchmark
+with `--models` therefore includes model startup only when the corpus actually contains ambiguous
+fields. Report both `rss_before_bytes` and `peak_rss_bytes`; quoting only installed model size is
+not a memory benchmark.
+
 ## Mapping correctness corpus
 
 ```bash
-polymorph benchmark mapping ./benchmarks/mapping-corpus.json \
+polymorph benchmark mapping ./my-mapping-corpus.json \
   --require-auto-precision 1.0 \
   --max-unsafe-auto 0
 ```

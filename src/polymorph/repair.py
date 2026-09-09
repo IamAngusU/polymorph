@@ -96,9 +96,7 @@ def _resolve_field(
             side,
         )
     severity = (
-        RepairSeverity.REVIEW
-        if replacement.data_type != old.data_type
-        else RepairSeverity.SAFE
+        RepairSeverity.REVIEW if replacement.data_type != old.data_type else RepairSeverity.SAFE
     )
     message = "field appears moved or renamed"
     if severity is RepairSeverity.REVIEW:

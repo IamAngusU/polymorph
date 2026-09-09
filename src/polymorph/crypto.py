@@ -19,8 +19,8 @@ _PROTOCOL_NAMESPACE = b"angusu.bridge/opaque-envelope"
 
 
 def _utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ProtocolError("authenticated timestamps must include a timezone")
     return value.astimezone(UTC)
 
 
@@ -35,9 +35,21 @@ class TransferContext:
     transfer_id: str
     plan_id: str = ""
     plan_digest: str = ""
-    protocol_version: int = 2
+    protocol_version: int = 3
     issued_at: datetime | None = None
     expires_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.issued_at is not None:
+            object.__setattr__(self, "issued_at", _utc(self.issued_at))
+        if self.expires_at is not None:
+            object.__setattr__(self, "expires_at", _utc(self.expires_at))
+        if (
+            self.issued_at is not None
+            and self.expires_at is not None
+            and self.expires_at < self.issued_at
+        ):
+            raise ProtocolError("authenticated transfer validity interval is inverted")
 
     def aad_payload(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -77,10 +89,23 @@ class TransferContext:
         return self.aad_payload()
 
     @classmethod
-    def from_wire(cls, payload: dict[str, object]) -> "TransferContext":
+    def from_wire(cls, payload: dict[str, object]) -> TransferContext:
         def parse_time(name: str) -> datetime | None:
             raw = payload.get(name)
-            return None if raw in {None, ""} else datetime.fromisoformat(str(raw))
+            if raw is None or raw == "":
+                return None
+            try:
+                return _utc(datetime.fromisoformat(str(raw)))
+            except (TypeError, ValueError) as exc:
+                raise ProtocolError(f"authenticated {name} timestamp is invalid") from exc
+
+        raw_version = payload.get("protocol_version", 0)
+        if isinstance(raw_version, bool) or not isinstance(raw_version, (int, str)):
+            raise ProtocolError("authenticated protocol version is invalid")
+        try:
+            protocol_version = int(raw_version)
+        except ValueError as exc:
+            raise ProtocolError("authenticated protocol version is invalid") from exc
 
         return cls(
             tenant=str(payload["tenant"]),
@@ -92,7 +117,7 @@ class TransferContext:
             transfer_id=str(payload["transfer_id"]),
             plan_id=str(payload.get("plan_id", "")),
             plan_digest=str(payload.get("plan_digest", "")),
-            protocol_version=int(payload.get("protocol_version", 2)),
+            protocol_version=protocol_version,
             issued_at=parse_time("issued_at"),
             expires_at=parse_time("expires_at"),
         )
@@ -103,7 +128,7 @@ class RecipientKeyPair:
     private_key: X25519PrivateKey
 
     @classmethod
-    def generate(cls) -> "RecipientKeyPair":
+    def generate(cls) -> RecipientKeyPair:
         return cls(X25519PrivateKey.generate())
 
     def public_bytes(self) -> bytes:
@@ -166,7 +191,7 @@ class OpaqueEnvelope:
         payload: dict[str, str],
         *,
         max_ciphertext_bytes: int = 16 * 1024 * 1024,
-    ) -> "OpaqueEnvelope":
+    ) -> OpaqueEnvelope:
         return cls(
             ephemeral_public_key=_b64_decode(payload["epk"], field="epk", max_bytes=32),
             nonce=_b64_decode(payload["nonce"], field="nonce", max_bytes=12),
@@ -179,13 +204,14 @@ class OpaqueEnvelope:
 
 
 def _derive_key(shared_secret: bytes, context: TransferContext) -> bytes:
-    if context.protocol_version != 2:
+    if context.protocol_version not in {2, 3}:
         raise ProtocolError("unsupported opaque-envelope protocol version")
+    version = str(context.protocol_version).encode("ascii")
     return HKDF(
         algorithm=hashes.SHA256(),
         length=32,
         salt=None,
-        info=_PROTOCOL_NAMESPACE + b"/v2\x00" + context.aad(),
+        info=_PROTOCOL_NAMESPACE + b"/v" + version + b"\x00" + context.aad(),
     ).derive(shared_secret)
 
 

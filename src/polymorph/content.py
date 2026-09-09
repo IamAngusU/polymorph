@@ -7,7 +7,7 @@ import zipfile
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Protocol
+from typing import BinaryIO, Protocol
 
 import json5
 
@@ -53,6 +53,7 @@ class RiskCode(StrEnum):
     OFFICE_EXTERNAL_DATA = "office_external_data"
     CLASSIFIER_DISAGREEMENT = "classifier_disagreement"
     MALFORMED_ARCHIVE = "malformed_archive"
+    FILE_CHANGED_DURING_INSPECTION = "file_changed_during_inspection"
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,9 +72,58 @@ class ClassifierEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class FileIdentity:
+    """Portable identity evidence for the exact file bytes that were inspected."""
+
+    device: int
+    inode: int
+    size_bytes: int
+    mtime_ns: int
+
+    @classmethod
+    def from_stat(cls, metadata: os.stat_result) -> FileIdentity:
+        return cls(
+            device=metadata.st_dev,
+            inode=metadata.st_ino,
+            size_bytes=metadata.st_size,
+            mtime_ns=metadata.st_mtime_ns,
+        )
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "device": self.device,
+            "inode": self.inode,
+            "size_bytes": self.size_bytes,
+            "mtime_ns": self.mtime_ns,
+        }
+
+
+class FileDescriptor(Protocol):
+    def fileno(self) -> int: ...
+
+
+def require_matching_file_identity(
+    handle: FileDescriptor,
+    expected: FileIdentity,
+    *,
+    purpose: str,
+) -> None:
+    """Fail closed unless an already-open file handle is the inspected file."""
+
+    try:
+        metadata = os.fstat(handle.fileno())
+    except (OSError, ValueError) as exc:
+        raise ConnectorError(f"{purpose} could not verify the opened input file") from exc
+    observed = FileIdentity.from_stat(metadata)
+    if not stat.S_ISREG(metadata.st_mode) or observed != expected:
+        raise ConnectorError(f"{purpose} rejected input changed after content inspection")
+
+
+@dataclass(frozen=True, slots=True)
 class FileInspection:
     path: str
     size_bytes: int
+    identity: FileIdentity
     kind: ContentKind
     confidence: float
     signals: tuple[str, ...] = ()
@@ -100,6 +150,7 @@ class FileInspection:
         return {
             "path": self.path,
             "size_bytes": self.size_bytes,
+            "identity": self.identity.as_dict(),
             "kind": self.kind.value,
             "confidence": self.confidence,
             "safe": self.safe,
@@ -139,7 +190,9 @@ class MagikaClassifier:
         try:
             from magika import Magika
         except ImportError as exc:
-            raise ConnectorError("Magika is not installed; install the optional 'fileid' extra") from exc
+            raise ConnectorError(
+                "Magika is not installed; install the optional 'fileid' extra"
+            ) from exc
         self._magika = Magika()
 
     def classify(self, path: Path) -> ClassifierEvidence:
@@ -179,6 +232,7 @@ class ContentInspector:
             raise ConnectorError(f"cannot inspect input file: {source}") from exc
 
         risks: list[ContentRisk] = []
+        path_identity = FileIdentity.from_stat(metadata)
         is_symlink = stat.S_ISLNK(metadata.st_mode)
         effective_metadata = metadata
         if is_symlink:
@@ -204,55 +258,140 @@ class ContentInspector:
                 )
             )
 
-        size = effective_metadata.st_size
+        identity = FileIdentity.from_stat(effective_metadata)
+        size = identity.size_bytes
         head = b""
         tail = b""
-        if stat.S_ISREG(effective_metadata.st_mode) and (not is_symlink or self.policy.allow_symlink_inputs):
+        source_handle: BinaryIO | None = None
+        opened_identity_matches = False
+
+        def record_change(detail: str) -> None:
+            if any(item.code is RiskCode.FILE_CHANGED_DURING_INSPECTION for item in risks):
+                return
+            risks.append(ContentRisk(RiskCode.FILE_CHANGED_DURING_INSPECTION, detail))
+
+        can_read = stat.S_ISREG(effective_metadata.st_mode) and (
+            not is_symlink or self.policy.allow_symlink_inputs
+        )
+        if can_read:
             try:
-                with source.open("rb") as handle:
-                    head = handle.read(self.policy.max_probe_bytes)
-                    if size >= 4:
-                        handle.seek(max(0, size - 4))
-                        tail = handle.read(4)
+                source_handle = source.open("rb")
+                opened_metadata = os.fstat(source_handle.fileno())
             except OSError as exc:
+                if source_handle is not None:
+                    source_handle.close()
                 raise ConnectorError(f"cannot read input file: {source}") from exc
-
-        kind, confidence, signals, structure_risks = self._identify(source, head, tail, size)
-        risks.extend(structure_risks)
-
-        classifier: ClassifierEvidence | None = None
-        if (
-            self.classifier is not None
-            and stat.S_ISREG(effective_metadata.st_mode)
-            and (not is_symlink or self.policy.allow_symlink_inputs)
-        ):
-            try:
-                classifier = self.classifier.classify(source)
-            except Exception as exc:  # supporting evidence must never break deterministic inspection
-                signals = (*signals, f"classifier unavailable: {type(exc).__name__}")
-            else:
-                classifier_kind = self._classifier_kind(classifier)
-                if (
-                    classifier_kind is not None
-                    and classifier_kind is not kind
-                    and classifier.score is not None
-                    and classifier.score >= self.policy.classifier_disagreement_threshold
-                ):
-                    risks.append(
-                        ContentRisk(
-                            RiskCode.CLASSIFIER_DISAGREEMENT,
-                            (
-                                f"deterministic detector found {kind.value}, "
-                                f"classifier reported {classifier.label}"
-                            ),
-                            blocking=self.policy.classifier_disagreement_is_blocking,
-                        )
+            opened_identity = FileIdentity.from_stat(opened_metadata)
+            opened_identity_matches = (
+                stat.S_ISREG(opened_metadata.st_mode) and opened_identity == identity
+            )
+            if not opened_identity_matches:
+                record_change("input identity changed between metadata check and open")
+            identity = opened_identity
+            size = identity.size_bytes
+            if size > self.policy.max_file_bytes and not any(
+                item.code is RiskCode.FILE_TOO_LARGE for item in risks
+            ):
+                risks.append(
+                    ContentRisk(
+                        RiskCode.FILE_TOO_LARGE,
+                        f"input exceeds {self.policy.max_file_bytes} bytes",
                     )
-                    signals = (*signals, "independent content detectors disagree")
+                )
+            if opened_identity_matches:
+                try:
+                    head = source_handle.read(self.policy.max_probe_bytes)
+                    if size >= 4:
+                        source_handle.seek(max(0, size - 4))
+                        tail = source_handle.read(4)
+                except OSError as exc:
+                    source_handle.close()
+                    raise ConnectorError(f"cannot read input file: {source}") from exc
+
+        try:
+            kind: ContentKind
+            confidence: float
+            signals: tuple[str, ...]
+            structure_risks: tuple[ContentRisk, ...]
+            if source_handle is not None and not opened_identity_matches:
+                kind = ContentKind.UNKNOWN
+                confidence = 0.0
+                signals = ("file identity changed before parser selection",)
+                structure_risks = ()
+            else:
+                kind, confidence, signals, structure_risks = self._identify(
+                    source_handle, head, tail, size
+                )
+            risks.extend(structure_risks)
+
+            classifier: ClassifierEvidence | None = None
+            if (
+                self.classifier is not None
+                and source_handle is not None
+                and opened_identity_matches
+            ):
+                try:
+                    classifier = self.classifier.classify(source)
+                except (
+                    Exception
+                ) as exc:  # supporting evidence must never break deterministic inspection
+                    signals = (*signals, f"classifier unavailable: {type(exc).__name__}")
+                else:
+                    classifier_kind = self._classifier_kind(classifier)
+                    if (
+                        classifier_kind is not None
+                        and classifier_kind is not kind
+                        and classifier.score is not None
+                        and classifier.score >= self.policy.classifier_disagreement_threshold
+                    ):
+                        risks.append(
+                            ContentRisk(
+                                RiskCode.CLASSIFIER_DISAGREEMENT,
+                                (
+                                    f"deterministic detector found {kind.value}, "
+                                    f"classifier reported {classifier.label}"
+                                ),
+                                blocking=self.policy.classifier_disagreement_is_blocking,
+                            )
+                        )
+                        signals = (*signals, "independent content detectors disagree")
+
+            if source_handle is not None:
+                try:
+                    final_handle_identity = FileIdentity.from_stat(os.fstat(source_handle.fileno()))
+                except OSError:
+                    record_change("opened input could not be re-identified after inspection")
+                else:
+                    if final_handle_identity != identity:
+                        record_change("opened input changed while it was being inspected")
+        finally:
+            if source_handle is not None:
+                source_handle.close()
+
+        try:
+            final_path_metadata = source.lstat()
+        except OSError:
+            record_change("input path disappeared while it was being inspected")
+        else:
+            final_path_identity = FileIdentity.from_stat(final_path_metadata)
+            final_is_symlink = stat.S_ISLNK(final_path_metadata.st_mode)
+            if final_path_identity != path_identity or final_is_symlink != is_symlink:
+                record_change("input path identity changed while it was being inspected")
+            if is_symlink and self.policy.allow_symlink_inputs:
+                try:
+                    final_target_identity = FileIdentity.from_stat(source.stat())
+                except OSError:
+                    record_change("input symlink target disappeared during inspection")
+                else:
+                    if final_target_identity != identity:
+                        record_change("input symlink target changed during inspection")
+            elif not is_symlink and final_path_identity != identity:
+                record_change("input file changed while it was being inspected")
 
         return FileInspection(
             path=str(source),
             size_bytes=size,
+            identity=identity,
             kind=kind,
             confidence=confidence,
             signals=signals,
@@ -280,7 +419,7 @@ class ContentInspector:
 
     def _identify(
         self,
-        path: Path,
+        handle: BinaryIO | None,
         head: bytes,
         tail: bytes,
         size: int,
@@ -289,7 +428,14 @@ class ContentInspector:
             return ContentKind.EMPTY, 1.0, ("zero-length file",), ()
 
         if head.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
-            return self._inspect_zip(path)
+            if handle is None:
+                return (
+                    ContentKind.ZIP,
+                    0.6,
+                    ("ZIP container signature",),
+                    (ContentRisk(RiskCode.MALFORMED_ARCHIVE, "ZIP structure could not be read"),),
+                )
+            return self._inspect_zip(handle)
         if head.startswith(b"%PDF-"):
             return ContentKind.PDF, 1.0, ("PDF magic signature",), ()
         if head.startswith(b"SQLite format 3\x00"):
@@ -317,10 +463,10 @@ class ContentInspector:
         # Only parse complete small textual files here. Large structured files are still
         # recognized by their dedicated connector's full, size-bounded parser.
         complete_text: str | None = None
-        if size <= self.policy.max_text_parse_bytes:
+        if handle is not None and size <= self.policy.max_text_parse_bytes:
             try:
-                complete_text = self._read_text(path)
-            except (OSError, UnicodeError):
+                complete_text = self._read_text(handle, self.policy.max_text_parse_bytes)
+            except (OSError, UnicodeError, ValueError):
                 complete_text = None
 
         if complete_text is not None:
@@ -345,12 +491,13 @@ class ContentInspector:
         return ContentKind.TEXT, 0.7, ("bounded probe is textual",), ()
 
     def _inspect_zip(
-        self, path: Path
+        self, handle: BinaryIO
     ) -> tuple[ContentKind, float, tuple[str, ...], tuple[ContentRisk, ...]]:
         risks: list[ContentRisk] = []
         signals = ["ZIP container signature"]
         try:
-            with zipfile.ZipFile(path) as archive:
+            handle.seek(0)
+            with zipfile.ZipFile(handle) as archive:
                 infos = archive.infolist()
                 if len(infos) > self.policy.max_archive_entries:
                     risks.append(
@@ -438,9 +585,8 @@ class ContentInspector:
                         )
                     )
 
-                external_data = (
-                    "xl/connections.xml" in names
-                    or any(name.startswith("xl/querytables/") for name in names)
+                external_data = "xl/connections.xml" in names or any(
+                    name.startswith("xl/querytables/") for name in names
                 )
                 if external_data:
                     risks.append(
@@ -461,10 +607,9 @@ class ContentInspector:
                     signals.append("OOXML PowerPoint structure")
                     return ContentKind.PPTX, 1.0, tuple(signals), tuple(risks)
                 return ContentKind.ZIP, 0.98, tuple(signals), tuple(risks)
-        except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+        except (OSError, zipfile.BadZipFile, RuntimeError):
             risks.append(ContentRisk(RiskCode.MALFORMED_ARCHIVE, "ZIP structure could not be read"))
             return ContentKind.ZIP, 0.6, tuple(signals), tuple(risks)
-
 
     @staticmethod
     def _classifier_kind(evidence: ClassifierEvidence) -> ContentKind | None:
@@ -524,18 +669,17 @@ class ContentInspector:
             return None
         if not text:
             return text
-        control = sum(
-            1
-            for char in text
-            if ord(char) < 32 and char not in {"\t", "\r", "\n", "\f"}
-        )
+        control = sum(1 for char in text if ord(char) < 32 and char not in {"\t", "\r", "\n", "\f"})
         if control / max(1, len(text)) > 0.01:
             return None
         return text
 
     @staticmethod
-    def _read_text(path: Path) -> str:
-        raw = path.read_bytes()
+    def _read_text(handle: BinaryIO, max_bytes: int) -> str:
+        handle.seek(0)
+        raw = handle.read(max_bytes + 1)
+        if len(raw) > max_bytes:
+            raise ValueError("text input grew beyond the bounded parse limit")
         if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
             return raw.decode("utf-16")
         return raw.decode("utf-8-sig")

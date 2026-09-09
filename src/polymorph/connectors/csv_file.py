@@ -2,17 +2,25 @@ from __future__ import annotations
 
 import csv
 import io
+import math
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Literal, TextIO
 
 from polymorph.classification import classify_field_name, infer_role
-from polymorph.content import ContentInspector, ContentKind
+from polymorph.content import (
+    ContentInspector,
+    ContentKind,
+    FileIdentity,
+    require_matching_file_identity,
+)
+from polymorph.errors import ConnectorError, ConnectorWriteError, WriteOutcome
+from polymorph.filesystem import atomic_write_text, exclusive_path_lock
 from polymorph.matching.deterministic import normalize_name
 from polymorph.models.schema import FieldDescriptor, SchemaDescriptor
 from polymorph.models.types import Sensitivity
-from polymorph.errors import ConnectorWriteError, WriteOutcome
-from polymorph.filesystem import atomic_write_text
 
 from .base import ConnectorCapabilities, DeliveryContext
 from .inference import merge_types, textual_type
@@ -21,7 +29,7 @@ from .inference import merge_types, textual_type
 def _dialect_from_parts(
     delimiter: str, quotechar: str | None = '"', escapechar: str | None = None
 ) -> csv.Dialect:
-    quoting = csv.QUOTE_MINIMAL if quotechar else csv.QUOTE_NONE
+    quoting: Literal[0, 1, 2, 3] = csv.QUOTE_MINIMAL if quotechar else csv.QUOTE_NONE
 
     class Candidate(csv.Dialect):
         lineterminator = "\n"
@@ -62,10 +70,24 @@ def _candidate_key(dialect: csv.Dialect) -> tuple[str, str | None, str | None, i
     return dialect.delimiter, dialect.quotechar, dialect.escapechar, dialect.quoting
 
 
+def _parse_signature(sample: str, dialect: csv.Dialect) -> tuple[tuple[str, ...], ...] | None:
+    """Return the observed parse, so equivalent detector output does not look ambiguous."""
+
+    try:
+        return tuple(tuple(row) for row in list(csv.reader(io.StringIO(sample), dialect))[:80])
+    except (csv.Error, UnicodeError):
+        return None
+
+
 class CsvConnector:
     """Streaming CSV/TSV source and destination with conservative local inference."""
 
-    capabilities = ConnectorCapabilities(read_schema=True, read_records=True, write_records=True)
+    capabilities = ConnectorCapabilities(
+        read_schema=True,
+        read_records=True,
+        write_records=True,
+        transactional_write=True,
+    )
 
     def __init__(
         self,
@@ -76,6 +98,9 @@ class CsvConnector:
         sensitivity_overrides: Mapping[str, Sensitivity] | None = None,
         type_sample_rows: int = 256,
         skip_repeated_headers: bool = True,
+        allow_spreadsheet_formulas: bool = False,
+        write_lock_timeout: float = 30.0,
+        expected_source_identity: FileIdentity | None = None,
     ) -> None:
         self.path = Path(path)
         self.encoding = encoding
@@ -83,34 +108,91 @@ class CsvConnector:
         self.sensitivity_overrides = dict(sensitivity_overrides or {})
         self.type_sample_rows = max(1, type_sample_rows)
         self.skip_repeated_headers = skip_repeated_headers
+        self.allow_spreadsheet_formulas = allow_spreadsheet_formulas
+        if not math.isfinite(write_lock_timeout) or write_lock_timeout < 0:
+            raise ValueError("CSV write lock timeout must be a finite non-negative number")
+        self.write_lock_timeout = write_lock_timeout
         self._schema_cache: SchemaDescriptor | None = None
         self._dialect_cache: csv.Dialect | None = None
         self._headers_cache: tuple[str, ...] | None = None
         self._content_inspector = ContentInspector()
-        self._content_checked = False
+        self._trusted_identity: FileIdentity | None = None
+        self._expected_source_identity = expected_source_identity
 
+    def _reset_cached_source(self) -> None:
+        self._schema_cache = None
+        self._dialect_cache = None
+        self._headers_cache = None
+        self._trusted_identity = None
 
-    def _ensure_source_safe(self) -> None:
-        if self._content_checked or not self.path.exists() or self.path.stat().st_size == 0:
+    @staticmethod
+    def _looks_like_spreadsheet_formula(value: object) -> bool:
+        if not isinstance(value, str):
+            return False
+        candidate = value.lstrip(" \t\r\n")
+        return bool(candidate) and candidate[0] in "=+-@"
+
+    def _reject_spreadsheet_formulas(
+        self,
+        fieldnames: Iterable[object],
+        rows: Iterable[Mapping[str, object]],
+    ) -> None:
+        if self.allow_spreadsheet_formulas:
             return
-        self._content_inspector.require(
-            self.path,
-            allowed={ContentKind.TEXT, ContentKind.DELIMITED_TEXT},
-            purpose="CSV connector",
-        )
-        self._content_checked = True
+        values = [*fieldnames, *(value for row in rows for value in row.values())]
+        if any(self._looks_like_spreadsheet_formula(value) for value in values):
+            raise ConnectorWriteError(
+                "CSV destination rejected a spreadsheet formula-like value",
+                outcome=WriteOutcome.NOT_COMMITTED,
+            )
+
+    def _ensure_source_safe(self) -> FileIdentity:
+        if self._trusted_identity is None:
+            report = self._content_inspector.require(
+                self.path,
+                allowed={ContentKind.EMPTY, ContentKind.TEXT, ContentKind.DELIMITED_TEXT},
+                purpose="CSV connector",
+            )
+            if (
+                self._expected_source_identity is not None
+                and report.identity != self._expected_source_identity
+            ):
+                raise ConnectorError(
+                    "CSV connector rejected input changed after accepted content inspection"
+                )
+            self._trusted_identity = report.identity
+        return self._trusted_identity
+
+    @contextmanager
+    def _open_verified_text(self) -> Iterator[TextIO]:
+        expected = self._ensure_source_safe()
+        try:
+            handle = self.path.open("r", encoding=self.encoding, newline="")
+        except OSError as exc:
+            raise ConnectorError("CSV connector could not open the inspected input") from exc
+        try:
+            require_matching_file_identity(handle, expected, purpose="CSV connector")
+            try:
+                yield handle
+            finally:
+                require_matching_file_identity(handle, expected, purpose="CSV connector")
+        finally:
+            handle.close()
+
+    def _verify_cached_source(self) -> None:
+        with self._open_verified_text():
+            pass
 
     def _dialect(self) -> csv.Dialect:
         if self._dialect_cache is not None:
             return self._dialect_cache
         if not self.path.exists():
             if self.delimiter is None:
-                self._dialect_cache = csv.excel
+                self._dialect_cache = csv.excel()
                 return self._dialect_cache
             sample = ""
         else:
-            self._ensure_source_safe()
-            with self.path.open("r", encoding=self.encoding, newline="") as handle:
+            with self._open_verified_text() as handle:
                 sample = handle.read(64 * 1024)
         if "\x00" in sample:
             raise ValueError("CSV input contains NUL bytes")
@@ -119,16 +201,20 @@ class CsvConnector:
                 raise ValueError("CSV delimiter must be one safe character")
             self._dialect_cache = _dialect_from_parts(self.delimiter)
             return self._dialect_cache
+        if not sample:
+            self._dialect_cache = csv.excel()
+            return self._dialect_cache
 
         candidates: dict[tuple[str, str | None, str | None, int], csv.Dialect] = {}
         for delimiter in (",", ";", "\t", "|"):
             candidate = _dialect_from_parts(delimiter)
             candidates[_candidate_key(candidate)] = candidate
         try:
-            sniffed = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+            sniffed_type = csv.Sniffer().sniff(sample, delimiters=",;\t|")
         except csv.Error:
             pass
         else:
+            sniffed = sniffed_type()
             candidates[_candidate_key(sniffed)] = sniffed
 
         # CleverCSV is an optional extra. Its output is another candidate in the
@@ -142,10 +228,11 @@ class CsvConnector:
                 clever = clevercsv.Sniffer().sniff(sample)
             except Exception:
                 clever = None
-        if clever is not None and getattr(clever, "delimiter", None) in {",", ";", "\t", "|"}:
+        clever_delimiter = getattr(clever, "delimiter", None)
+        if isinstance(clever_delimiter, str) and clever_delimiter in {",", ";", "\t", "|"}:
             quote = getattr(clever, "quotechar", None) or None
             escape = getattr(clever, "escapechar", None) or None
-            converted = _dialect_from_parts(clever.delimiter, quote, escape)
+            converted = _dialect_from_parts(clever_delimiter, quote, escape)
             candidates[_candidate_key(converted)] = converted
 
         ranked = sorted(
@@ -158,7 +245,10 @@ class CsvConnector:
         if len(ranked) > 1 and ranked[0][0] - ranked[1][0] < 0.015:
             # Identical one-column interpretations are harmless; a multi-column tie is not.
             top_width = len(next(csv.reader(io.StringIO(sample), ranked[0][1]), []))
-            if top_width > 1 and _candidate_key(ranked[0][1]) != _candidate_key(ranked[1][1]):
+            parses_differ = _parse_signature(sample, ranked[0][1]) != _parse_signature(
+                sample, ranked[1][1]
+            )
+            if top_width > 1 and parses_differ:
                 raise ValueError("CSV dialect candidates are too close; configure a delimiter")
         self._dialect_cache = ranked[0][1]
         return self._dialect_cache
@@ -180,8 +270,9 @@ class CsvConnector:
     def _headers(self) -> tuple[str, ...]:
         if self._headers_cache is not None:
             return self._headers_cache
-        with self.path.open("r", encoding=self.encoding, newline="") as handle:
-            reader = csv.reader(handle, self._dialect())
+        dialect = self._dialect()
+        with self._open_verified_text() as handle:
+            reader = csv.reader(handle, dialect)
             try:
                 row = next(reader)
             except StopIteration as exc:
@@ -203,8 +294,9 @@ class CsvConnector:
 
     def _rows(self) -> Iterable[list[str]]:
         headers = self._headers()
-        with self.path.open("r", encoding=self.encoding, newline="") as handle:
-            reader = csv.reader(handle, self._dialect())
+        dialect = self._dialect()
+        with self._open_verified_text() as handle:
+            reader = csv.reader(handle, dialect)
             next(reader, None)
             for row in reader:
                 if not row or not any(value.strip() for value in row):
@@ -218,6 +310,7 @@ class CsvConnector:
 
     def inspect_schema(self) -> SchemaDescriptor:
         if self._schema_cache is not None:
+            self._verify_cached_source()
             return self._schema_cache
         headers = self._headers()
         samples: list[list[str]] = [[] for _ in headers]
@@ -245,7 +338,6 @@ class CsvConnector:
                     nullable=nulls[index - 1] or sampled == 0,
                     sensitivity=self.sensitivity_overrides.get(name, classify_field_name(name)),
                     role=role,
-                    container=self.path.name,
                 )
             )
         dialect = self._dialect()
@@ -283,15 +375,64 @@ class CsvConnector:
             raise ValueError("CSV destination record has no fields")
         if any(set(row) != set(keys) for row in rows):
             raise ValueError("CSV destination records must have identical fields")
-        buffer = io.StringIO(newline="")
-        writer = csv.DictWriter(buffer, fieldnames=keys, dialect=self._dialect())
-        writer.writeheader()
-        writer.writerows(rows)
+
+        self._reject_spreadsheet_formulas(keys, rows)
+
         try:
-            atomic_write_text(self.path, buffer.getvalue(), encoding=self.encoding)
-        except OSError as exc:
+            with exclusive_path_lock(self.path, timeout_seconds=self.write_lock_timeout):
+                # A destination is intentionally mutable. Once this writer owns the path lock,
+                # inspect the latest committed snapshot instead of trusting a startup cache.
+                self._reset_cached_source()
+                existing = ""
+                fieldnames = keys
+                target_existed = self.path.exists()
+                if target_existed:
+                    identity = self._ensure_source_safe()
+                    if identity.size_bytes:
+                        with self._open_verified_text() as handle:
+                            existing = handle.read()
+                        headers = list(self._headers())
+                        positional = [f"c{index}" for index in range(1, len(headers) + 1)]
+                        if keys == positional:
+                            rows = [
+                                dict(
+                                    zip(
+                                        headers,
+                                        (row[key] for key in positional),
+                                        strict=True,
+                                    )
+                                )
+                                for row in rows
+                            ]
+                        elif set(keys) != set(headers):
+                            raise ValueError(
+                                "CSV destination fields do not match the existing header"
+                            )
+                        fieldnames = headers
+                        self._reject_spreadsheet_formulas(fieldnames, rows)
+
+                buffer = io.StringIO(newline="")
+                if existing:
+                    buffer.write(existing)
+                    if not existing.endswith(("\n", "\r")):
+                        buffer.write(self._dialect().lineterminator)
+                dialect = self._dialect()
+                writer = csv.DictWriter(buffer, fieldnames=fieldnames, dialect=dialect)
+                if not existing:
+                    writer.writeheader()
+                writer.writerows(rows)
+                if target_existed:
+                    self._verify_cached_source()
+                atomic_write_text(
+                    self.path,
+                    buffer.getvalue(),
+                    encoding=self.encoding,
+                    overwrite=target_existed,
+                )
+        except (OSError, ConnectorError) as exc:
             raise ConnectorWriteError(
                 "CSV destination write did not commit",
                 outcome=WriteOutcome.NOT_COMMITTED,
             ) from exc
+        self._reset_cached_source()
         return len(rows)

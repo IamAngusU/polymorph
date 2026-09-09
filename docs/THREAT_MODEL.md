@@ -5,6 +5,7 @@
 - record payload values
 - passwords, tokens and connector credentials
 - destination recipient private keys
+- source record-signing keys
 - capability signing keys
 - mapping authorization integrity
 - destination record integrity
@@ -30,17 +31,25 @@ Excel uses `defusedxml` hardening through openpyxl. This addresses XML entity-ex
 
 Magika can add independent local classification evidence. A confident disagreement is a veto signal, not permission to trust Magika over deterministic structure.
 
-These measures reduce parser attack surface but are not OS-level containment. A malicious parser implementation, native dependency bug or novel parser vulnerability can still affect the local process in v0.3. Hostile parser isolation is therefore a separate roadmap item.
+These measures reduce parser attack surface but are not OS-level containment. A malicious parser implementation, native dependency bug or novel parser vulnerability can still affect the local process in the current alpha. Hostile parser isolation is therefore a separate roadmap item.
 
 ## Control-plane or relay compromise
 
 A relay that only receives `BlindTransportRecord` objects can observe routing metadata and ciphertext but cannot recover payload plaintext without a destination recipient private key. Relay persistence is ciphertext-only.
 
+Protocol v3 records carry an Ed25519 signature from a key independently bound to their tenant and
+source connector. The destination repeats verification, so a relay cannot invent source provenance
+or bypass a hard-revoked source key. Unsigned v2 acceptance is a temporary, explicit migration
+exception and removes this property for the affected route.
+
 This property depends on deployment separation. Running source, relay and destination in one compromised process collapses those host-level trust boundaries even though the APIs remain separated.
 
 ## Source compromise
 
-The source connector and source agent observe values before sealing. A compromised source can leak or alter those values. Preventing that requires protection upstream of Polymorph and is outside the transport protocol.
+The source connector and source agent observe values before sealing. A compromised source can leak
+or alter those values and can produce valid records under its own authorized identity. Source
+authentication prevents another source or a relay from impersonating that identity, but does not
+make a compromised source honest. Preventing upstream compromise is outside the transport protocol.
 
 ## Destination compromise
 
@@ -73,8 +82,9 @@ The built-in recipient key file protects a raw X25519 private key with Argon2id-
 ## Remaining non-goals
 
 - protection from a fully compromised source or destination operating system
-- hostile parser containment in v0.3
+- hostile parser containment in the current alpha
 - hardware-backed signing or recipient keys in the built-in implementation
+- authenticated distribution and rollback protection for source trust bundles
 - traffic-analysis resistance for routing metadata and ciphertext sizes
 - arbitrary undocumented API exploration
 - automatic resolution of genuinely ambiguous business semantics

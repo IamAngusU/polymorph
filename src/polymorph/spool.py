@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from .agents import BlindTransportRecord, ProtocolLimits
 from .errors import IntegrityError
+from .sqlite_safety import configure_sqlite_durability
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,9 +32,16 @@ class SealedSpool:
     exception text, which prevents accidental persistence of payload-bearing messages.
     """
 
-    def __init__(self, path: str | Path, *, limits: ProtocolLimits | None = None) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        limits: ProtocolLimits | None = None,
+        allow_legacy_unsigned: bool = False,
+    ) -> None:
         self.path = Path(path)
         self.limits = limits or ProtocolLimits()
+        self.allow_legacy_unsigned = allow_legacy_unsigned
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
         if os.name == "posix":
@@ -41,12 +50,11 @@ class SealedSpool:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10.0)
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA synchronous = FULL")
+        configure_sqlite_durability(connection)
         return connection
 
     def _initialize(self) -> None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS sealed_quarantine (
@@ -71,7 +79,7 @@ class SealedSpool:
             raise ValueError("record exceeds spool wire size limit")
         digest = record.digest()
         now = datetime.now(UTC).isoformat()
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 """
                 INSERT INTO sealed_quarantine (
@@ -106,7 +114,7 @@ class SealedSpool:
         )
 
     def get(self, record_digest: str) -> BlindTransportRecord | None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             row = connection.execute(
                 "SELECT wire_json FROM sealed_quarantine WHERE record_digest = ?",
                 (record_digest,),
@@ -114,20 +122,24 @@ class SealedSpool:
         if row is None:
             return None
         payload = json.loads(bytes(row["wire_json"]).decode("utf-8"))
-        record = BlindTransportRecord.from_wire(payload, limits=self.limits)
+        record = BlindTransportRecord.from_wire(
+            payload,
+            limits=self.limits,
+            allow_legacy_unsigned=self.allow_legacy_unsigned,
+        )
         if record.digest() != record_digest:
             raise IntegrityError("sealed spool record digest mismatch")
         return record
 
     def remove(self, record_digest: str) -> None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 "DELETE FROM sealed_quarantine WHERE record_digest = ?",
                 (record_digest,),
             )
 
     def list_entries(self, *, limit: int = 100) -> tuple[SpoolEntry, ...]:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             rows = connection.execute(
                 """
                 SELECT record_digest, tenant, destination_connector, transfer_id,

@@ -1,0 +1,6 @@
+include CHANGELOG.md COMMERCIAL.md CONTRIBUTING.md LICENSE NOTICE SECURITY.md THIRD_PARTY.md
+include examples.py
+recursive-include benchmarks *.json *.md
+recursive-include docs *.md *.png *.webp
+recursive-include scripts *.py
+recursive-include tests *.py

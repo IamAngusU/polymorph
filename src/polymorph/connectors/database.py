@@ -4,8 +4,18 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 from sqlalchemy import MetaData, Table, create_engine, inspect, select
-from sqlalchemy.engine import Engine, URL
-from sqlalchemy.sql.sqltypes import Boolean, Date, DateTime, Integer, JSON, LargeBinary, Numeric, String
+from sqlalchemy.engine import URL, Engine
+from sqlalchemy.engine.reflection import Inspector
+from sqlalchemy.sql.sqltypes import (
+    JSON,
+    Boolean,
+    Date,
+    DateTime,
+    Integer,
+    LargeBinary,
+    Numeric,
+    String,
+)
 
 from polymorph.classification import classify_field_name, infer_role
 from polymorph.errors import ConnectorError, ConnectorWriteError, WriteOutcome
@@ -64,13 +74,6 @@ def _sql_type(value: object) -> DataType:
 
 
 class DatabaseConnector:
-    capabilities = ConnectorCapabilities(
-        read_schema=True,
-        read_records=True,
-        write_records=True,
-        transactional_write=True,
-    )
-
     def __init__(
         self,
         url: str | URL | DatabaseEndpoint,
@@ -85,32 +88,80 @@ class DatabaseConnector:
             resolved_url = url.sqlalchemy_url(secret_provider)
         else:
             resolved_url = url
-        self.engine: Engine = create_engine(resolved_url, future=True)
+        self.engine: Engine = create_engine(
+            resolved_url,
+            future=True,
+            hide_parameters=True,
+        )
+        self.capabilities = ConnectorCapabilities(
+            read_schema=True,
+            read_records=True,
+            write_records=True,
+            transactional_write=self.engine.dialect.name in {"postgresql", "sqlite"},
+        )
         self.table_name = table
         self.schema_name = schema
         self.sensitivity_overrides = dict(sensitivity_overrides or {})
+        self._closed = False
+
+    def __enter__(self) -> DatabaseConnector:
+        if self._closed:
+            raise RuntimeError("database connector is closed")
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self.engine.dispose()
+        self._closed = True
+
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("database connector is closed")
 
     def _table(self) -> Table:
+        self._ensure_open()
         metadata = MetaData()
         return Table(self.table_name, metadata, schema=self.schema_name, autoload_with=self.engine)
 
     @staticmethod
-    def _unique_columns(inspector, table: str, schema: str | None) -> tuple[str, ...]:
-        unique: set[str] = set(
-            inspector.get_pk_constraint(table, schema=schema).get("constrained_columns") or []
-        )
+    def _unique_columns(
+        inspector: Inspector,
+        table: str,
+        schema: str | None,
+    ) -> tuple[str, ...]:
+        unique = {
+            column
+            for column in (
+                inspector.get_pk_constraint(table, schema=schema).get("constrained_columns") or []
+            )
+            if column is not None
+        }
         for constraint in inspector.get_unique_constraints(table, schema=schema):
-            columns = constraint.get("column_names") or []
+            columns = [column for column in (constraint.get("column_names") or []) if column]
             if len(columns) == 1:
                 unique.add(columns[0])
         for index in inspector.get_indexes(table, schema=schema):
-            columns = index.get("column_names") or []
+            columns = [column for column in (index.get("column_names") or []) if column]
             if index.get("unique") and len(columns) == 1:
                 unique.add(columns[0])
         return tuple(sorted(unique))
 
     def inspect_schema(self) -> SchemaDescriptor:
+        self._ensure_open()
         inspector = inspect(self.engine)
+        reflected_table = self._table()
+        generated = {
+            column.name
+            for column in reflected_table.columns
+            if column.server_default is not None
+            or column.identity is not None
+            or column.computed is not None
+            or reflected_table.autoincrement_column is column
+        }
         columns = inspector.get_columns(self.table_name, schema=self.schema_name)
         primary = set(
             inspector.get_pk_constraint(self.table_name, schema=self.schema_name).get(
@@ -165,9 +216,8 @@ class DatabaseConnector:
                     name=name,
                     data_type=_sql_type(column["type"]),
                     nullable=bool(column.get("nullable", True)),
-                    sensitivity=self.sensitivity_overrides.get(
-                        name, classify_field_name(name)
-                    ),
+                    destination_generated=name in generated,
+                    sensitivity=self.sensitivity_overrides.get(name, classify_field_name(name)),
                     role=role,
                     aliases=tuple(sorted(aliases_by_field.get(name, set()))),
                     container=self.table_name,
@@ -182,6 +232,7 @@ class DatabaseConnector:
         )
 
     def iter_records(self) -> Iterable[Mapping[str, object]]:
+        self._ensure_open()
         table = self._table()
         with self.engine.connect() as connection:
             for row in connection.execute(select(table)):
@@ -193,6 +244,7 @@ class DatabaseConnector:
         *,
         context: DeliveryContext | None = None,
     ) -> int:
+        self._ensure_open()
         table = self._table()
         rows = [dict(record) for record in records]
         if not rows:
@@ -212,10 +264,19 @@ class DatabaseConnector:
             try:
                 connection.execute(table.insert(), rows)
             except Exception as exc:
-                transaction.rollback()
+                try:
+                    transaction.rollback()
+                except Exception:
+                    outcome = WriteOutcome.UNKNOWN
+                else:
+                    outcome = (
+                        WriteOutcome.NOT_COMMITTED
+                        if self.capabilities.transactional_write
+                        else WriteOutcome.UNKNOWN
+                    )
                 raise ConnectorWriteError(
-                    "database write failed before commit",
-                    outcome=WriteOutcome.NOT_COMMITTED,
+                    "database write failed",
+                    outcome=outcome,
                 ) from exc
             try:
                 transaction.commit()
@@ -241,6 +302,7 @@ class DatabaseConnector:
         Callers can select only a single-column UNIQUE/PK match key on that referenced table.
         """
 
+        self._ensure_open()
         inspector = inspect(self.engine)
         candidates = []
         for fk in inspector.get_foreign_keys(self.table_name, schema=self.schema_name):
@@ -256,9 +318,10 @@ class DatabaseConnector:
         fk = candidates[0]
         referred_table = fk.get("referred_table")
         referred_schema = fk.get("referred_schema") or self.schema_name
-        return_column = (fk.get("referred_columns") or [None])[0]
-        if not referred_table or not return_column:
+        referred_columns = fk.get("referred_columns") or []
+        if not referred_table or len(referred_columns) != 1:
             raise ConnectorError("foreign key metadata is incomplete")
+        return_column = referred_columns[0]
 
         allowed_match_columns = set(
             self._unique_columns(inspector, str(referred_table), referred_schema)
@@ -276,11 +339,7 @@ class DatabaseConnector:
         if match_column not in table.columns or return_column not in table.columns:
             raise ConnectorError("foreign-key lookup references an unknown column")
 
-        statement = (
-            select(table.c[return_column])
-            .where(table.c[match_column] == value)
-            .limit(2)
-        )
+        statement = select(table.c[return_column]).where(table.c[match_column] == value).limit(2)
         with self.engine.connect() as connection:
             rows = connection.execute(statement).all()
         if len(rows) == 0:

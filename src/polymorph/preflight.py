@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
+from .connectors.inference import runtime_type
 from .errors import PolymorphError
 from .matching.deterministic import type_compatibility
 from .models.mapping import MappingPlan
@@ -12,7 +13,6 @@ from .models.schema import SchemaDescriptor
 from .models.types import Sensitivity
 from .transforms import TransformStage, apply_transform, transform_stage
 from .validation import PlanValidationReport, PlanValidator, ValidationSeverity
-from .connectors.inference import runtime_type
 
 
 class PreflightSeverity(StrEnum):

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from cryptography.exceptions import InvalidTag, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
 
@@ -17,6 +17,24 @@ from .filesystem import atomic_write_text
 
 _KEY_FILE_FORMAT = "angusu.bridge/recipient-key"
 _KEY_FILE_VERSION = 1
+_MAX_KEY_FILE_BYTES = 64 * 1024
+
+
+def _object_without_duplicate_keys(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    output: dict[str, object] = {}
+    for key, value in pairs:
+        if key in output:
+            raise ProtocolError("recipient key file contains a duplicate object key")
+        output[key] = value
+    return output
+
+
+def _json_integer(value: object, label: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ProtocolError(f"recipient key file {label} must be an integer")
+    return value
 
 
 def _b64(value: bytes) -> str:
@@ -47,11 +65,11 @@ class KeyFileParameters:
     lanes: int = 4
 
     def __post_init__(self) -> None:
-        if not 8 * 1024 <= self.memory_cost_kib <= 1024 * 1024:
+        if not 8 * 1024 <= self.memory_cost_kib <= 128 * 1024:
             raise ValueError("Argon2id memory cost is outside supported range")
-        if not 1 <= self.iterations <= 20:
+        if not 1 <= self.iterations <= 6:
             raise ValueError("Argon2id iteration count is outside supported range")
-        if not 1 <= self.lanes <= 16:
+        if not 1 <= self.lanes <= 8:
             raise ValueError("Argon2id lanes are outside supported range")
 
 
@@ -133,40 +151,57 @@ class EncryptedRecipientKeyFile:
             target,
             json.dumps(payload, sort_keys=True, indent=2) + "\n",
             private=True,
+            overwrite=False,
         )
         return public_raw
 
     @staticmethod
     def _load_payload(path: str | Path) -> dict[str, object]:
+        source = Path(path)
         try:
-            payload = json.loads(Path(path).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            if source.stat().st_size > _MAX_KEY_FILE_BYTES:
+                raise ProtocolError("recipient key file exceeds configured size limit")
+            payload = json.loads(
+                source.read_bytes().decode("utf-8-sig"),
+                object_pairs_hook=_object_without_duplicate_keys,
+            )
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ProtocolError("recipient key file is unreadable or invalid") from exc
+        if not isinstance(payload, dict):
+            raise ProtocolError("recipient key file root must be an object")
         if payload.get("format") != _KEY_FILE_FORMAT or payload.get("version") != _KEY_FILE_VERSION:
             raise ProtocolError("recipient key file format is unsupported")
-        return payload
+        return {str(key): value for key, value in payload.items()}
 
     @classmethod
     def public_key(cls, path: str | Path) -> bytes:
         payload = cls._load_payload(path)
-        return _unb64(str(payload["public_key"]), expected=32)
+        try:
+            encoded = payload["public_key"]
+        except KeyError as exc:
+            raise ProtocolError("recipient key file has no public key") from exc
+        return _unb64(str(encoded), expected=32)
 
     @classmethod
     def load(cls, path: str | Path, passphrase: str | bytes) -> X25519PrivateKey:
         payload = cls._load_payload(path)
         public_raw = _unb64(str(payload["public_key"]), expected=32)
         try:
-            kdf = dict(payload["kdf"])
-            cipher = dict(payload["cipher"])
+            raw_kdf = payload["kdf"]
+            raw_cipher = payload["cipher"]
+            if not isinstance(raw_kdf, dict) or not isinstance(raw_cipher, dict):
+                raise TypeError
+            kdf = {str(key): value for key, value in raw_kdf.items()}
+            cipher = {str(key): value for key, value in raw_cipher.items()}
         except (KeyError, TypeError, ValueError) as exc:
             raise ProtocolError("recipient key file structure is invalid") from exc
         if kdf.get("name") != "argon2id" or cipher.get("name") != "chacha20-poly1305":
             raise ProtocolError("recipient key file algorithms are unsupported")
         try:
             params = KeyFileParameters(
-                memory_cost_kib=int(kdf["memory_cost_kib"]),
-                iterations=int(kdf["iterations"]),
-                lanes=int(kdf["lanes"]),
+                memory_cost_kib=_json_integer(kdf["memory_cost_kib"], "memory cost"),
+                iterations=_json_integer(kdf["iterations"], "iteration count"),
+                lanes=_json_integer(kdf["lanes"], "lane count"),
             )
             salt = _unb64(str(kdf["salt"]), expected=16)
             nonce = _unb64(str(cipher["nonce"]), expected=12)

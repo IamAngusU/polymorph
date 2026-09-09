@@ -42,7 +42,8 @@ def test_audit_tamper_is_detected(tmp_path):
 
     connection = sqlite3.connect(path)
     connection.execute(
-        "UPDATE audit_events SET event_json = replace(event_json, 'delivered', 'blocked') WHERE sequence = 1"
+        "UPDATE audit_events SET event_json = replace(event_json, 'delivered', 'blocked') "
+        "WHERE sequence = 1"
     )
     connection.commit()
     connection.close()

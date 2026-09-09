@@ -4,7 +4,14 @@ Polymorph is security-sensitive infrastructure. Do not place production credenti
 
 ## Reporting
 
-Report security issues privately through the contact channel published at https://angusu.de. Avoid opening a public issue for a suspected vulnerability until a coordinated disclosure path has been agreed.
+Report security issues privately to [hello@angusu.de](mailto:hello@angusu.de) or through the contact
+form at https://angusu.de. Avoid opening a public issue for a suspected vulnerability until a
+coordinated disclosure path has been agreed.
+
+## Supported versions
+
+Only the current `main` branch and the newest published alpha receive security fixes. Older alpha
+snapshots, including 0.3.x and earlier, are unsupported and should not be deployed.
 
 ## Security invariants
 
@@ -12,25 +19,29 @@ Report security issues privately through the contact channel published at https:
 2. File names, extensions and caller-provided MIME labels are never parser-selection authority.
 3. Blocking content risks stop a file before a supported parser is invoked. High-confidence disagreement between independent content detectors blocks automatic parser selection by default.
 4. ZIP and OOXML inspection rejects traversal, archived symlinks, duplicate normalized members, encrypted members, suspicious expansion, macros and external workbook-link and data-connection parts by default.
-5. Excel parsing requires openpyxl XML hardening through `defusedxml`. Formula caches are freshness-unproven and cannot silently auto-promote a new route.
-6. Secret and opaque values cannot be routed into lower-sensitivity destinations by policy.
-7. Semantic encoders and rerankers accept descriptor text only. They have no connector, credential or record-value interface.
-8. Model evidence cannot independently authorize an `AUTO` mapping. Automatic mapping requires independently strong deterministic evidence and margin.
-9. Executable transformations come from a fixed registry. Input content cannot add code or SQL.
-10. Recipes are candidate memory, not authorization. Every activation is rebound to current exact schemas, receives a new plan digest and passes validation and preflight again.
-11. A sampled preflight cannot automatically promote or remember a route. Automatic promotion requires a complete no-write preflight.
-12. Blind transport authenticates route, record, field, transfer, schema and plan metadata together with the ciphertext.
-13. The sealed relay queue has no recipient private-key parameter or decrypt method.
-14. Schema drift cannot silently change sensitivity or invalidate an approved foreign-key lookup proof.
-15. A write with unknown durability is never treated as safely retryable merely because an exception occurred.
-16. Exact duplicate deliveries are detected before a second decrypt/write attempt once a commit is recorded.
-17. Quarantine and audit persistence accept machine-readable metadata and sealed records, not arbitrary payload-bearing exception text.
-18. Connector credentials are represented by references when a secret provider is used and are never serialized into mapping plans.
-19. Recipient private-key files are encrypted and created with restrictive POSIX permissions where supported.
+5. Accepted CSV, JSON and Excel input is bound to the device, inode, size and nanosecond modification time of the actual opened handle before parser handoff.
+6. Excel parsing requires openpyxl XML hardening through `defusedxml`. Formula caches are freshness-unproven and cannot silently auto-promote a new route.
+7. Secret and opaque values cannot be routed into lower-sensitivity destinations by policy.
+8. Semantic encoders and rerankers accept descriptor text only. They have no connector, credential or record-value interface.
+9. Model evidence cannot independently authorize an `AUTO` mapping. Automatic mapping requires independently strong deterministic evidence and margin.
+10. Executable transformations come from a fixed registry. Input content cannot add code or SQL.
+11. Recipes are candidate memory, not authorization. Every activation is rebound to current exact schemas, receives a new plan digest and passes validation and preflight again.
+12. A sampled preflight cannot automatically promote or remember a route. Automatic promotion requires a complete no-write preflight.
+13. Blind transport authenticates route, record, field, transfer, schema and plan metadata together with the ciphertext.
+14. Protocol v3 additionally authenticates the source with an Ed25519 key independently bound to its tenant and connector. Unsigned v2 intake is fail-closed unless every boundary explicitly enables migration mode.
+15. The sealed relay queue has no recipient private-key parameter or decrypt method. Ack and release require the current unexpired random lease token.
+16. Schema drift cannot silently change sensitivity or invalidate an approved foreign-key lookup proof.
+17. The destination runtime checks the exact plan and target schema plus required fields, nullability and runtime types before writing.
+18. A write with unknown durability is never treated as safely retryable merely because an exception occurred.
+19. Exact duplicate deliveries are detected before a second decrypt/write attempt once a commit is recorded.
+20. Quarantine and audit persistence accept machine-readable metadata and sealed records, not arbitrary payload-bearing exception text.
+21. CSV destinations reject spreadsheet formula-like values by default. Enabling them is an explicit connector policy.
+22. Connector credentials are represented by references when a secret provider is used and are never serialized into mapping plans.
+23. Recipient private-key files are encrypted, created without overwriting an existing key and use restrictive POSIX permissions where supported.
 
 ## Parser containment
 
-The v0.3 content gate and contract preflight are not a claim of hostile-code operating-system containment. Supported parsers execute in the local Polymorph process after the input gate accepts them. Resource limits, archive checks and hardened XML parsing reduce risk but do not replace a process sandbox.
+The current content gate and contract preflight are not a claim of hostile-code operating-system containment. Supported parsers execute in the local Polymorph process after the input gate accepts them. Resource limits, archive checks and hardened XML parsing reduce risk but do not replace a process sandbox.
 
 `polymorph doctor` reports whether Bubblewrap or Firejail is available but does not treat their presence as an active security boundary. Parser-worker isolation is planned as a separate, explicit capability so unsupported hosts do not receive a false security claim.
 
@@ -40,4 +51,13 @@ The built-in encrypted recipient key file is a software key store, not an HSM. I
 
 ## Dependencies
 
-Optional semantic models are not redistributed in this repository. Their installers pin upstream revisions and verify selected ONNX model hashes. Runtime dependencies retain their upstream security and patch requirements.
+Optional semantic models are not redistributed in this repository. Their installers pin upstream revisions and verify every required model, tokenizer and configuration asset against a built-in SHA-256 digest. Runtime dependencies retain their upstream security and patch requirements.
+
+## Known alpha limitations
+
+- There is no separately enforced parser process sandbox yet.
+- Source trust keys are in-memory primitives. Durable authenticated trust-bundle distribution is not implemented.
+- Queue limits are per record and message, not cumulative per tenant or disk.
+- The local audit chain has no external checkpoint, so an attacker with storage access may truncate a valid suffix.
+- CLI database URLs may be exposed by shell history. Use structured endpoints and secret providers in automation.
+- The project has not received an independent security assessment.

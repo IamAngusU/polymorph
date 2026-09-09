@@ -3,33 +3,179 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUTF8: "1"
+
 jobs:
-  test:
+  quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install quality tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Compile
+        run: python -W error -m compileall -q src tests scripts examples.py
+      - name: Ruff
+        run: python -m ruff check src tests scripts examples.py
+      - name: Ruff formatting
+        run: python -m ruff format --check src tests scripts examples.py
+      - name: Strict type checking
+        run: python -m mypy
+      - name: Executable example
+        run: python examples.py
+      - name: Dependency consistency
+        run: python -m pip check
+
+  test:
+    name: Tests (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+          cache-dependency-path: pyproject.toml
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e '.[dev]'
+          python -m pip install -e ".[dev]"
       - name: Compile
-        run: python -m compileall -q src
-      - name: Test
-        run: pytest
+        run: python -W error -m compileall -q src
+      - name: Tests, warnings are errors
+        run: python -W error -m pytest --strict-config --strict-markers
       - name: Mapping safety smoke
-        run: polymorph benchmark mapping benchmarks/safety-smoke.json --require-auto-precision 1.0 --max-unsafe-auto 0
+        run: >-
+          python -W error -m polymorph benchmark mapping benchmarks/safety-smoke.json
+          --require-auto-precision 1.0 --max-unsafe-auto 0
+      - name: Dependency consistency
+        run: python -m pip check
+
+  bootstrap:
+    name: Bootstrap (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: windows-latest
+            python-version: "3.13"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Bootstrap without large model downloads
+        run: python scripts/bootstrap.py --skip-models --skip-checks
+      - name: Installed CLI smoke
+        run: python scripts/dev.py doctor
+
+  package:
+    needs: [quality, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "build!=1.6.0" twine
+      - name: Build source and wheel distributions
+        run: python -m build
+      - name: Validate package metadata
+        run: python -m twine check --strict dist/*
+      - name: Check source distribution contents
+        run: python scripts/check_sdist.py dist/*.tar.gz
+      - name: Install wheel in a clean environment
+        run: |
+          python -m venv "$RUNNER_TEMP/wheel-smoke"
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip install dist/*.whl
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip check
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -c "from importlib.metadata import version; import polymorph; assert polymorph.__version__ == version('polymorph-bridge')"
+          "$RUNNER_TEMP/wheel-smoke/bin/polymorph" --help
+          "$RUNNER_TEMP/wheel-smoke/bin/polymorph" doctor
+      - name: Install source distribution in a clean environment
+        run: |
+          python -m venv "$RUNNER_TEMP/sdist-smoke"
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -m pip install dist/*.tar.gz
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -m pip check
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -c "from importlib.metadata import version; import polymorph; assert polymorph.__version__ == version('polymorph-bridge')"
+          "$RUNNER_TEMP/sdist-smoke/bin/polymorph" --help
+          "$RUNNER_TEMP/sdist-smoke/bin/polymorph" doctor
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: polymorph-distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  model-smoke:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    needs: [bootstrap, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Bootstrap with pinned model profiles
+        run: python scripts/bootstrap.py --skip-checks
+      - name: Model-assisted mapping safety smoke
+        run: >-
+          python scripts/dev.py benchmark mapping benchmarks/safety-smoke.json --models
+          --require-auto-precision 1.0 --max-unsafe-auto 0 --output model-safety.json
+      - name: Record model installation status
+        run: python scripts/dev.py doctor > model-doctor.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: model-smoke-evidence
+          path: |
+            model-safety.json
+            model-doctor.json
+          if-no-files-found: error
+          retention-days: 30

@@ -4,17 +4,24 @@ import math
 import re
 import zipfile
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import BinaryIO, Protocol, cast
 
 import openpyxl
 from openpyxl import load_workbook
+from openpyxl.workbook.workbook import Workbook
 
 from polymorph.classification import classify_field_name, infer_role
-from polymorph.content import ContentInspector, ContentKind
+from polymorph.content import (
+    ContentInspector,
+    ContentKind,
+    FileIdentity,
+    require_matching_file_identity,
+)
 from polymorph.errors import ConnectorError
 from polymorph.matching.deterministic import normalize_name
 from polymorph.models.schema import FieldDescriptor, SchemaDescriptor
@@ -24,6 +31,29 @@ from .base import ConnectorCapabilities
 
 _FIXED_ZERO_FORMAT = re.compile(r"^0+$")
 _FORMULA_TAG = re.compile(rb"<f(?:\s|>)")
+
+
+class _Cell(Protocol):
+    @property
+    def value(self) -> object: ...
+
+    @property
+    def number_format(self) -> str: ...
+
+
+class _Worksheet(Protocol):
+    title: str
+    max_row: int | None
+    max_column: int | None
+
+    def iter_rows(
+        self,
+        *,
+        min_row: int | None = None,
+        max_row: int | None = None,
+        min_col: int | None = None,
+        max_col: int | None = None,
+    ) -> Iterator[tuple[_Cell, ...]]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +69,7 @@ def _is_empty(value: object) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
-def _row_values(row) -> list[object]:
+def _row_values(row: Iterable[_Cell]) -> list[object]:
     return [cell.value for cell in row]
 
 
@@ -51,7 +81,9 @@ def _trim_width(values: list[object]) -> int:
     return width
 
 
-def _header_score(values: list[object], following: list[list[object]]) -> tuple[float, tuple[str, ...]]:
+def _header_score(
+    values: list[object], following: list[list[object]]
+) -> tuple[float, tuple[str, ...]]:
     width = _trim_width(values)
     if width == 0:
         return 0.0, ()
@@ -146,7 +178,7 @@ def _merge_types(types: list[DataType]) -> DataType:
     return DataType.UNKNOWN
 
 
-def _value_from_cell(cell) -> object:
+def _value_from_cell(cell: _Cell) -> object:
     value = cell.value
     if isinstance(value, int) and not isinstance(value, bool):
         number_format = str(getattr(cell, "number_format", "") or "")
@@ -171,6 +203,7 @@ class ExcelConnector:
         type_sample_rows: int = 128,
         max_columns: int = 512,
         skip_repeated_headers: bool = True,
+        expected_source_identity: FileIdentity | None = None,
     ) -> None:
         self.path = Path(path)
         self.sheet = sheet
@@ -183,21 +216,58 @@ class ExcelConnector:
         self._layout_cache: ExcelLayout | None = None
         self._schema_cache: SchemaDescriptor | None = None
         self._content_inspector = ContentInspector()
-        self._content_checked = False
+        self._trusted_identity: FileIdentity | None = None
+        self._expected_source_identity = expected_source_identity
 
-    def _worksheet(self, *, data_only: bool):
-        if not bool(getattr(openpyxl, "DEFUSEDXML", False)):
-            raise ConnectorError(
-                "Excel connector requires openpyxl XML hardening through defusedxml"
-            )
-        if not self._content_checked:
-            self._content_inspector.require(
+    def _ensure_source_safe(self) -> FileIdentity:
+        if self._trusted_identity is None:
+            report = self._content_inspector.require(
                 self.path,
                 allowed={ContentKind.XLSX},
                 purpose="Excel connector",
             )
-            self._content_checked = True
-        source_handle = self.path.open("rb")
+            if (
+                self._expected_source_identity is not None
+                and report.identity != self._expected_source_identity
+            ):
+                raise ConnectorError(
+                    "Excel connector rejected input changed after accepted content inspection"
+                )
+            self._trusted_identity = report.identity
+        return self._trusted_identity
+
+    def _open_source_handle(self) -> BinaryIO:
+        expected = self._ensure_source_safe()
+        try:
+            source_handle = self.path.open("rb")
+        except OSError as exc:
+            raise ConnectorError("Excel connector could not open the inspected input") from exc
+        try:
+            require_matching_file_identity(source_handle, expected, purpose="Excel connector")
+        except Exception:
+            source_handle.close()
+            raise
+        return source_handle
+
+    def _close_source_handle(self, source_handle: BinaryIO) -> None:
+        try:
+            require_matching_file_identity(
+                source_handle,
+                self._ensure_source_safe(),
+                purpose="Excel connector",
+            )
+        finally:
+            source_handle.close()
+
+    def _verify_cached_source(self) -> None:
+        self._close_source_handle(self._open_source_handle())
+
+    def _worksheet(self, *, data_only: bool) -> tuple[Workbook, _Worksheet, BinaryIO]:
+        if not bool(getattr(openpyxl, "DEFUSEDXML", False)):
+            raise ConnectorError(
+                "Excel connector requires openpyxl XML hardening through defusedxml"
+            )
+        source_handle = self._open_source_handle()
         try:
             workbook = load_workbook(
                 source_handle,
@@ -209,18 +279,25 @@ class ExcelConnector:
         except Exception:
             source_handle.close()
             raise
-        setattr(workbook, "_polymorph_source_handle", source_handle)
         worksheet = workbook[self.sheet] if self.sheet else workbook.active
-        return workbook, worksheet
-
-    @staticmethod
-    def _close_workbook(workbook) -> None:
-        handle = getattr(workbook, "_polymorph_source_handle", None)
-        try:
+        if worksheet is None or not hasattr(worksheet, "iter_rows"):
             workbook.close()
+            source_handle.close()
+            raise ConnectorError("selected Excel sheet is not a worksheet")
+        return workbook, cast(_Worksheet, worksheet), source_handle
+
+    def _close_workbook(self, workbook: Workbook, source_handle: BinaryIO) -> None:
+        try:
+            require_matching_file_identity(
+                source_handle,
+                self._ensure_source_safe(),
+                purpose="Excel connector",
+            )
         finally:
-            if handle is not None:
-                handle.close()
+            try:
+                workbook.close()
+            finally:
+                source_handle.close()
 
     def _has_formulas(self) -> bool:
         """Detect formulas in the selected worksheet without trusting cached values.
@@ -230,16 +307,17 @@ class ExcelConnector:
         selected OOXML worksheet stream once and surface that uncertainty to preflight.
         """
 
-        workbook, worksheet = self._worksheet(data_only=False)
+        workbook, worksheet, source_handle = self._worksheet(data_only=False)
         try:
             member = getattr(worksheet, "_worksheet_path", None)
         finally:
-            self._close_workbook(workbook)
+            self._close_workbook(workbook, source_handle)
         if not isinstance(member, str) or not member:
             return True  # unknown provenance is safer than silently assuming no formulas
 
+        archive_handle = self._open_source_handle()
         try:
-            with zipfile.ZipFile(self.path) as archive, archive.open(member, "r") as stream:
+            with zipfile.ZipFile(archive_handle) as archive, archive.open(member, "r") as stream:
                 overlap = b""
                 while True:
                     chunk = stream.read(64 * 1024)
@@ -251,19 +329,24 @@ class ExcelConnector:
                     overlap = probe[-8:]
         except (OSError, KeyError, RuntimeError, zipfile.BadZipFile):
             return True
+        finally:
+            self._close_source_handle(archive_handle)
 
     def discover_layout(self) -> ExcelLayout:
         if self._layout_cache is not None:
+            self._verify_cached_source()
             return self._layout_cache
 
-        workbook, worksheet = self._worksheet(data_only=False)
+        workbook, worksheet, source_handle = self._worksheet(data_only=False)
         try:
+            max_row = worksheet.max_row or 1
+            max_column = worksheet.max_column or 1
             rows = [
                 _row_values(row)
                 for row in worksheet.iter_rows(
                     min_row=1,
-                    max_row=min(self.layout_scan_rows, worksheet.max_row),
-                    max_col=min(self.max_columns, worksheet.max_column),
+                    max_row=min(self.layout_scan_rows, max_row),
+                    max_col=min(self.max_columns, max_column),
                 )
             ]
             if not rows:
@@ -319,9 +402,9 @@ class ExcelConnector:
             self._layout_cache = layout
             return layout
         finally:
-            self._close_workbook(workbook)
+            self._close_workbook(workbook, source_handle)
 
-    def _headers(self, worksheet, layout: ExcelLayout) -> list[str]:
+    def _headers(self, worksheet: _Worksheet, layout: ExcelLayout) -> list[str]:
         row = next(
             worksheet.iter_rows(
                 min_row=layout.header_row,
@@ -342,18 +425,20 @@ class ExcelConnector:
 
     def inspect_schema(self) -> SchemaDescriptor:
         if self._schema_cache is not None:
+            self._verify_cached_source()
             return self._schema_cache
         layout = self.discover_layout()
-        workbook, worksheet = self._worksheet(data_only=True)
+        workbook, worksheet, source_handle = self._worksheet(data_only=True)
         try:
             headers = self._headers(worksheet, layout)
             samples: list[list[object]] = [[] for _ in range(layout.width)]
             nulls = [False] * layout.width
             sampled = 0
+            max_row = worksheet.max_row or layout.data_start_row
             for row in worksheet.iter_rows(
                 min_row=layout.data_start_row,
                 max_row=min(
-                    worksheet.max_row,
+                    max_row,
                     layout.data_start_row + self.type_sample_rows - 1,
                 ),
                 max_col=layout.width,
@@ -394,13 +479,15 @@ class ExcelConnector:
                     "header_row": str(layout.header_row),
                     "layout_confidence": f"{layout.confidence:.4f}",
                     "formula_cells_present": "true" if formulas_present else "false",
-                    "formula_value_source": "cached_workbook_value" if formulas_present else "literal",
+                    "formula_value_source": "cached_workbook_value"
+                    if formulas_present
+                    else "literal",
                 },
             )
             self._schema_cache = schema
             return schema
         finally:
-            self._close_workbook(workbook)
+            self._close_workbook(workbook, source_handle)
 
     @staticmethod
     def _is_repeated_header(values: list[object], headers: list[str]) -> bool:
@@ -418,7 +505,7 @@ class ExcelConnector:
         layout = self.discover_layout()
         schema = self.inspect_schema()
         headers = [field.name for field in schema.fields]
-        workbook, worksheet = self._worksheet(data_only=True)
+        workbook, worksheet, source_handle = self._worksheet(data_only=True)
         try:
             for row in worksheet.iter_rows(
                 min_row=layout.data_start_row,
@@ -431,4 +518,4 @@ class ExcelConnector:
                     continue
                 yield {f"c{index}": value for index, value in enumerate(values, start=1)}
         finally:
-            self._close_workbook(workbook)
+            self._close_workbook(workbook, source_handle)

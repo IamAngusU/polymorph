@@ -6,9 +6,20 @@ from polymorph.models.types import Sensitivity
 
 
 def test_secret_is_sealed_during_execution():
-    source = SchemaDescriptor("s", (FieldDescriptor("secret", "API Token", sensitivity=Sensitivity.SECRET),))
-    target = SchemaDescriptor("t", (FieldDescriptor("token", "token", sensitivity=Sensitivity.SECRET),))
-    plan = MappingPlan("p", "s", "t", source.fingerprint(), target.fingerprint(), (MappingRule("secret", "token", "opaque_forward"),))
+    source = SchemaDescriptor(
+        "s", (FieldDescriptor("secret", "API Token", sensitivity=Sensitivity.SECRET),)
+    )
+    target = SchemaDescriptor(
+        "t", (FieldDescriptor("token", "token", sensitivity=Sensitivity.SECRET),)
+    )
+    plan = MappingPlan(
+        "p",
+        "s",
+        "t",
+        source.fingerprint(),
+        target.fingerprint(),
+        (MappingRule("secret", "token", "opaque_forward"),),
+    )
     recipient = RecipientKeyPair.generate()
     context = TransferContext("tenant", "s", "t", "secret", "1", "r1", "x1")
 

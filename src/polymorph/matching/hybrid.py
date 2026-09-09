@@ -28,10 +28,24 @@ class HybridMatcher:
         source: FieldDescriptor,
         target_schema: SchemaDescriptor,
     ) -> list[MappingCandidate]:
-        semantic_scores: list[float | None]
-        if self.semantic is None:
-            semantic_scores = [None] * len(target_schema.fields)
-        else:
+        deterministic_evidence = [
+            deterministic_score(source, target) for target in target_schema.fields
+        ]
+        deterministic_ranking = sorted((score for score, _ in deterministic_evidence), reverse=True)
+        deterministic_margin = (
+            deterministic_ranking[0] - deterministic_ranking[1]
+            if len(deterministic_ranking) > 1
+            else deterministic_ranking[0]
+            if deterministic_ranking
+            else 0.0
+        )
+        deterministic_is_decisive = bool(deterministic_ranking) and (
+            deterministic_ranking[0] >= self.deterministic_auto_floor
+            and deterministic_margin >= self.deterministic_minimum_margin
+        )
+
+        semantic_scores: list[float | None] = [None] * len(target_schema.fields)
+        if self.semantic is not None and not deterministic_is_decisive:
             scores = self.semantic.similarities(
                 source.semantic_text(),
                 [field.semantic_text() for field in target_schema.fields],
@@ -39,8 +53,13 @@ class HybridMatcher:
             semantic_scores = list(scores)
 
         candidates: list[MappingCandidate] = []
-        for target, semantic_score in zip(target_schema.fields, semantic_scores, strict=True):
-            deterministic, reasons = deterministic_score(source, target)
+        evidence = zip(
+            target_schema.fields,
+            semantic_scores,
+            deterministic_evidence,
+            strict=True,
+        )
+        for target, semantic_score, (deterministic, reasons) in evidence:
             if semantic_score is None:
                 final = deterministic
             else:
@@ -68,8 +87,22 @@ class HybridMatcher:
         if self.reranker is None or len(candidates) < 2:
             return candidates
 
+        deterministic = sorted(
+            (candidate.deterministic_score for candidate in candidates),
+            reverse=True,
+        )
+        deterministic_margin = deterministic[0] - deterministic[1]
+        if (
+            deterministic[0] >= self.deterministic_auto_floor
+            and deterministic_margin >= self.deterministic_minimum_margin
+        ):
+            return candidates
+
         initial_margin = candidates[0].score - candidates[1].score
-        if candidates[0].score < self.rerank_min_score or initial_margin > self.rerank_trigger_margin:
+        if (
+            candidates[0].score < self.rerank_min_score
+            or initial_margin > self.rerank_trigger_margin
+        ):
             return candidates
 
         count = min(max(2, self.rerank_top_k), len(candidates))
@@ -125,9 +158,7 @@ class HybridMatcher:
         deterministic_second = (
             deterministic[1].deterministic_score if len(deterministic) > 1 else 0.0
         )
-        deterministic_margin = (
-            deterministic_top.deterministic_score - deterministic_second
-        )
+        deterministic_margin = deterministic_top.deterministic_score - deterministic_second
         deterministic_ok = (
             deterministic_top.target_field_id == top.target_field_id
             and deterministic_top.deterministic_score >= self.deterministic_auto_floor
@@ -143,7 +174,10 @@ class HybridMatcher:
 
         reasons = top.reasons
         if not deterministic_ok:
-            reasons = (*reasons, "automatic approval requires independently strong deterministic evidence")
+            reasons = (
+                *reasons,
+                "automatic approval requires independently strong deterministic evidence",
+            )
         elif top.semantic_score is not None or top.reranker_score is not None:
             reasons = (*reasons, "model evidence is advisory; automatic approval is deterministic")
 

@@ -1,25 +1,35 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
-from datetime import UTC, datetime
+import math
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from enum import StrEnum
 
 from .agents import BlindDestinationAgent, BlindTransportRecord
 from .audit import AuditEvent, AuditLog
 from .capabilities import CapabilityAuthorizer, CapabilityOperation
 from .connectors.base import DeliveryContext, DestinationConnector
+from .connectors.inference import runtime_type
 from .errors import (
     ConnectorWriteError,
     IntegrityError,
     PolicyViolation,
-    PolymorphError,
     WriteOutcome,
 )
-from .ledger import ClaimDisposition, DeliveryLedger, DeliveryState
+from .ledger import (
+    DEFAULT_CLAIM_DURATION,
+    MAX_CLAIM_DURATION,
+    ClaimDisposition,
+    DeliveryLedger,
+    DeliveryState,
+)
 from .models.mapping import MappingPlan
-from .transforms import TransformStage, transform_stage
+from .models.schema import FieldDescriptor, SchemaDescriptor
+from .models.types import DataType
 from .spool import SealedSpool
+from .transforms import TransformStage, transform_stage
 
 
 class DeliveryStatus(StrEnum):
@@ -65,21 +75,57 @@ class DestinationRuntime:
     connector: DestinationConnector
     ledger: DeliveryLedger
     spool: SealedSpool
+    plan: MappingPlan
+    target_schema: SchemaDescriptor
     authorizer: CapabilityAuthorizer | None = None
     audit: AuditLog | None = None
     actor_id: str = "destination-runtime"
-    plan: MappingPlan | None = None
+    claim_lease: timedelta = DEFAULT_CLAIM_DURATION
+    _plan_digest: str = field(init=False, repr=False)
+    _mapped_target_fields: tuple[FieldDescriptor, ...] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if self.claim_lease <= timedelta(0) or self.claim_lease > MAX_CLAIM_DURATION:
+            raise ValueError("claim duration is outside supported range")
         if not self.connector.capabilities.write_records:
             raise ValueError("destination connector does not advertise write capability")
         if self.agent.expected_connector_id is None:
             self.agent.expected_connector_id = self.connector_id
         elif self.agent.expected_connector_id != self.connector_id:
             raise ValueError("destination agent and runtime connector ids differ")
-        if self.plan is not None and self.agent.allowed_plan_digests is not None:
-            if self.plan.digest() not in self.agent.allowed_plan_digests:
-                raise ValueError("runtime plan is not authorized by destination agent")
+
+        if self.plan.target_schema_id != self.target_schema.id:
+            raise ValueError("runtime plan and target schema ids differ")
+        if self.plan.target_fingerprint != self.target_schema.fingerprint():
+            raise ValueError("runtime plan target fingerprint does not match target schema")
+
+        target_fields = self.target_schema.by_id()
+        target_ids = tuple(rule.target_field_id for rule in self.plan.rules)
+        if not target_ids:
+            raise ValueError("runtime mapping plan has no target fields")
+        if len(set(target_ids)) != len(target_ids):
+            raise ValueError("runtime mapping plan targets a field more than once")
+        if any(target_id not in target_fields for target_id in target_ids):
+            raise ValueError("runtime mapping plan references an unknown target field")
+        missing_required = tuple(
+            field.id
+            for field in self.target_schema.fields
+            if field.id not in target_ids and not field.nullable and not field.destination_generated
+        )
+        if missing_required:
+            raise ValueError("runtime mapping plan omits a required target field")
+
+        plan_digest = self.plan.digest()
+        if (
+            self.agent.allowed_plan_digests is not None
+            and plan_digest not in self.agent.allowed_plan_digests
+        ):
+            raise ValueError("runtime plan is not authorized by destination agent")
+        # A runtime executes one immutable contract. Preserve an agent-side deny by failing
+        # above, otherwise narrow any broader agent configuration to this exact plan.
+        self.agent.allowed_plan_digests = frozenset({plan_digest})
+        self._plan_digest = plan_digest
+        self._mapped_target_fields = tuple(target_fields[target_id] for target_id in target_ids)
 
     def _authorize_capability(
         self,
@@ -146,27 +192,37 @@ class DestinationRuntime:
     def deliver(self, record: BlindTransportRecord) -> DeliveryReceipt:
         self.agent._authorize_record(record)
         self._authorize_capability(CapabilityOperation.WRITE_RECORDS, record)
-        claim = self.ledger.claim(record)
+        claim = self.ledger.claim(record, lease_for=self.claim_lease)
         if claim.disposition is ClaimDisposition.ALREADY_COMMITTED:
             return self._receipt(record, DeliveryStatus.DUPLICATE)
-        if claim.disposition is ClaimDisposition.AMBIGUOUS:
-            self.spool.quarantine(record, "previous_delivery_ambiguous")
+        if claim.disposition is ClaimDisposition.IN_PROGRESS:
             return self._receipt(
                 record,
                 DeliveryStatus.AMBIGUOUS,
-                reason_code="previous_delivery_ambiguous",
+                reason_code="delivery_claim_in_progress",
+                retry_safe=False,
             )
-        return self._deliver_claimed(record)
+        if claim.disposition is ClaimDisposition.AMBIGUOUS:
+            reason_code = (
+                "previous_write_started_ambiguous"
+                if claim.state is DeliveryState.WRITE_STARTED
+                else "previous_delivery_ambiguous"
+            )
+            self.spool.quarantine(record, reason_code)
+            return self._receipt(
+                record,
+                DeliveryStatus.AMBIGUOUS,
+                reason_code=reason_code,
+            )
+        if claim.claim_token is None:
+            raise IntegrityError("delivery ledger issued an unfenced claim")
+        return self._deliver_claimed(record, claim.claim_token)
 
     def _apply_destination_transforms(
         self,
         record: BlindTransportRecord,
         plaintext_record: dict[str, object],
     ) -> dict[str, object]:
-        if self.plan is None:
-            return plaintext_record
-        if self.plan.digest() != record.plan_digest:
-            raise IntegrityError("runtime mapping plan does not match authenticated transport")
         for rule in self.plan.rules:
             if transform_stage(rule.transform) is not TransformStage.DESTINATION:
                 continue
@@ -186,26 +242,104 @@ class DestinationRuntime:
             )
         return plaintext_record
 
-    def _deliver_claimed(self, record: BlindTransportRecord) -> DeliveryReceipt:
+    def _record_uses_runtime_plan(self, record: BlindTransportRecord) -> bool:
+        return record.plan_id == self.plan.id and record.plan_digest == self._plan_digest
+
+    @staticmethod
+    def _value_satisfies_type(value: object, target_type: DataType) -> bool:
+        if isinstance(value, float) and not math.isfinite(value):
+            return False
+        if isinstance(value, Decimal) and not value.is_finite():
+            return False
+        if target_type is DataType.UNKNOWN:
+            return True
+        actual_type = runtime_type(value)
+        if actual_type is target_type:
+            return True
+        return actual_type is DataType.INTEGER and target_type is DataType.DECIMAL
+
+    def _payload_satisfies_target_contract(self, record: dict[str, object]) -> bool:
+        if not self._payload_has_exact_mapped_fields(record):
+            return False
+        for target in self._mapped_target_fields:
+            value = record[target.id]
+            if value is None:
+                if not target.nullable:
+                    return False
+                continue
+            if not self._value_satisfies_type(value, target.data_type):
+                return False
+        return True
+
+    def _payload_has_exact_mapped_fields(self, record: dict[str, object]) -> bool:
+        return set(record) == {field.id for field in self._mapped_target_fields}
+
+    def _quarantine_before_write(
+        self,
+        record: BlindTransportRecord,
+        reason_code: str,
+        claim_token: str,
+    ) -> DeliveryReceipt:
         try:
-            plaintext_record = self.agent.open_record(record)
-        except PolymorphError:
-            self.ledger.mark_quarantined(record, "transport_verification_failed")
-            self.spool.quarantine(record, "transport_verification_failed")
+            self.ledger.mark_quarantined(record, reason_code, claim_token)
+        except IntegrityError:
+            # The claim expired or was replaced while local validation was running. The
+            # fenced token guarantees that this worker has not crossed the write boundary.
             return self._receipt(
                 record,
-                DeliveryStatus.QUARANTINED,
-                reason_code="transport_verification_failed",
+                DeliveryStatus.AMBIGUOUS,
+                reason_code="delivery_claim_lost",
+                retry_safe=False,
+            )
+        self.spool.quarantine(record, reason_code)
+        return self._receipt(
+            record,
+            DeliveryStatus.QUARANTINED,
+            reason_code=reason_code,
+        )
+
+    def _deliver_claimed(
+        self,
+        record: BlindTransportRecord,
+        claim_token: str,
+    ) -> DeliveryReceipt:
+        try:
+            plaintext_record = self.agent.open_record(record)
+        except Exception:
+            # No destination operation has started. Malformed authenticated plaintext and
+            # unexpected decoder failures are therefore safely quarantinable. Never persist
+            # the exception text because a parser may include plaintext in it.
+            return self._quarantine_before_write(
+                record,
+                "transport_verification_failed",
+                claim_token,
+            )
+        if not self._record_uses_runtime_plan(record) or not self._payload_has_exact_mapped_fields(
+            plaintext_record
+        ):
+            del plaintext_record
+            return self._quarantine_before_write(
+                record,
+                "destination_contract_failed",
+                claim_token,
             )
         try:
             plaintext_record = self._apply_destination_transforms(record, plaintext_record)
-        except PolymorphError:
-            self.ledger.mark_quarantined(record, "destination_resolution_failed")
-            self.spool.quarantine(record, "destination_resolution_failed")
-            return self._receipt(
+        except Exception:
+            # Resolution is still before the write boundary, so any failure is known no-write.
+            # The fixed reason code prevents database/parser exceptions leaking payload values.
+            del plaintext_record
+            return self._quarantine_before_write(
                 record,
-                DeliveryStatus.QUARANTINED,
-                reason_code="destination_resolution_failed",
+                "destination_resolution_failed",
+                claim_token,
+            )
+        if not self._payload_satisfies_target_contract(plaintext_record):
+            del plaintext_record
+            return self._quarantine_before_write(
+                record,
+                "destination_contract_failed",
+                claim_token,
             )
 
         context = DeliveryContext(
@@ -215,12 +349,29 @@ class DestinationRuntime:
             idempotency_key=_idempotency_key(record),
         )
         try:
+            # This durable, fenced transition is the exact external-write boundary.
+            # A replacement worker can reclaim CLAIMED, but never WRITE_STARTED.
+            self.ledger.start_write(record, claim_token)
+        except IntegrityError:
+            del plaintext_record
+            return self._receipt(
+                record,
+                DeliveryStatus.AMBIGUOUS,
+                reason_code="delivery_claim_lost",
+                retry_safe=False,
+            )
+        try:
             written = self.connector.write_records([plaintext_record], context=context)
             if written != 1:
                 raise IntegrityError("destination did not acknowledge exactly one record")
         except ConnectorWriteError as exc:
             if exc.outcome is WriteOutcome.NOT_COMMITTED:
-                self.ledger.mark_quarantined(record, "write_not_committed")
+                self.ledger.mark_quarantined(
+                    record,
+                    "write_not_committed",
+                    claim_token,
+                    expected_state=DeliveryState.WRITE_STARTED,
+                )
                 self.spool.quarantine(record, "write_not_committed")
                 return self._receipt(
                     record,
@@ -228,7 +379,7 @@ class DestinationRuntime:
                     reason_code="write_not_committed",
                     retry_safe=True,
                 )
-            self.ledger.mark_uncertain(record, "write_outcome_unknown")
+            self.ledger.mark_uncertain(record, "write_outcome_unknown", claim_token)
             self.spool.quarantine(record, "write_outcome_unknown")
             return self._receipt(
                 record,
@@ -238,7 +389,7 @@ class DestinationRuntime:
         except Exception:
             # Unknown connector exceptions provide no durability proof. The safe default is
             # to assume the write may have committed and refuse a blind non-idempotent retry.
-            self.ledger.mark_uncertain(record, "write_outcome_unknown")
+            self.ledger.mark_uncertain(record, "write_outcome_unknown", claim_token)
             self.spool.quarantine(record, "write_outcome_unknown")
             return self._receipt(
                 record,
@@ -251,7 +402,18 @@ class DestinationRuntime:
             if "plaintext_record" in locals():
                 del plaintext_record
 
-        self.ledger.mark_committed(record)
+        try:
+            self.ledger.mark_committed(record, claim_token)
+        except Exception:
+            # The destination acknowledged the write, but its durable ledger outcome could
+            # not be recorded. Seal the record and report ambiguity, never an apparent
+            # failure that invites a blind retry.
+            self.spool.quarantine(record, "delivery_outcome_record_failed")
+            return self._receipt(
+                record,
+                DeliveryStatus.AMBIGUOUS,
+                reason_code="delivery_outcome_record_failed",
+            )
         self.spool.remove(record.digest())
         return self._receipt(record, DeliveryStatus.DELIVERED)
 
@@ -259,6 +421,10 @@ class DestinationRuntime:
         record = self.spool.get(record_digest)
         if record is None:
             raise KeyError("sealed quarantine record does not exist")
+        if force_uncertain and self.authorizer is None:
+            raise PolicyViolation(
+                "forced uncertain replay requires an explicit capability authorizer"
+            )
         self._authorize_capability(CapabilityOperation.REPLAY, record)
         entry = self.ledger.get(record)
         if entry is None:
@@ -266,12 +432,24 @@ class DestinationRuntime:
         if entry.state is DeliveryState.COMMITTED:
             self.spool.remove(record_digest)
             return self._receipt(record, DeliveryStatus.DUPLICATE)
-        if entry.state is DeliveryState.UNCERTAIN:
-            if not self.connector.capabilities.supports_idempotency and not force_uncertain:
-                raise PolicyViolation(
-                    "uncertain write cannot be replayed without destination idempotency"
-                )
-            if force_uncertain:
-                self._authorize_capability(CapabilityOperation.FORCE_UNCERTAIN_REPLAY, record)
-        self.ledger.rearm_for_retry(record)
-        return self._deliver_claimed(record)
+        ambiguous_write_states = (DeliveryState.UNCERTAIN, DeliveryState.WRITE_STARTED)
+        if (
+            entry.state in ambiguous_write_states
+            and not self.connector.capabilities.supports_idempotency
+            and not force_uncertain
+        ):
+            raise PolicyViolation(
+                "uncertain write cannot be replayed without destination idempotency"
+            )
+        if entry.state is DeliveryState.CLAIMED and not force_uncertain:
+            raise PolicyViolation("ambiguous claimed delivery requires explicit recovery")
+        if force_uncertain and entry.state in (*ambiguous_write_states, DeliveryState.CLAIMED):
+            self._authorize_capability(CapabilityOperation.FORCE_UNCERTAIN_REPLAY, record)
+        rearmed = self.ledger.rearm_for_retry(
+            record,
+            expected_state=entry.state,
+            lease_for=self.claim_lease,
+        )
+        if rearmed.claim_token is None:
+            raise IntegrityError("delivery ledger issued an unfenced retry claim")
+        return self._deliver_claimed(record, rearmed.claim_token)

@@ -21,7 +21,14 @@ def _basic():
         target.id,
         source.fingerprint(),
         target.fingerprint(),
-        (MappingRule("c1", "amount", "parse_decimal", {"decimal_separator": ",", "thousands_separator": "."}),),
+        (
+            MappingRule(
+                "c1",
+                "amount",
+                "parse_decimal",
+                {"decimal_separator": ",", "thousands_separator": "."},
+            ),
+        ),
     )
     return source, target, plan
 
@@ -69,7 +76,15 @@ def test_foreign_key_preflight_uses_read_only_resolver() -> None:
     )
     target = SchemaDescriptor(
         "target",
-        (FieldDescriptor("customer_id", "Customer ID", DataType.INTEGER, nullable=False, role=FieldRole.FOREIGN_KEY),),
+        (
+            FieldDescriptor(
+                "customer_id",
+                "Customer ID",
+                DataType.INTEGER,
+                nullable=False,
+                role=FieldRole.FOREIGN_KEY,
+            ),
+        ),
         relations=(
             RelationDescriptor(
                 source_field_id="customer_id",
@@ -85,7 +100,11 @@ def test_foreign_key_preflight_uses_read_only_resolver() -> None:
         target.id,
         source.fingerprint(),
         target.fingerprint(),
-        (MappingRule("c1", "customer_id", "lookup_foreign_key", {"match_column": "customer_number"}),),
+        (
+            MappingRule(
+                "c1", "customer_id", "lookup_foreign_key", {"match_column": "customer_number"}
+            ),
+        ),
     )
 
     class Resolver:

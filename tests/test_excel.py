@@ -107,3 +107,25 @@ def test_excel_fails_closed_when_openpyxl_xml_hardening_is_disabled(tmp_path, mo
 
     with pytest.raises(ConnectorError, match="defusedxml"):
         ExcelConnector(path).inspect_schema()
+
+
+def test_excel_rejects_path_swap_after_content_gate(tmp_path) -> None:
+    path = tmp_path / "source.xlsx"
+    replacement = tmp_path / "replacement.xlsx"
+    original_workbook = Workbook()
+    original_workbook.active.append(["name", "value"])
+    original_workbook.active.append(["Alice", 1])
+    original_workbook.save(path)
+    replacement_workbook = Workbook()
+    replacement_workbook.active.append(["name", "value"])
+    replacement_workbook.active.append(["Mallory", 999])
+    replacement_workbook.save(replacement)
+    connector = ExcelConnector(path)
+    connector.inspect_schema()
+
+    replacement.replace(path)
+
+    with pytest.raises(ConnectorError, match="changed after content inspection"):
+        connector.inspect_schema()
+    with pytest.raises(ConnectorError, match="changed after content inspection"):
+        list(connector.iter_records())

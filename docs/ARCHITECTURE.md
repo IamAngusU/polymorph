@@ -12,7 +12,9 @@ The Excel path additionally requires openpyxl's `defusedxml` hardening. Formula 
 
 ## 1. Schema plane
 
-A connector exposes a `SchemaDescriptor`. Descriptors contain field identity, name, aliases, declared type, nullability, sensitivity, field role and relationship metadata. They intentionally contain no property for sample payload values.
+A connector exposes a `SchemaDescriptor`. Descriptors contain field identity, name, aliases,
+declared type, nullability, destination-generated status, sensitivity, field role and relationship
+metadata. They intentionally contain no property for sample payload values.
 
 For spreadsheets and delimited files, field IDs are positional (`c1`, `c2`, ...) while names are semantic descriptors. This distinction matters during drift repair: a positional ID is not proof that a moved column still represents the same business field.
 
@@ -46,7 +48,7 @@ Secret and opaque payloads are not interpreted. Preflight checks only presence a
 
 Formula-bearing spreadsheets are marked review-required because cached workbook results have unproven freshness. A complete scan is required for automatic promotion.
 
-This contract sandbox is distinct from hostile-code OS containment. In v0.3 supported parsers still execute in the local process after the content gate accepts the file. Process-level parser isolation is a separate deployment capability planned for the agent runtime.
+This contract sandbox is distinct from hostile-code OS containment. In the current alpha, supported parsers still execute in the local process after the content gate accepts the file. Process-level parser isolation is a separate deployment capability planned for the agent runtime.
 
 ## 5. Source trust boundary
 
@@ -54,9 +56,17 @@ This contract sandbox is distinct from hostile-code OS containment. In v0.3 supp
 
 Every mapped field is then encoded canonically and encrypted to the destination X25519 public key. The source process does not need the destination private key.
 
+Protocol v3 signs the complete encrypted record with a separate Ed25519 source identity. The
+verification key is independently bound to one tenant and source connector. Recipient encryption
+keys, source signing keys and capability signing keys are distinct roles.
+
 ## 6. Opaque relay boundary
 
-`SealedRelayQueue` persists only canonical wire records that already contain encrypted fields. It can enforce route policy, validate authenticated expiration metadata, deduplicate transfer identities, reject identity reuse with different ciphertext, queue records, lease them to workers, and acknowledge or release a lease.
+`SealedRelayQueue` verifies the source signature before route policy, then persists only canonical
+wire records that already contain encrypted fields. It can validate authenticated expiration
+metadata, deduplicate transfer identities, reject identity reuse with different ciphertext, queue
+records, lease them to workers, and acknowledge or release a lease. Signature and revocation are
+checked again when a record is leased so a revoked queued record cannot pass silently.
 
 It cannot decrypt a record because its API has no private-key dependency.
 
@@ -64,21 +74,28 @@ The relay still learns metadata required for routing, including tenant, connecto
 
 ## 7. Destination trust boundary
 
-`BlindDestinationAgent` verifies tenant, destination and allowed plan digests before opening envelopes. `DestinationRuntime` then:
+`BlindDestinationAgent` independently re-verifies source identity and revocation, then verifies
+tenant, destination and allowed plan digests before opening envelopes. `DestinationRuntime` then:
 
-1. claims the delivery identity in the ledger
-2. skips already committed duplicates
-3. decrypts locally
-4. performs destination-stage relationship resolution
-5. invokes the destination connector with a deterministic idempotency key
-6. records the durability result
-7. removes successful records from sealed quarantine
+1. verifies that the plan supplies every required, non-generated target field
+2. claims the delivery identity in the ledger
+3. skips already committed duplicates
+4. decrypts locally
+5. checks the exact mapped field set and conservative runtime types
+6. performs destination-stage relationship resolution and rechecks its result
+7. invokes the destination connector with a deterministic idempotency key
+8. records the durability result
+9. removes successful records from sealed quarantine
 
 A natural key is resolved to an internal foreign key only through database metadata. The caller chooses a previously approved unique match column but cannot select an arbitrary table or return column.
 
 ## 8. Delivery state and replay
 
-The ledger records `claimed`, `committed`, `uncertain` and `quarantined` states. It stores identifiers and cryptographic digests, not payload values.
+The ledger records `claimed`, `write_started`, `committed`, `uncertain` and `quarantined` states.
+`claimed` has a bounded lease and random fencing token. The token must still be current when the
+runtime durably enters `write_started`, immediately before the connector call. Only stale
+pre-write claims can be recovered automatically. It stores identifiers and cryptographic digests,
+not payload values.
 
 Connector failures may carry a `WriteOutcome`:
 

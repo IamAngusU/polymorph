@@ -41,7 +41,7 @@
 
 - long-running source, relay and destination services
 - mutually authenticated agent control channel
-- public-key registration, rotation and revocation
+- durable authenticated distribution of public-key registration, rotation and revocation state
 - OS/HSM-backed key-provider interfaces
 - parser-worker isolation with explicit containment level
 - connector-account least-privilege policy checks
@@ -52,7 +52,7 @@
 
 - OpenAPI 3.1 ingestion
 - request/response schema graph
-- explicit API idempotency and retry contracts
+- OpenAPI-ingested and independently verified API idempotency and retry contracts
 - bounded rate-limit handling
 - richer nested JSON path mapping
 - XML and document-format adapters behind parser containment

@@ -18,8 +18,9 @@ Polymorph is security-sensitive infrastructure. Changes should preserve explicit
 ## Local checks
 
 ```bash
-python -m compileall -q src tests
-pytest
+python scripts/bootstrap.py --skip-models
 ```
 
-CI runs the supported Python-version matrix on every push and pull request.
+That command installs the development stack and runs compile, Ruff lint and formatting, strict
+mypy, pytest with warnings as errors, the mapping safety smoke and `pip check`. CI also runs the
+supported Python-version matrix and package release gates on every push and pull request.

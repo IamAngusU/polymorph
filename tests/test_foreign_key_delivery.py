@@ -9,6 +9,7 @@ from polymorph.models.schema import FieldDescriptor, SchemaDescriptor
 from polymorph.models.types import DataType, FieldRole
 from polymorph.planning import build_plan
 from polymorph.runtime import DeliveryStatus, DestinationRuntime
+from polymorph.signing import SigningKeyPair, SourceTrustStore, TrustedSourceKey
 from polymorph.spool import SealedSpool
 
 
@@ -59,6 +60,8 @@ def _setup(tmp_path, *, create_customer: bool):
     assert plan.rules[0].parameters["match_column"] == "external_customer_number"
 
     keys = RecipientKeyPair.generate()
+    signer = SigningKeyPair.generate()
+    trust = SourceTrustStore([TrustedSourceKey(signer.public_bytes(), "tenant", "excel")])
     transport = BlindSourceAgent(
         tenant="tenant",
         source_connector_id="excel",
@@ -67,6 +70,7 @@ def _setup(tmp_path, *, create_customer: bool):
         target_schema=target,
         plan=plan,
         destination_public_key=keys.public_bytes(),
+        signing_key=signer,
     ).prepare_record({"c1": "00042"}, record_id="row-1", transfer_id="tx-1")
 
     runtime = DestinationRuntime(
@@ -76,11 +80,13 @@ def _setup(tmp_path, *, create_customer: bool):
             expected_tenant="tenant",
             expected_connector_id="orders-db",
             allowed_plan_digests=frozenset({plan.digest()}),
+            source_trust_store=trust,
         ),
         connector=connector,
         ledger=DeliveryLedger(tmp_path / "ledger.db"),
         spool=SealedSpool(tmp_path / "spool.db"),
         plan=plan,
+        target_schema=target,
     )
     return engine, customers, orders, transport, runtime
 
@@ -111,3 +117,19 @@ def test_missing_fk_target_can_be_replayed_after_reference_is_created(tmp_path):
     with engine.connect() as connection:
         row = connection.execute(select(orders.c.customer_id)).one()
     assert row[0] == 7
+
+
+def test_fk_resolution_result_is_contract_checked_before_write(tmp_path):
+    engine, _, orders, transport, runtime = _setup(tmp_path, create_customer=True)
+
+    def wrong_type_resolver(*, target_field_id, match_column, value):
+        return "7"
+
+    runtime.connector.resolve_foreign_key = wrong_type_resolver
+
+    receipt = runtime.deliver(transport)
+
+    assert receipt.status is DeliveryStatus.QUARANTINED
+    assert receipt.reason_code == "destination_contract_failed"
+    with engine.connect() as connection:
+        assert connection.execute(select(orders.c.customer_id)).all() == []

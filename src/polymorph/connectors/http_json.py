@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -11,11 +12,41 @@ import httpx
 from polymorph.classification import classify_field_name, infer_role
 from polymorph.errors import ConnectorError, ConnectorWriteError, ProtocolError, WriteOutcome
 from polymorph.models.schema import FieldDescriptor, SchemaDescriptor
-from polymorph.models.types import DataType, Sensitivity
+from polymorph.models.types import Sensitivity
 from polymorph.secrets import SecretProvider
 
 from .base import ConnectorCapabilities, DeliveryContext
 from .inference import merge_types, runtime_type
+
+_HTTP_TOKEN = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+_RESERVED_IDEMPOTENCY_HEADERS = frozenset(
+    {
+        "authorization",
+        "connection",
+        "content-length",
+        "content-type",
+        "cookie",
+        "host",
+        "proxy-authorization",
+        "set-cookie",
+        "transfer-encoding",
+    }
+)
+
+
+def _object_without_duplicate_keys(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    output: dict[str, object] = {}
+    for key, value in pairs:
+        if key in output:
+            raise ValueError("HTTP JSON response contains a duplicate object key")
+        output[key] = value
+    return output
+
+
+def _reject_nonfinite_constant(value: str) -> object:
+    raise ValueError(f"HTTP JSON response contains non-finite number {value}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +56,7 @@ class HttpEndpoint:
     method: str = "POST"
     credential_ref: str | None = None
     idempotency_header: str | None = None
+    idempotency_contract: bool = False
 
 
 class HttpJsonConnector:
@@ -51,7 +83,9 @@ class HttpJsonConnector:
         self.capabilities = ConnectorCapabilities(
             read_schema=True,
             write_records=True,
-            supports_idempotency=endpoint.idempotency_header is not None,
+            supports_idempotency=(
+                endpoint.idempotency_header is not None and endpoint.idempotency_contract
+            ),
         )
         self._url = _validated_url(endpoint.base_url, endpoint.path)
 
@@ -59,6 +93,8 @@ class HttpJsonConnector:
             raise ValueError("unsupported HTTP write method")
         if endpoint.idempotency_header is not None:
             _validate_header_name(endpoint.idempotency_header)
+        if endpoint.idempotency_contract and endpoint.idempotency_header is None:
+            raise ValueError("HTTP idempotency contract requires a configured header")
 
     def inspect_schema(self) -> SchemaDescriptor:
         return self._schema
@@ -96,7 +132,7 @@ class HttpJsonConnector:
                         "HTTP destination write outcome is unknown",
                         outcome=WriteOutcome.UNKNOWN,
                     ) from exc
-                if response.status_code >= 400:
+                if not 200 <= response.status_code < 300:
                     # A response status does not prove that a custom endpoint made no side
                     # effects. Treat it conservatively unless a future endpoint contract
                     # explicitly provides stronger semantics.
@@ -189,7 +225,9 @@ class HttpJsonSourceConnector:
         client: httpx.Client,
         params: Mapping[str, str],
     ) -> object:
-        with client.stream("GET", self._url, params=dict(params), headers=self._headers()) as response:
+        with client.stream(
+            "GET", self._url, params=dict(params), headers=self._headers()
+        ) as response:
             if response.status_code >= 400:
                 raise ConnectorError(
                     f"HTTP source rejected request with status {response.status_code}"
@@ -203,8 +241,12 @@ class HttpJsonSourceConnector:
                 if len(buffer) > self.max_response_bytes:
                     raise ConnectorError("HTTP source response exceeds configured size limit")
         try:
-            return json.loads(buffer)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            return json.loads(
+                buffer,
+                object_pairs_hook=_object_without_duplicate_keys,
+                parse_constant=_reject_nonfinite_constant,
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
             raise ConnectorError("HTTP source returned invalid JSON") from exc
 
     @staticmethod
@@ -306,6 +348,8 @@ def _validated_url(base_url: str, path: str) -> str:
     target = urlparse(urljoin(base_url.rstrip("/") + "/", path.lstrip("/")))
     if base.scheme != "https" or target.scheme != "https":
         raise ValueError("HTTP connector requires HTTPS")
+    if base.hostname is None or target.hostname is None:
+        raise ValueError("HTTP connector requires a valid hostname")
     if base.username is not None or base.password is not None:
         raise ValueError("credentials must not be embedded in HTTP URLs")
     if (base.hostname, base.port) != (target.hostname, target.port):
@@ -317,8 +361,10 @@ def _validated_url(base_url: str, path: str) -> str:
 
 def _validate_header_name(value: str) -> None:
     header = value.strip()
-    if not header or any(ch in header for ch in "\r\n:"):
+    if not _HTTP_TOKEN.fullmatch(header):
         raise ValueError("invalid HTTP header name")
+    if header.casefold() in _RESERVED_IDEMPOTENCY_HEADERS:
+        raise ValueError("idempotency header may not replace a reserved HTTP header")
 
 
 def _attach_bearer(
@@ -353,7 +399,9 @@ def _json_pointer(payload: object, pointer: str) -> object:
                 index = int(token)
                 current = current[index]
             except (ValueError, IndexError) as exc:
-                raise ConnectorError("configured JSON pointer contains an invalid list index") from exc
+                raise ConnectorError(
+                    "configured JSON pointer contains an invalid list index"
+                ) from exc
         else:
             raise ConnectorError("configured JSON pointer traverses a scalar value")
     return current

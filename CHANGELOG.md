@@ -1,6 +1,63 @@
 # Changelog
 
-All notable changes to this private alpha are documented here.
+All notable changes to this alpha are documented here.
+
+## Unreleased
+
+## 0.4.0a1 - 2026-09-09
+
+### Added
+
+- protocol v3 Ed25519 source authentication with tenant and connector identity binding
+- source trust store with active, verification-only and revoked key states
+- adversarial source-authentication coverage for forged signatures, tampering, revocation and
+  wrong connector identity
+- finite source-key rotation drain with immutable issuance cutoff and immediate hard revocation
+- durable ciphertext-only source outbox that retries the exact signed wire bytes
+- strict schema and plan JSON loading with duplicate-key, non-finite-value and size rejection
+- built-in SHA-256 pins for every required ONNX, tokenizer and model configuration asset
+- complete CSV-to-JSON workflow test across mapping, preflight, source signing, outbox, relay,
+  destination delivery and acknowledgement
+- crash-after-commit workflow coverage across the outbox, fenced relay lease and destination ledger
+- opened-handle file identity binding for CSV, JSON and Excel parser handoff
+- destination runtime contract checks for the exact plan, schema fingerprint, mapped field set,
+  required fields, nullability and runtime types before the first write
+- portable development bootstrap, multi-version Windows/Linux CI, strict typing, formatting,
+  safety-corpus, package-content and clean-wheel gates
+- restored typed schema and mapping model modules that the supplied archive accidentally excluded
+
+### Changed
+
+- relay and destination intake now fail closed when a v3 source key is absent or untrusted
+- unsigned protocol v2 records require explicit legacy migration policy at every boundary
+- malformed decrypted payloads are quarantined with fixed non-sensitive reason codes before write
+- model execution is skipped when deterministic mapping evidence is already decisive
+- model runtimes load lazily and use the pinned native SentencePiece model instead of duplicating
+  the large JSON tokenizer representation in memory
+- model install directories carry an exact-profile ownership marker and reject unrelated content
+- relay acknowledgement and release now require the current unexpired random lease token
+- invalid queued relay records move to a sealed dead-letter table without blocking later work
+- destination claims use expiring pre-write fences and an irreversible `WRITE_STARTED` boundary;
+  only stale pre-write claims recover automatically
+- CSV and JSON destinations append atomically instead of replacing previous records
+- CSV and JSON destination appends are serialized across cooperative local processes to prevent
+  lost updates
+- CSV exports reject spreadsheet formula-like values by default unless explicitly enabled
+- HTTP destinations accept only 2xx as success and require an explicit endpoint idempotency contract
+- HTTP, JSON5, schema, plan and transport payload parsing reject duplicate or non-finite values
+- database exceptions report a known no-commit outcome only for supported transactional dialects
+  after successful rollback; SQLAlchemy hides bound parameter values in errors
+- recipient key creation is no-clobber and key loading is bounded by file-size and Argon2 cost limits
+- built-in model verification pins model, tokenizer and configuration assets to static hashes
+- Unicode mapping normalization preserves non-Latin descriptors and no longer conflates a generic
+  account label with a customer identity
+- source-control ignore rules no longer exclude the package's own `polymorph.models` modules
+- local state uses `POLYMORPH_HOME` and product-named platform defaults; the old
+  `ANGUSU_BRIDGE_HOME` variable and existing legacy default directories remain compatible
+- SQLite WAL is enabled only on runtimes containing the upstream 2026 WAL-reset race fix; older
+  bundled runtimes automatically use the rollback journal with full synchronous durability
+- development and release tooling exclude PyPA build 1.6.0 because its Windows symlink regression
+  breaks isolated builds under Microsoft Store Python
 
 ## 0.3.0 - 2026-09-08
 

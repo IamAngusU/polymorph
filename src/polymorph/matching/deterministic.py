@@ -8,10 +8,9 @@ from polymorph.models.schema import FieldDescriptor
 from polymorph.models.types import DataType, FieldRole, Sensitivity
 
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
-_SPLIT = re.compile(r"[^a-z0-9]+")
 
 _SYNONYM_GROUPS = (
-    {"customer", "client", "kunde", "debitor", "account"},
+    {"customer", "client", "kunde", "debitor"},
     {"number", "num", "nr", "no", "nummer"},
     {"id", "identifier", "kennung", "key"},
     {"email", "mail", "emailaddress", "mailaddress"},
@@ -39,8 +38,12 @@ for index, group in enumerate(_SYNONYM_GROUPS):
 
 def normalize_name(value: str) -> str:
     value = _CAMEL.sub(" ", value)
-    value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
-    return " ".join(part for part in _SPLIT.split(value.casefold()) if part)
+    decomposed = unicodedata.normalize("NFKD", value.casefold())
+    without_marks = "".join(
+        character for character in decomposed if not unicodedata.combining(character)
+    )
+    separated = "".join(character if character.isalnum() else " " for character in without_marks)
+    return " ".join(separated.split())
 
 
 def normalized_tokens(value: str) -> tuple[str, ...]:
@@ -93,7 +96,11 @@ def name_similarity(left: FieldDescriptor, right: FieldDescriptor) -> tuple[floa
             rt = set(normalized_tokens(right_value))
             union = lt | rt
             jaccard = len(lt & rt) / len(union) if union else 0.0
-            sequence = SequenceMatcher(a=left_norm, b=right_norm).ratio()
+            sequence = (
+                SequenceMatcher(a=left_norm, b=right_norm).ratio()
+                if left_norm and right_norm
+                else 0.0
+            )
             score = 0.62 * jaccard + 0.38 * sequence
             if score > best_score:
                 best_score = score
@@ -111,7 +118,9 @@ def name_similarity(left: FieldDescriptor, right: FieldDescriptor) -> tuple[floa
     return best_score, tuple(reasons)
 
 
-def deterministic_score(source: FieldDescriptor, target: FieldDescriptor) -> tuple[float, tuple[str, ...]]:
+def deterministic_score(
+    source: FieldDescriptor, target: FieldDescriptor
+) -> tuple[float, tuple[str, ...]]:
     if not sensitivity_compatible(source.sensitivity, target.sensitivity):
         return 0.0, ("sensitivity incompatible",)
 

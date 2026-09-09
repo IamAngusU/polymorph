@@ -6,9 +6,13 @@ from polymorph.repair import RepairSeverity, assess_plan_drift, propose_plan_rep
 
 
 def test_renamed_source_field_can_be_repaired():
-    old = SchemaDescriptor("s", (FieldDescriptor("customer_no", "customer number", DataType.STRING),))
+    old = SchemaDescriptor(
+        "s", (FieldDescriptor("customer_no", "customer number", DataType.STRING),)
+    )
     new = SchemaDescriptor("s", (FieldDescriptor("client_no", "client number", DataType.STRING),))
-    target = SchemaDescriptor("t", (FieldDescriptor("customer_number", "customer number", DataType.STRING),))
+    target = SchemaDescriptor(
+        "t", (FieldDescriptor("customer_number", "customer number", DataType.STRING),)
+    )
     plan = MappingPlan(
         "p",
         "s",

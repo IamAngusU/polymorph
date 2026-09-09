@@ -41,7 +41,9 @@ class KeyringSecretProvider:
         try:
             import keyring
         except ImportError as exc:
-            raise PolymorphError("keyring extra is required for OS credential-store access") from exc
+            raise PolymorphError(
+                "keyring extra is required for OS credential-store access"
+            ) from exc
         value = keyring.get_password(self.service, reference)
         if value is None:
             raise ConnectorError("referenced keyring secret is unavailable")

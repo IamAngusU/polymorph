@@ -155,3 +155,72 @@ def test_exact_deterministic_match_can_still_auto_promote() -> None:
 
     assert decision.status is MappingStatus.AUTO
     assert decision.target_field_id == "customer_id"
+
+
+def test_decisive_deterministic_match_does_not_pay_model_cost() -> None:
+    class CountingEncoder:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def similarities(self, query: str, candidates):
+            self.calls += 1
+            return [0.9 for _ in candidates]
+
+        def similarity(self, left: str, right: str) -> float:
+            return self.similarities(left, [right])[0]
+
+    class CountingReranker:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def scores(self, query: str, candidates):
+            self.calls += 1
+            return [0.9 for _ in candidates]
+
+    encoder = CountingEncoder()
+    reranker = CountingReranker()
+    source = FieldDescriptor("s", "customer id", DataType.STRING)
+    target = SchemaDescriptor(
+        "target",
+        (
+            FieldDescriptor("customer_id", "customer id", DataType.STRING),
+            FieldDescriptor("invoice_id", "invoice id", DataType.STRING),
+        ),
+    )
+
+    decision = HybridMatcher(semantic=encoder, reranker=reranker).decide(source, target)
+
+    assert decision.status is MappingStatus.AUTO
+    assert encoder.calls == 0
+    assert reranker.calls == 0
+
+
+def test_exact_cyrillic_name_can_auto_promote_without_being_erased() -> None:
+    source = FieldDescriptor("s", "Клиент", DataType.STRING)
+    target = SchemaDescriptor("target", (FieldDescriptor("t", "Клиент", DataType.STRING),))
+
+    decision = HybridMatcher().decide(source, target)
+
+    assert decision.status is MappingStatus.AUTO
+    assert decision.target_field_id == "t"
+
+
+def test_unrelated_non_latin_names_are_not_deterministically_equal() -> None:
+    source = FieldDescriptor("s", "Клиент", DataType.STRING)
+    target = SchemaDescriptor("target", (FieldDescriptor("t", "顧客番号", DataType.STRING),))
+
+    decision = HybridMatcher().decide(source, target)
+
+    assert decision.status is not MappingStatus.AUTO
+
+
+def test_account_number_does_not_auto_map_to_customer_number() -> None:
+    source = FieldDescriptor("s", "account number", DataType.STRING)
+    target = SchemaDescriptor(
+        "target",
+        (FieldDescriptor("customer_number", "customer number", DataType.STRING),),
+    )
+
+    decision = HybridMatcher().decide(source, target)
+
+    assert decision.status is not MappingStatus.AUTO

@@ -5,12 +5,14 @@ import hashlib
 import json
 import os
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from .errors import IntegrityError
 from .signing import SigningKeyPair, verify_ed25519
+from .sqlite_safety import configure_sqlite_durability
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,13 +35,12 @@ class AuditEvent:
             timestamp = timestamp.replace(tzinfo=UTC)
         else:
             timestamp = timestamp.astimezone(UTC)
-        if self.reason_code is not None:
-            if (
-                not self.reason_code
-                or len(self.reason_code) > 96
-                or not self.reason_code.replace("_", "").isalnum()
-            ):
-                raise ValueError("audit reason_code must be machine-readable")
+        if self.reason_code is not None and (
+            not self.reason_code
+            or len(self.reason_code) > 96
+            or not self.reason_code.replace("_", "").isalnum()
+        ):
+            raise ValueError("audit reason_code must be machine-readable")
         return {
             "actor": self.actor,
             "connector_id": self.connector_id,
@@ -83,12 +84,11 @@ class AuditLog:
         connection = sqlite3.connect(self.path, timeout=10.0, isolation_level=None)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA busy_timeout = 10000")
-        connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA synchronous = FULL")
+        configure_sqlite_durability(connection)
         return connection
 
     def _initialize(self) -> None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS audit_events (
@@ -134,6 +134,8 @@ class AuditLog:
                     signature,
                 ),
             )
+            if cursor.lastrowid is None:
+                raise IntegrityError("audit insert did not return a sequence")
             sequence = int(cursor.lastrowid)
             connection.execute("COMMIT")
             return AuditRecord(sequence, payload, previous_hash, event_hash, signature)
@@ -145,9 +147,10 @@ class AuditLog:
             connection.close()
 
     def verify(self, *, trusted_public_key: bytes | None = None) -> int:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             rows = connection.execute(
-                "SELECT sequence, event_json, previous_hash, event_hash, signature FROM audit_events ORDER BY sequence"
+                "SELECT sequence, event_json, previous_hash, event_hash, signature "
+                "FROM audit_events ORDER BY sequence"
             ).fetchall()
 
         previous_hash = "0" * 64
@@ -171,9 +174,10 @@ class AuditLog:
         return len(rows)
 
     def export_jsonl(self) -> str:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             rows = connection.execute(
-                "SELECT sequence, event_json, previous_hash, event_hash, signature FROM audit_events ORDER BY sequence"
+                "SELECT sequence, event_json, previous_hash, event_hash, signature "
+                "FROM audit_events ORDER BY sequence"
             ).fetchall()
         lines = []
         for row in rows:

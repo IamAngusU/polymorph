@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import uuid
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -13,6 +14,7 @@ from .errors import IntegrityError, PolicyViolation
 from .models.mapping import MappingPlan
 from .models.schema import SchemaDescriptor
 from .serialization import plan_from_dict, plan_to_dict
+from .sqlite_safety import configure_sqlite_durability
 from .validation import PlanValidator
 
 
@@ -80,9 +82,8 @@ class RecipeStore:
         return connection
 
     def _initialize(self) -> None:
-        with self._connect() as connection:
-            connection.execute("PRAGMA journal_mode = WAL")
-            connection.execute("PRAGMA synchronous = FULL")
+        with closing(self._connect()) as connection, connection:
+            configure_sqlite_durability(connection)
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS recipes (
@@ -97,7 +98,11 @@ class RecipeStore:
                     UNIQUE(source_structural_fingerprint, target_structural_fingerprint, version)
                 );
                 CREATE INDEX IF NOT EXISTS idx_recipes_structure
-                    ON recipes(source_structural_fingerprint, target_structural_fingerprint, version DESC);
+                    ON recipes(
+                        source_structural_fingerprint,
+                        target_structural_fingerprint,
+                        version DESC
+                    );
                 CREATE TABLE IF NOT EXISTS recipe_runs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     recipe_id TEXT NOT NULL,
@@ -125,7 +130,7 @@ class RecipeStore:
 
         source_structural = source_schema.structural_fingerprint()
         target_structural = target_schema.structural_fingerprint()
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             row = connection.execute(
                 """
                 SELECT COALESCE(MAX(version), 0) AS version
@@ -169,7 +174,7 @@ class RecipeStore:
     ) -> Recipe | None:
         source_structural = source_schema.structural_fingerprint()
         target_structural = target_schema.structural_fingerprint()
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             row = connection.execute(
                 """
                 SELECT * FROM recipes
@@ -181,12 +186,12 @@ class RecipeStore:
         return self._row_to_recipe(row) if row is not None else None
 
     def get(self, recipe_id: str) -> Recipe | None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             row = connection.execute("SELECT * FROM recipes WHERE id = ?", (recipe_id,)).fetchone()
         return self._row_to_recipe(row) if row is not None else None
 
     def list(self, *, limit: int = 100) -> list[Recipe]:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             rows = connection.execute(
                 "SELECT * FROM recipes ORDER BY created_at DESC LIMIT ?", (max(1, limit),)
             ).fetchall()
@@ -202,7 +207,7 @@ class RecipeStore:
     ) -> None:
         if reason_code is not None and len(reason_code) > 128:
             raise ValueError("recipe reason code is too long")
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 """
                 INSERT INTO recipe_runs(recipe_id, plan_digest, outcome, reason_code, occurred_at)

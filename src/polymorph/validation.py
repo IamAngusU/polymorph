@@ -7,7 +7,6 @@ from .errors import PolicyViolation
 from .matching.deterministic import type_compatibility
 from .models.mapping import MappingPlan
 from .models.schema import SchemaDescriptor
-from .models.types import FieldRole
 from .policy import PolicyEngine
 from .transforms import is_known_transform
 
@@ -42,7 +41,9 @@ class PlanValidationReport:
     def raise_if_invalid(self) -> None:
         if self.valid:
             return
-        codes = ", ".join(item.code for item in self.findings if item.severity is ValidationSeverity.BLOCKING)
+        codes = ", ".join(
+            item.code for item in self.findings if item.severity is ValidationSeverity.BLOCKING
+        )
         raise PolicyViolation(f"mapping plan validation failed: {codes}")
 
 
@@ -175,11 +176,11 @@ class PlanValidator:
                 )
 
         for field in target_schema.fields:
-            if field.id in targeted or field.nullable or field.role is FieldRole.PRIMARY_KEY:
+            if field.id in targeted or field.nullable or field.destination_generated:
                 continue
             findings.append(
                 ValidationFinding(
-                    ValidationSeverity.REVIEW,
+                    ValidationSeverity.BLOCKING,
                     "required_target_unmapped",
                     "non-nullable target field is not supplied by this plan",
                     target_field_id=field.id,
