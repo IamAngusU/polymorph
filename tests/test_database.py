@@ -1,10 +1,24 @@
-from sqlalchemy import Column, ForeignKey, Integer, MetaData, String, Table, create_engine, text
+from pathlib import Path
+
+import pytest
+from sqlalchemy import (
+    Column,
+    ForeignKey,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    create_engine,
+    select,
+    text,
+)
 
 from polymorph.connectors.database import DatabaseConnector
+from polymorph.errors import ConnectorWriteError, WriteOutcome
 from polymorph.models.types import FieldRole
 
 
-def test_database_introspection_includes_foreign_key(tmp_path):
+def test_database_introspection_includes_foreign_key(tmp_path: Path) -> None:
     path = tmp_path / "test.sqlite"
     url = f"sqlite:///{path}"
     engine = create_engine(url)
@@ -28,7 +42,9 @@ def test_database_introspection_includes_foreign_key(tmp_path):
     assert schema.relations[0].target_container == "customers"
 
 
-def test_database_introspection_marks_server_defaults_as_destination_generated(tmp_path) -> None:
+def test_database_introspection_marks_server_defaults_as_destination_generated(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "defaults.sqlite"
     engine = create_engine(f"sqlite:///{path}")
     metadata = MetaData()
@@ -48,7 +64,7 @@ def test_database_introspection_marks_server_defaults_as_destination_generated(t
     assert not schema.by_id()["required"].destination_generated
 
 
-def test_database_secret_column_is_classified(tmp_path):
+def test_database_secret_column_is_classified(tmp_path: Path) -> None:
     path = tmp_path / "secret.sqlite"
     url = f"sqlite:///{path}"
     engine = create_engine(url)
@@ -66,7 +82,7 @@ def test_database_secret_column_is_classified(tmp_path):
     assert sensitivity["api_token"] == "secret"
 
 
-def test_unique_business_key_is_exposed_as_fk_lookup_alias(tmp_path):
+def test_unique_business_key_is_exposed_as_fk_lookup_alias(tmp_path: Path) -> None:
 
     path = tmp_path / "lookup-schema.sqlite"
     url = f"sqlite:///{path}"
@@ -95,7 +111,7 @@ def test_unique_business_key_is_exposed_as_fk_lookup_alias(tmp_path):
     assert relation.lookup_keys == ("external_customer_number",)
 
 
-def test_database_connector_context_manager_releases_sqlite_file(tmp_path) -> None:
+def test_database_connector_context_manager_releases_sqlite_file(tmp_path: Path) -> None:
     import sqlite3
     from contextlib import closing
 
@@ -111,3 +127,66 @@ def test_database_connector_context_manager_releases_sqlite_file(tmp_path) -> No
     moved = tmp_path / "released.sqlite"
     path.replace(moved)
     assert moved.exists()
+
+
+def test_database_connector_write_records_persists_rows(tmp_path: Path) -> None:
+    path = tmp_path / "write-success.sqlite"
+    url = f"sqlite:///{path}"
+    engine = create_engine(url)
+    metadata = MetaData()
+    orders = Table(
+        "orders",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("reference", String, nullable=False, unique=True),
+        Column("quantity", Integer, nullable=False),
+    )
+    metadata.create_all(engine)
+
+    with DatabaseConnector(url, "orders") as connector:
+        assert (
+            connector.write_records(
+                [
+                    {"reference": "order-1", "quantity": 2},
+                    {"reference": "order-2", "quantity": 5},
+                ]
+            )
+            == 2
+        )
+        reflected_table = connector._table()
+        assert connector._table() is reflected_table
+
+    with engine.connect() as connection:
+        rows = connection.execute(
+            select(orders.c.reference, orders.c.quantity).order_by(orders.c.reference)
+        ).all()
+    assert [tuple(row) for row in rows] == [("order-1", 2), ("order-2", 5)]
+
+
+def test_database_connector_constraint_error_rolls_back_all_rows(tmp_path: Path) -> None:
+    path = tmp_path / "write-constraint.sqlite"
+    url = f"sqlite:///{path}"
+    engine = create_engine(url)
+    metadata = MetaData()
+    orders = Table(
+        "orders",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("reference", String, nullable=False, unique=True),
+    )
+    metadata.create_all(engine)
+
+    with (
+        DatabaseConnector(url, "orders") as connector,
+        pytest.raises(ConnectorWriteError) as caught,
+    ):
+        connector.write_records(
+            [
+                {"reference": "duplicate"},
+                {"reference": "duplicate"},
+            ]
+        )
+
+    assert caught.value.outcome is WriteOutcome.NOT_COMMITTED
+    with engine.connect() as connection:
+        assert connection.execute(select(orders)).all() == []

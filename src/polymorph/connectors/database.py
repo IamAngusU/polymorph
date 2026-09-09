@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from threading import Lock
 
 from sqlalchemy import MetaData, Table, create_engine, inspect, select
 from sqlalchemy.engine import URL, Engine
@@ -102,6 +103,8 @@ class DatabaseConnector:
         self.table_name = table
         self.schema_name = schema
         self.sensitivity_overrides = dict(sensitivity_overrides or {})
+        self._reflected_table: Table | None = None
+        self._reflection_lock = Lock()
         self._closed = False
 
     def __enter__(self) -> DatabaseConnector:
@@ -124,8 +127,23 @@ class DatabaseConnector:
 
     def _table(self) -> Table:
         self._ensure_open()
-        metadata = MetaData()
-        return Table(self.table_name, metadata, schema=self.schema_name, autoload_with=self.engine)
+        reflected_table = self._reflected_table
+        if reflected_table is not None:
+            return reflected_table
+
+        with self._reflection_lock:
+            self._ensure_open()
+            reflected_table = self._reflected_table
+            if reflected_table is None:
+                metadata = MetaData()
+                reflected_table = Table(
+                    self.table_name,
+                    metadata,
+                    schema=self.schema_name,
+                    autoload_with=self.engine,
+                )
+                self._reflected_table = reflected_table
+            return reflected_table
 
     @staticmethod
     def _unique_columns(

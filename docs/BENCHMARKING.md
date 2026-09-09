@@ -5,6 +5,49 @@ Benchmarking is opt-in. Normal production paths do not start `tracemalloc`, proc
 The current development-machine measurements and exact test shape are recorded in
 [Performance baseline](PERFORMANCE_BASELINE.md).
 
+## Real workflow benchmark
+
+```bash
+polymorph benchmark workflow --records 1000 --batch-size 100 \
+  --work-dir ./benchmark-run --output ./workflow-result.json
+```
+
+This is a real local data-path test, not a sleep-based microbenchmark. It creates a deterministic
+CSV export and an actual SQLite destination, then exercises:
+
+- content-first file inspection
+- source and destination schema inspection
+- deterministic mapping and immutable plan construction
+- a complete no-write preflight over every generated record
+- per-field recipient encryption and Ed25519 source authentication
+- durable source outbox staging and reload
+- authenticated relay enqueue and fenced leases
+- destination decryption, contract validation and real SQLite commits
+- delivery ledger transitions, sealed quarantine storage and signed audit events
+- relay and source acknowledgements
+- final counts, all five destination values, empty queues, audit signature verification and five
+  plaintext-canary checks across blind SQLite files and sidecars
+
+The JSON report contains total wall/CPU/RSS measurements plus wall time, CPU time, call count,
+bounded latency sample count, p50/p95 call latency for repeated stages, throughput, storage bytes,
+runtime versions and SQLite durability settings. Single-call stages report null p50/p95. It
+contains counts and fixed reason codes, not generated record values, exception messages, PID or an
+absolute work path. A failed workflow is still emitted as JSON with the first failing stage and
+exits with code 7.
+
+The signed destination audit is enabled by default. Use `--no-audit` to measure the same path
+without it. `--work-dir` must point to a new or empty directory and is retained for inspection.
+Without that option, state is created in an automatically cleaned temporary directory. Add
+`--keep-work-dir` to retain an automatically named directory.
+
+Like the other benchmark commands, this uses sampled process RSS when `psutil` is installed and
+does not enable `tracemalloc` by default. `--tracemalloc` is available for allocation debugging,
+but its timings are not comparable with standard mode. The generated workflow proves integration
+correctness and measures local mechanics. It does not prove mapping accuracy on customer data.
+
+See the [Workflow lab](WORKFLOW_LAB.md) for reproducible commands, failure injection,
+report-safety limits and cold-versus-warm rules.
+
 ## File-path resource benchmark
 
 ```bash

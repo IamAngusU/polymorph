@@ -4,6 +4,7 @@ import argparse
 import getpass
 import importlib.util
 import json
+import os
 import platform
 import shutil
 import sqlite3
@@ -60,6 +61,7 @@ from .serialization import (
 from .spool import SealedSpool
 from .sqlite_safety import selected_journal_mode, sqlite_wal_is_safe
 from .validation import PlanValidator
+from .workflow_benchmark import run_workflow_benchmark
 
 
 def _resolved_file_path(value: str | Path) -> Path:
@@ -1111,6 +1113,42 @@ def _benchmark_mapping(args: argparse.Namespace) -> None:
         raise SystemExit(6)
 
 
+def _benchmark_workflow(args: argparse.Namespace) -> None:
+    report, resources = run_workflow_benchmark(
+        records=args.records,
+        batch_size=args.batch_size,
+        work_dir=args.work_dir,
+        keep_work_dir=args.keep_work_dir,
+        signed_audit=args.audit,
+        trace_python_allocations=args.tracemalloc,
+    )
+    resource_payload = resources.as_dict()
+    resource_payload.pop("pid", None)
+    _emit(
+        {
+            "benchmark": "workflow",
+            "version": 1,
+            "measurement": _benchmark_measurement_payload(args.tracemalloc),
+            "environment": {
+                "product_version": __version__,
+                "python_version": platform.python_version(),
+                "operating_system": platform.system(),
+                "operating_system_release": platform.release(),
+                "machine": platform.machine(),
+                "logical_cpus": os.cpu_count(),
+                "sqlite_version": sqlite3.sqlite_version,
+                "state_store_journal_policy": selected_journal_mode(),
+                "state_store_synchronous": "full",
+            },
+            "resources": resource_payload,
+            "workflow": report.as_dict(),
+        },
+        output=args.output,
+    )
+    if not report.success:
+        raise SystemExit(7)
+
+
 def _add_output(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output", "-o")
 
@@ -1338,6 +1376,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_output(benchmark_mapping)
     benchmark_mapping.set_defaults(func=_benchmark_mapping)
+    benchmark_workflow = benchmark_sub.add_parser(
+        "workflow",
+        help="run the signed and encrypted local workflow against a real SQLite destination",
+    )
+    benchmark_workflow.add_argument("--records", type=int, default=1000)
+    benchmark_workflow.add_argument("--batch-size", type=int, default=100)
+    benchmark_workflow.add_argument(
+        "--work-dir",
+        help="use and retain this new or empty directory for benchmark state",
+    )
+    benchmark_workflow.add_argument(
+        "--keep-work-dir",
+        action="store_true",
+        help="retain an automatically allocated work directory",
+    )
+    benchmark_workflow.add_argument(
+        "--audit",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="write and verify a signed destination audit chain",
+    )
+    benchmark_workflow.add_argument(
+        "--tracemalloc",
+        action="store_true",
+        help="trace CPython allocations; intrusive and may materially distort wall time",
+    )
+    _add_output(benchmark_workflow)
+    benchmark_workflow.set_defaults(func=_benchmark_workflow)
 
     key = sub.add_parser("key", help="manage password-encrypted destination recipient keys")
     key_sub = key.add_subparsers(dest="key_command", required=True)

@@ -12,6 +12,11 @@ All notable changes to this alpha are documented here.
 - distinct destination audit event types for normal delivery, replay and force replay
 - pinned csv-spectrum parser regressions with byte-level integrity and provenance checks
 - a measured file, model and full secure-transport performance baseline
+- a reproducible end-to-end workflow benchmark with real CSV, SQLite, signed audit, stage timing,
+  CPU, RSS, storage and durability evidence
+- a six-scenario failure lab for content confusion, ambiguous mapping, recipe suspension, relay
+  tampering, lost acknowledgements and uncertain destination outcomes
+- a dedicated CI job that publishes workflow and failure-lab evidence
 
 ### Changed
 
@@ -21,6 +26,8 @@ All notable changes to this alpha are documented here.
 - delivery receipts distinguish disabled, recorded and failed audit writes
 - audit metadata and recipe reason codes now enforce their documented bounded machine format
 - audit summaries and recipe health use one consistent SQLite read snapshot
+- database connectors cache their immutable reflected table instead of reflecting it before every
+  record write
 
 ### Fixed
 
@@ -30,6 +37,8 @@ All notable changes to this alpha are documented here.
   classifier conflict
 - audit verification and export no longer create a missing database and report it as a valid empty
   log
+- workflow verification checks every destination value without assuming relay delivery order,
+  reports post-commit audit failures truthfully and strips local paths and PID from standard JSON
 
 ## 0.4.0a1 - 2026-09-09
 

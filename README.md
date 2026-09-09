@@ -159,6 +159,7 @@ polymorph inspect auto ./unknown-upload --magika
 polymorph doctor
 polymorph benchmark inspect ./unknown-upload --records 10000 --magika
 polymorph benchmark mapping ./benchmarks/safety-smoke.json --require-auto-precision 1.0
+polymorph benchmark workflow --records 1000 --batch-size 100 --output workflow.json
 polymorph recipe health
 polymorph audit summary ./audit.sqlite
 polymorph explain write_outcome_unknown
@@ -173,6 +174,7 @@ The benchmark commands are explicit diagnostics. Production code paths do not st
 - [File trust gate](https://github.com/IamAngusU/polymorph/blob/main/docs/FILE_TRUST.md)
 - [Recipes](https://github.com/IamAngusU/polymorph/blob/main/docs/RECIPES.md)
 - [Benchmarking](https://github.com/IamAngusU/polymorph/blob/main/docs/BENCHMARKING.md)
+- [Workflow and failure lab](https://github.com/IamAngusU/polymorph/blob/main/docs/WORKFLOW_LAB.md)
 - [Measured performance baseline](https://github.com/IamAngusU/polymorph/blob/main/docs/PERFORMANCE_BASELINE.md)
 - [Protocol](https://github.com/IamAngusU/polymorph/blob/main/docs/PROTOCOL.md)
 - [Threat model](https://github.com/IamAngusU/polymorph/blob/main/docs/THREAT_MODEL.md)

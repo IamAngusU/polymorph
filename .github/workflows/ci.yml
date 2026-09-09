@@ -80,6 +80,41 @@ jobs:
       - name: Dependency consistency
         run: python -m pip check
 
+  workflow-lab:
+    name: Real workflow and failure lab
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install workflow lab
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,benchmark]"
+      - name: Measure the real local workflow
+        run: >-
+          python -W error -m polymorph benchmark workflow --records 100 --batch-size 25
+          --output workflow-benchmark.json
+      - name: Exercise failure boundaries
+        if: always()
+        run: >-
+          python -W error -m pytest tests/test_workflow_failure_lab.py --strict-config
+          --strict-markers --durations=0 --junitxml=workflow-failure-lab.xml
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: workflow-lab-evidence
+          path: |
+            workflow-benchmark.json
+            workflow-failure-lab.xml
+          if-no-files-found: warn
+          retention-days: 14
+
   bootstrap:
     name: Bootstrap (${{ matrix.os }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
@@ -106,7 +141,7 @@ jobs:
         run: python scripts/dev.py doctor
 
   package:
-    needs: [quality, test]
+    needs: [quality, test, workflow-lab]
     runs-on: ubuntu-latest
     timeout-minutes: 15
 

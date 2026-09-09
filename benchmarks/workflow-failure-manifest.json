@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "suite": "workflow-failure-lab",
+  "scenarios": [
+    {
+      "id": "content_extension_conflict",
+      "integration": "real",
+      "boundary": "file inspection to explicitly selected connector",
+      "expected_status": "rejected_before_parser_open",
+      "expected_reason": "Excel connector expected content type [xlsx], detected delimited_text",
+      "metrics": ["duration_ms", "input_bytes", "parser_opened"]
+    },
+    {
+      "id": "ambiguous_mapping",
+      "integration": "real",
+      "boundary": "prepare CLI mapping promotion gate",
+      "expected_status": "manual_review",
+      "expected_reason": "no_auto_approved_mapping_rules",
+      "metrics": ["duration_ms", "decision_score", "decision_margin", "plan_written"]
+    },
+    {
+      "id": "recipe_circuit",
+      "integration": "real_with_seeded_failures",
+      "boundary": "prepare CLI recipe health and adaptation",
+      "expected_status": "fresh_mapping",
+      "expected_reason": "recipe_auto_reuse_suspended",
+      "metrics": ["duration_ms", "rejection_streak", "recipe_version"]
+    },
+    {
+      "id": "tampered_relay_record",
+      "integration": "real_with_tamper_injection",
+      "boundary": "signed ingress and sealed relay lease",
+      "expected_status": "dead_lettered",
+      "expected_reason": "relay_source_authentication_failed",
+      "metrics": ["duration_ms", "leased_records", "dead_letters", "plaintext_leaks"]
+    },
+    {
+      "id": "lost_ack_duplicate_suppression",
+      "integration": "real_with_clock_injection",
+      "boundary": "outbox to relay to destination and lease redelivery",
+      "expected_status": "duplicate",
+      "expected_reason": null,
+      "expected_proof": "destination ledger is COMMITTED and the destination contains one record",
+      "metrics": [
+        "duration_ms",
+        "first_delivery_ms",
+        "redelivery_ms",
+        "destination_records",
+        "plaintext_leaks"
+      ]
+    },
+    {
+      "id": "unknown_write_outcome",
+      "integration": "real_with_lost_ack_injection",
+      "boundary": "destination commit to durable delivery ledger and signed audit",
+      "expected_status": "quarantined",
+      "expected_reason": "write_outcome_unknown",
+      "metrics": [
+        "duration_ms",
+        "write_calls",
+        "destination_records",
+        "blind_retries",
+        "signed_audit_events"
+      ]
+    }
+  ]
+}
