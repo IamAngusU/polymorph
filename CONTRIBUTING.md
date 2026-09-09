@@ -2,6 +2,16 @@
 
 Polymorph is security-sensitive infrastructure. Changes should preserve explicit trust boundaries and should prefer failing closed over silently altering data semantics.
 
+## External contributions
+
+Issues, design feedback, test cases and responsible security reports are welcome. Before sending a
+code contribution, open an issue or contact the maintainer first.
+
+The project combines a public noncommercial license with separately negotiated commercial
+licenses. Third-party code cannot be merged until a contributor agreement covering that licensing
+model has been reviewed and accepted by both sides. This file is not that agreement. Unsolicited
+pull requests may be discussed, but should not be expected to merge until that process exists.
+
 ## Before proposing a change
 
 - Add or update tests for every security- or delivery-relevant behavior.

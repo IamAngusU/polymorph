@@ -207,4 +207,7 @@ Polymorph is source-available under the **PolyForm Noncommercial License 1.0.0**
 Source. Permitted use is defined by the license itself. Commercial use requires a separate license
 from Angus Uelsmann.
 
+Paid commercial terms, including any revenue participation or white-label rights, are agreed in a
+separate written agreement. See [commercial licensing](https://github.com/IamAngusU/polymorph/blob/main/COMMERCIAL.md).
+
 Required notices reference [angusu.de](https://angusu.de) and this repository. Third-party components retain their own licenses; see [THIRD_PARTY.md](https://github.com/IamAngusU/polymorph/blob/main/THIRD_PARTY.md).

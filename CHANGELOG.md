@@ -15,6 +15,7 @@ All notable changes to this alpha are documented here.
 
 ### Changed
 
+- commercial licensing and external contribution boundaries are stated explicitly
 - standard benchmarks no longer enable high-overhead CPython allocation tracing unless explicitly
   requested
 - delivery receipts distinguish disabled, recorded and failed audit writes
