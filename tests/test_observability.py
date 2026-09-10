@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from polymorph.errors import IntegrityError
-from polymorph.observability import EventStream, OperationalEvent
+from polymorph.observability import MAX_COMPACT_EVENT_BYTES, EventStream, OperationalEvent
 from polymorph.workflow_benchmark import run_workflow_benchmark
 
 _RUN_A = "01" * 16
@@ -101,6 +101,75 @@ def test_event_stream_rejects_unbounded_or_non_machine_fields(
         stream.emit(**arguments)  # type: ignore[arg-type]
 
     assert not stream.path.exists()
+
+
+@pytest.mark.parametrize("limit", [True, False, "4096", 4095, 1024 * 1024 * 1024 + 1])
+def test_event_stream_rejects_invalid_total_size_limits(tmp_path: Path, limit: object) -> None:
+    error = TypeError if isinstance(limit, (bool, str)) else ValueError
+    with pytest.raises(error, match="stream size limit"):
+        EventStream(tmp_path / "events.jsonl", max_stream_bytes=limit)  # type: ignore[arg-type]
+
+
+def test_event_stream_stops_before_total_size_limit_without_partial_append(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "events.jsonl"
+    stream = EventStream(
+        path,
+        run_id=_RUN_A,
+        clock=lambda: _NOW,
+        max_stream_bytes=4096,
+    )
+
+    for _ in range(100):
+        try:
+            stream.emit(component="runtime", event_type="delivery", status="passed")
+        except ValueError as exc:
+            assert "configured size limit" in str(exc)
+            break
+    else:
+        raise AssertionError("event stream did not enforce its configured size limit")
+
+    committed = path.read_bytes()
+    assert 0 < len(committed) <= 4096
+    assert stream.read()
+    with pytest.raises(ValueError, match="configured size limit"):
+        stream.emit(component="runtime", event_type="delivery", status="passed")
+    assert path.read_bytes() == committed
+
+
+def test_compact_writer_bound_covers_maximum_valid_event_fields(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    event = OperationalEvent(
+        event_id="1" * 32,
+        run_id=_RUN_A,
+        correlation_id="2" * 32,
+        timestamp=datetime.max.replace(tzinfo=UTC),
+        component="a" + "x" * 95,
+        event_type="a" + "x" * 95,
+        status="a" + "x" * 95,
+        reason_code="a" + "x" * 95,
+        duration_ms=float.fromhex("0x1.fffffffffffffp+1023"),
+        item_count=(1 << 63) - 1,
+    )
+
+    EventStream(path, run_id=_RUN_A).append(event)
+
+    assert path.stat().st_size <= MAX_COMPACT_EVENT_BYTES
+
+
+def test_event_stream_rejects_existing_file_above_total_size_limit(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    oversized = b"x" * 4097
+    path.write_bytes(oversized)
+    stream = EventStream(path, run_id=_RUN_A, max_stream_bytes=4096)
+
+    with pytest.raises(IntegrityError, match="stream exceeds its configured size limit"):
+        stream.read()
+    with pytest.raises(IntegrityError, match="stream exceeds its configured size limit"):
+        stream.emit(component="runtime", event_type="delivery", status="passed")
+
+    assert path.read_bytes() == oversized
 
 
 def test_event_reader_rejects_extra_fields(tmp_path: Path) -> None:

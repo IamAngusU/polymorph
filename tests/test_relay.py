@@ -48,6 +48,7 @@ def _record(
         plan=plan,
         destination_public_key=keys.public_bytes(),
         signing_key=signer,
+        allow_unauthenticated_recipient_key=True,
         transfer_ttl=transfer_ttl,
     )
     trust = SourceTrustStore([TrustedSourceKey(signer.public_bytes(), "tenant-a", "src")])

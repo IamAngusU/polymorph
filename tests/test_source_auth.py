@@ -51,6 +51,7 @@ def _record(
         plan=plan,
         destination_public_key=recipient.public_bytes(),
         signing_key=signer,
+        allow_unauthenticated_recipient_key=True,
     ).prepare_record({"value": "hello"}, record_id="row-1", transfer_id="transfer-1")
 
 

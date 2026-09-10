@@ -26,6 +26,8 @@ class PathLockTimeout(PathLockError):
 
 _THREAD_LOCKS_GUARD = threading.Lock()
 _THREAD_LOCKS: dict[str, tuple[LockType, int]] = {}
+_WINDOWS_REPLACE_RETRY_SECONDS = 1.0
+_WINDOWS_REPLACE_MAX_INTERVAL_SECONDS = 0.05
 
 
 class _MsvcrtModule(Protocol):
@@ -85,13 +87,36 @@ def _lock_file_for(target: Path, key: str) -> Path:
     return target.parent / f".polymorph-write-{digest}.lock"
 
 
+def _publish_initialized_lock_file(path: Path) -> None:
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            handle.write(b"\0")
+            handle.flush()
+            os.fsync(handle.fileno())
+        with suppress(FileExistsError):
+            os.link(temporary, path)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        with suppress(OSError):
+            os.unlink(temporary)
+
+
 def _open_lock_file(path: Path) -> int:
-    flags = os.O_CREAT | os.O_RDWR
+    flags = os.O_RDWR
     flags |= getattr(os, "O_CLOEXEC", 0)
     flags |= getattr(os, "O_BINARY", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(path, flags, 0o600)
+    except FileNotFoundError:
+        try:
+            _publish_initialized_lock_file(path)
+            fd = os.open(path, flags, 0o600)
+        except OSError as exc:
+            raise PathLockError("could not initialize the destination write lock") from exc
     except OSError as exc:
         raise PathLockError("could not open the destination write lock") from exc
     try:
@@ -103,9 +128,8 @@ def _open_lock_file(path: Path) -> int:
             or (opened.st_dev, opened.st_ino) != (linked.st_dev, linked.st_ino)
         ):
             raise PathLockError("destination write lock is not a stable regular file")
-        if opened.st_size == 0:
-            os.write(fd, b"\0")
-            os.fsync(fd)
+        if opened.st_size != 1:
+            raise PathLockError("destination write lock has an invalid size")
         os.lseek(fd, 0, os.SEEK_SET)
         return fd
     except Exception:
@@ -139,6 +163,33 @@ def _unlock(fd: int) -> None:
     else:
         posix_module = _fcntl()
         posix_module.flock(fd, posix_module.LOCK_UN)
+
+
+def _is_retryable_windows_replace_error(
+    error: OSError,
+    *,
+    platform_name: str | None = None,
+) -> bool:
+    platform_name = os.name if platform_name is None else platform_name
+    return platform_name == "nt" and (
+        isinstance(error, PermissionError) or getattr(error, "winerror", None) in {5, 32, 33}
+    )
+
+
+def _replace_with_retry(source: str | Path, target: str | Path) -> None:
+    """Publish across short-lived Windows sharing violations while holding the path lock."""
+
+    deadline = time.monotonic() + _WINDOWS_REPLACE_RETRY_SECONDS
+    interval = 0.005
+    while True:
+        try:
+            os.replace(source, target)
+            return
+        except OSError as exc:
+            if not _is_retryable_windows_replace_error(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+            interval = min(interval * 2, _WINDOWS_REPLACE_MAX_INTERVAL_SECONDS)
 
 
 @contextmanager
@@ -214,14 +265,15 @@ def atomic_write_text(
             handle.flush()
             os.fsync(handle.fileno())
         if overwrite:
-            os.replace(temporary, target)
+            _replace_with_retry(temporary, target)
         else:
             # Linking a fully flushed temporary file creates the destination name only if it
             # does not already exist. This avoids a check-then-replace race for key material.
             os.link(temporary, target)
-            os.unlink(temporary)
-        if private and os.name == "posix":
-            os.chmod(target, 0o600)
+            # Publication already committed. A stale private temporary file is safer than
+            # reporting NOT_COMMITTED and inviting a duplicate retry.
+            with suppress(OSError):
+                os.unlink(temporary)
     except Exception:
         with suppress(FileNotFoundError):
             os.unlink(temporary)

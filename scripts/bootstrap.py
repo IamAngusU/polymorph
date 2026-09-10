@@ -11,7 +11,8 @@ ROOT = Path(__file__).resolve().parent.parent
 VENV = ROOT / ".venv"
 DEFAULT_HOME = ROOT / ".polymorph"
 BASE_EXTRAS = ("dev", "fileid", "csv-detection", "benchmark")
-PROFILES = ("multilingual-cpu", "reranker-multilingual-cpu")
+RESEARCH_ENCODER_PROFILE = "multilingual-cpu"
+RESEARCH_RERANKER_PROFILE = "reranker-multilingual-cpu"
 MODEL_ARCHITECTURES = {"amd64", "x86_64", "aarch64", "arm64"}
 
 
@@ -86,13 +87,51 @@ def _require_matching_venv(requested: PythonDetails, existing: PythonDetails) ->
     )
 
 
-def main() -> int:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Create a complete local Polymorph dev setup.")
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--home", type=Path, default=DEFAULT_HOME)
-    parser.add_argument("--skip-models", action="store_true")
+    parser.add_argument(
+        "--skip-models",
+        action="store_true",
+        help="retain the model-free default explicitly (compatibility option)",
+    )
+    parser.add_argument(
+        "--include-research-encoder",
+        action="store_true",
+        help="install the MiniLM encoder after reviewing its training-data provenance",
+    )
+    parser.add_argument(
+        "--include-research-reranker",
+        action="store_true",
+        help="install the mMARCO reranker after reviewing its training-data terms",
+    )
     parser.add_argument("--skip-checks", action="store_true")
-    args = parser.parse_args()
+    return parser
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    include_models = args.include_research_encoder or args.include_research_reranker
+    if args.skip_models and include_models:
+        parser.error("--skip-models cannot be combined with research-model options")
+    return args
+
+
+def _research_profiles(args: argparse.Namespace) -> tuple[str, ...]:
+    profiles: list[str] = []
+    if args.include_research_encoder:
+        profiles.append(RESEARCH_ENCODER_PROFILE)
+    if args.include_research_reranker:
+        profiles.append(RESEARCH_RERANKER_PROFILE)
+    return tuple(profiles)
+
+
+def main() -> int:
+    args = _parse_args()
+    profiles = _research_profiles(args)
+    include_models = bool(profiles)
 
     requested_python = _python_details(args.python)
     home = args.home.expanduser().resolve()
@@ -106,23 +145,23 @@ def main() -> int:
     venv_python = _python_details(python)
     _require_matching_venv(requested_python, venv_python)
     architecture = venv_python.architecture
-    if not args.skip_models and architecture not in MODEL_ARCHITECTURES:
+    if include_models and architecture not in MODEL_ARCHITECTURES:
         supported = ", ".join(sorted(MODEL_ARCHITECTURES))
         raise SystemExit(
             f"Pinned model bootstrap does not support architecture {architecture!r}; "
-            f"supported values: {supported}. Use --skip-models for the core runtime."
+            f"supported values: {supported}. Use the model-free core runtime."
         )
     polymorph = _venv_executable("polymorph")
     ruff = _venv_executable("ruff")
     extras = [*BASE_EXTRAS]
-    if not args.skip_models:
+    if include_models:
         extras.append("semantic")
     editable_target = f".[{','.join(extras)}]"
     _run([python, "-m", "pip", "install", "--upgrade", "pip"], env=env)
     _run([python, "-m", "pip", "install", "-e", editable_target], env=env)
 
-    if not args.skip_models:
-        for profile in PROFILES:
+    if include_models:
+        for profile in profiles:
             destination = home / "models" / profile
             _run(
                 [
@@ -137,18 +176,24 @@ def main() -> int:
                 env=env,
             )
 
-        smoke = (
-            "from polymorph.matching.semantic import ("
-            "MULTILINGUAL_CPU,RERANKER_MULTILINGUAL_CPU,load_profile_encoder,"
-            "load_profile_reranker);"
-            "from polymorph.paths import model_home;"
-            "e=load_profile_encoder(MULTILINGUAL_CPU,model_home(MULTILINGUAL_CPU.name));"
-            "r=load_profile_reranker(RERANKER_MULTILINGUAL_CPU,"
-            "model_home(RERANKER_MULTILINGUAL_CPU.name));"
-            "assert len(e.similarities('customer id',['customer number','invoice date']))==2;"
-            "assert len(r.scores('customer id',['customer number','invoice date']))==2"
-        )
-        _run([python, "-c", smoke], env=env)
+        if args.include_research_encoder:
+            encoder_smoke = (
+                "from polymorph.matching.semantic import MULTILINGUAL_CPU,load_profile_encoder;"
+                "from polymorph.paths import model_home;"
+                "e=load_profile_encoder(MULTILINGUAL_CPU,model_home(MULTILINGUAL_CPU.name));"
+                "assert len(e.similarities('customer id',['customer number','invoice date']))==2"
+            )
+            _run([python, "-c", encoder_smoke], env=env)
+        if args.include_research_reranker:
+            reranker_smoke = (
+                "from polymorph.matching.semantic import ("
+                "RERANKER_MULTILINGUAL_CPU,load_profile_reranker);"
+                "from polymorph.paths import model_home;"
+                "r=load_profile_reranker(RERANKER_MULTILINGUAL_CPU,"
+                "model_home(RERANKER_MULTILINGUAL_CPU.name));"
+                "assert len(r.scores('customer id',['customer number','invoice date']))==2"
+            )
+            _run([python, "-c", reranker_smoke], env=env)
 
     if not args.skip_checks:
         _run([python, "-m", "compileall", "-q", "src", "tests", "scripts", "examples.py"], env=env)
@@ -181,7 +226,7 @@ def main() -> int:
         _run([python, "-m", "pip", "check"], env=env)
 
     _run([polymorph, "doctor"], env=env)
-    print(f"Ready. Data and models live in {home}")
+    print(f"Ready. Local state and any explicitly installed models live in {home}")
     return 0
 
 

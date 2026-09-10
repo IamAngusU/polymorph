@@ -38,6 +38,7 @@ def _source_agent() -> BlindSourceAgent:
         plan=plan,
         destination_public_key=RecipientKeyPair.generate().public_bytes(),
         signing_key=SigningKeyPair.generate(),
+        allow_unauthenticated_recipient_key=True,
     )
 
 

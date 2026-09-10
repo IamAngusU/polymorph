@@ -20,6 +20,10 @@ from .filesystem import exclusive_path_lock
 
 _SCHEMA_VERSION = 1
 _MAX_EVENT_BYTES = 4096
+MAX_COMPACT_EVENT_BYTES = 1024
+MIN_EVENT_STREAM_BYTES = _MAX_EVENT_BYTES
+DEFAULT_EVENT_STREAM_BYTES = 64 * 1024 * 1024
+MAX_EVENT_STREAM_BYTES = 1024 * 1024 * 1024
 _TRACE_ID = re.compile(r"^[0-9a-f]{32}$")
 _MACHINE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,95}$")
 _EVENT_FIELDS = frozenset(
@@ -298,8 +302,8 @@ class EventStream:
     """Durable payload-free JSONL event stream for local operational diagnostics.
 
     Cooperative writers are serialized across threads and processes. Every complete event is
-    flushed with ``fsync`` before ``emit`` returns. This is an operational log, not a signed or
-    hash-chained security audit trail.
+    flushed with ``fsync`` before ``emit`` returns. Individual lines and total stream bytes are
+    bounded. This is an operational log, not a signed or hash-chained security audit trail.
     """
 
     def __init__(
@@ -309,9 +313,17 @@ class EventStream:
         run_id: str | None = None,
         clock: Callable[[], datetime] | None = None,
         lock_timeout_seconds: float = 10.0,
+        max_stream_bytes: int = DEFAULT_EVENT_STREAM_BYTES,
     ) -> None:
         if not math.isfinite(lock_timeout_seconds) or lock_timeout_seconds < 0:
             raise ValueError("event stream lock timeout must be finite and non-negative")
+        if isinstance(max_stream_bytes, bool) or not isinstance(max_stream_bytes, int):
+            raise TypeError("event stream size limit must be an integer")
+        if not MIN_EVENT_STREAM_BYTES <= max_stream_bytes <= MAX_EVENT_STREAM_BYTES:
+            raise ValueError(
+                "event stream size limit must be between "
+                f"{MIN_EVENT_STREAM_BYTES} and {MAX_EVENT_STREAM_BYTES} bytes"
+            )
         self.path = Path(path)
         self.run_id = _validate_trace_id(
             run_id if run_id is not None else new_trace_id(),
@@ -319,6 +331,7 @@ class EventStream:
         )
         self._clock = clock or (lambda: datetime.now(UTC))
         self._lock_timeout_seconds = lock_timeout_seconds
+        self._max_stream_bytes = max_stream_bytes
         self._validated_state: tuple[int, int, int, int] | None = None
 
     def correlation_id(self, key: str) -> str:
@@ -367,12 +380,17 @@ class EventStream:
             ).encode("utf-8")
             + b"\n"
         )
+        if len(encoded) > MAX_COMPACT_EVENT_BYTES:
+            raise ValueError("operational event exceeds the compact writer size limit")
         if len(encoded) > _MAX_EVENT_BYTES:
             raise ValueError("operational event exceeds the bounded line size")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with exclusive_path_lock(self.path, timeout_seconds=self._lock_timeout_seconds):
             descriptor = self._open_for_append()
             try:
+                current = os.fstat(descriptor)
+                if current.st_size + len(encoded) > self._max_stream_bytes:
+                    raise ValueError("operational event stream reached its configured size limit")
                 remaining = memoryview(encoded)
                 while remaining:
                     written = os.write(descriptor, remaining)
@@ -405,6 +423,8 @@ class EventStream:
                 or (opened.st_dev, opened.st_ino) != (linked.st_dev, linked.st_ino)
             ):
                 raise IntegrityError("operational event path is not a stable regular file")
+            if opened.st_size > self._max_stream_bytes:
+                raise IntegrityError("operational event stream exceeds its configured size limit")
             state = (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
             if opened.st_size:
                 os.lseek(descriptor, -1, os.SEEK_END)
@@ -459,6 +479,8 @@ class EventStream:
                 linked.st_ino,
             ):
                 raise IntegrityError("operational event path is not a stable regular file")
+            if opened.st_size > self._max_stream_bytes:
+                raise IntegrityError("operational event stream exceeds its configured size limit")
             return descriptor
         except Exception:
             os.close(descriptor)

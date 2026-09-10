@@ -76,6 +76,7 @@ def test_csv_to_json_blind_delivery_workflow_survives_every_boundary(tmp_path: P
         plan=plan,
         destination_public_key=recipient.public_bytes(),
         signing_key=signer,
+        allow_unauthenticated_recipient_key=True,
     )
     outbox_path = tmp_path / "source-outbox.db"
     relay_path = tmp_path / "relay.db"
@@ -184,6 +185,7 @@ def test_crash_after_destination_commit_recovers_without_duplicate_write(
         plan=plan,
         destination_public_key=recipient.public_bytes(),
         signing_key=signer,
+        allow_unauthenticated_recipient_key=True,
     ).prepare_record(
         {"value": "write-once"},
         record_id="row-1",

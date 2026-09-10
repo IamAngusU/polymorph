@@ -1,8 +1,9 @@
 # Workflow lab
 
 The workflow lab measures one complete successful local data path, checks injected failure
-boundaries, stresses local restart and concurrency recovery, and validates the resulting
-operational event stream. None of these commands is a production load test.
+boundaries including a real localhost TLS acknowledgement loss, stresses local restart and
+concurrency recovery, and validates the resulting operational event stream. None of these commands
+is a production load test.
 
 ## Reproduce the successful workflow
 
@@ -20,9 +21,10 @@ polymorph benchmark workflow --records 1000 --batch-size 100 --work-dir ./.polym
 The work directory must be new or empty. Pick a different directory for every repetition. The
 command creates a deterministic CSV source and a real SQLite destination. It then performs content
 inspection, schema discovery, deterministic mapping, complete no-write preflight, recipient
-encryption, source signing, durable outbox staging, authenticated relay transport, destination
-decryption, contract validation, real SQLite writes, delivery-ledger transitions, signed audit,
-relay acknowledgement and source acknowledgement.
+identity and recipient-certificate verification, recipient encryption, source signing, durable
+outbox staging, authenticated relay transport, destination decryption, contract validation, real
+SQLite writes, delivery-ledger transitions, signed audit, relay acknowledgement and source
+acknowledgement.
 
 The final verification requires all requested destination rows and committed ledger entries,
 exact values for all five fixture fields independent of relay order, empty outbox and relay queues,
@@ -35,7 +37,10 @@ clean workflow completion.
 
 ```bash
 python -W error -m pytest tests/test_workflow_failure_lab.py tests/test_recovery_stress.py \
-  tests/test_recovery_processes.py --strict-config --strict-markers --durations=0 \
+  tests/test_recovery_processes.py tests/test_delivery_state_machine.py \
+  tests/test_recipient_auth.py tests/test_content_differential.py \
+  tests/test_network_fault_lab.py tests/test_json_test_suite.py tests/test_w3c_csvw.py \
+  --strict-config --strict-markers --durations=0 \
   --junitxml=./.polymorph/workflow-failure-and-recovery-lab.xml
 ```
 
@@ -57,11 +62,13 @@ The concurrency and restart cases are listed separately in
 | Unsigned and tampered relay input | Real signing, trust store, relay policy and relay SQLite queue | One unsigned record enters ingress; one accepted signed record has its persisted signature changed | Unsigned ingress is rejected; the tampered record is never leased and is dead-lettered as `relay_source_authentication_failed` |
 | Lost relay acknowledgement | Real source outbox, relay, crypto, destination runtime, ledger and JSON destination | Relay lease time is advanced after the destination commit without acknowledging the first lease | Redelivery returns `duplicate`, the ledger stays `committed`, and the JSON destination contains one record |
 | Unknown destination outcome | Real crypto, destination runtime, ledger, sealed spool, signed audit and JSON file replacement | A connector wrapper raises after the real JSON replacement has completed | Receipt is `quarantined` with `write_outcome_unknown`; ledger is `uncertain`; signed audit records the reason; normal replay is refused; only one write call occurred |
+| Real TLS acknowledgement loss | Real TLS socket, HTTP client and idempotent HTTPS endpoint | The endpoint commits the key, then closes the connection before returning any HTTP response | Connector outcome is `unknown`; retry uses the identical key; the endpoint reports two attempts but exactly one committed effect |
 
 The first two scenarios need no injected subsystem failure. The recipe case inserts explicit
-operational outcomes. The last three keep the real security and persistence path but inject the
+operational outcomes. The next three keep the real security and persistence path but inject the
 specific external fault under test: stored-wire tampering, lease time advancement or a lost
-connector acknowledgement. No matcher, signature check, relay policy, ledger transition or replay
+connector acknowledgement. The final case uses a temporary self-signed localhost certificate and
+an actual TLS connection. No matcher, signature check, relay policy, ledger transition or replay
 decision is mocked.
 
 The file-extension case tests an explicitly selected wrong connector. Automatic CLI inspection
@@ -93,16 +100,16 @@ was already warmed by earlier development runs.
 | Metric | Observed value |
 | --- | ---: |
 | Successful, content-correct, delivered and acknowledged | 3 of 3 runs, 1,000 of 1,000 each |
-| Total measured wall time | 16.095 / 16.231 / 16.779 s; median 16.231 s |
-| End-to-end throughput | 59.60 to 62.13 records/s; median 61.61 records/s |
-| Process CPU time | median 9.594 s |
-| Sampled peak RSS | median 85.89 MiB; maximum 87.28 MiB |
-| Sampled RSS growth | median 14.25 MiB |
-| Retained fixture and SQLite files | median 2.259 MiB |
-| Destination delivery wall time | median 8.382 s |
-| Destination delivery p50 / p95 | median 8.22 / 9.39 ms |
-| Seal plus durable outbox p50 / p95 | median 2.33 / 2.74 ms |
-| Acknowledgement p50 / p95 | median 2.74 / 3.29 ms |
+| Total measured wall time | 19.074 / 19.079 / 19.769 s; median 19.079 s |
+| End-to-end throughput | 50.59 to 52.43 records/s; median 52.41 records/s |
+| Process CPU time | median 12.344 s |
+| Sampled peak RSS | median 85.42 MiB; maximum 85.49 MiB |
+| Sampled RSS growth | median 11.89 MiB |
+| Retained fixture and state files | median 2.702 MiB |
+| Destination delivery wall time | median 9.480 s |
+| Destination delivery p50 / p95 | median 9.34 / 10.59 ms |
+| Seal plus durable outbox p50 / p95 | median 3.92 / 4.43 ms |
+| Acknowledgement p50 / p95 | median 2.82 / 3.43 ms |
 | Destination rows / committed ledger rows / verified audit events | 1,000 / 1,000 / 1,000 in every run |
 | Final content mismatches / outbox / relay / quarantine | 0 / 0 / 0 / 0 in every run |
 
@@ -111,20 +118,30 @@ reflection in every destination write. Caching the immutable reflected table red
 1,000-record comparison from 18.700 to 16.866 seconds, a 9.8 percent improvement. This is a local
 effect measurement, not a cross-platform promise or a formal confidence interval.
 
-The final failure suite passed all six cases in 0.595 seconds in a separate local run. Individual
-case times were 4 to 68 ms. That pytest time includes test-runner overhead and is not comparable
-with the workflow benchmark. The failure suite does not currently collect CPU or RSS measurements.
+The final expanded failure command collected 93 tests on 2026-09-10. It passed 92 and skipped the
+POSIX-only directory-fsync case on Windows, with no failures or errors in 11.839 seconds. That run
+included all six manifest scenarios, a real TLS acknowledgement loss, 25 generated delivery state
+machines of up to 30 steps, recipient rotation and fork tests, 10,000 differential JSON structures,
+20 pinned JSONTestSuite files and seven pinned W3C CSVW sources. Pytest timing includes runner
+overhead and is not comparable with the workflow benchmark. This suite does not collect CPU or RSS.
 
-The retained successful reports are `.polymorph/workflow-lab-final-1000-1.json`,
-`.polymorph/workflow-lab-final-1000-3.json` and
-`.polymorph/workflow-lab-final-1000-4.json`. Retained database files are diagnostic artifacts and
-are not part of the reports.
+The complete release run collected 903 tests: 895 passed, eight were platform-conditional skips,
+and none failed or errored in 36.425 seconds with 82 percent statement coverage. Coverage is not a
+substitute for the transition-oriented security matrix.
 
-A final instrumented 1,000-record run completed in 17.870 seconds at 55.96 records per second with
-92.39 MiB sampled peak RSS. Its local stream contained 1,029 structurally valid events. Event IDs
-were unique, event semantics and workflow counters agreed, and the lifecycle closed cleanly. One
-hundred isolated durable event appends took 69.9 ms in total, with 0.67 ms p50 and 0.86 ms p95
-latency. These figures are one warmed-host sample, not a cross-platform claim.
+Every run persisted a 1,015-byte recipient trust head, reopened it and verified it before source
+encryption. The retained successful reports are
+`.polymorph/workflow-recipient-auth-persisted-v5-20260910-1.json`,
+`.polymorph/workflow-recipient-auth-persisted-v5-20260910-2.json` and
+`.polymorph/workflow-recipient-auth-persisted-v5-20260910-3.json`. Retained database and trust-state
+files are diagnostic artifacts and are not part of the reports.
+
+An earlier instrumented 1,000-record run completed in 17.870 seconds at 55.96 records per second
+with 92.39 MiB sampled peak RSS. Its local stream contained 1,029 structurally valid events. Event
+IDs were unique, event semantics and workflow counters agreed, and the lifecycle closed cleanly.
+One hundred isolated durable event appends took 69.9 ms in total, with 0.67 ms p50 and 0.86 ms p95
+latency. These figures are retained as historical observer-overhead evidence, not as the current
+throughput baseline or a cross-platform claim.
 
 The combined ten-case recovery suite passed in 1.950 seconds. Ten repetitions of the eight threaded
 cases passed 80 of 80 in 19.067 seconds. Ten repetitions of the two 12-process migration cases
@@ -132,6 +149,10 @@ passed 20 of 20 in 8.462 seconds across 240 child-process starts. Before the ser
 fix, the parallel legacy Relay
 setup failed in 98 of 100 stress cycles with a duplicate-column error. After the fix, Relay and
 Ledger migration use exclusive SQLite initialization transactions and preserve legacy rows.
+
+After the Windows atomic-publication repair, 20 fresh-process repetitions of the six-writer JSON
+contention case passed 20 of 20 in 37.830 seconds. Every repetition required 24 unique durable
+records. This specifically guards the sharing-violation race found during this release work.
 
 ## Report safety boundaries
 

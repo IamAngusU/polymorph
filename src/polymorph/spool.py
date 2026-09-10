@@ -38,10 +38,12 @@ class SealedSpool:
         *,
         limits: ProtocolLimits | None = None,
         allow_legacy_unsigned: bool = False,
+        allow_legacy_blank_recipient_key_id: bool = False,
     ) -> None:
         self.path = Path(path)
         self.limits = limits or ProtocolLimits()
         self.allow_legacy_unsigned = allow_legacy_unsigned
+        self.allow_legacy_blank_recipient_key_id = allow_legacy_blank_recipient_key_id
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
         if os.name == "posix":
@@ -77,6 +79,12 @@ class SealedSpool:
         wire = record.canonical_wire_bytes()
         if len(wire) > self.limits.max_record_wire_bytes:
             raise ValueError("record exceeds spool wire size limit")
+        BlindTransportRecord.from_wire(
+            json.loads(wire.decode("utf-8")),
+            limits=self.limits,
+            allow_legacy_unsigned=self.allow_legacy_unsigned,
+            allow_legacy_blank_recipient_key_id=self.allow_legacy_blank_recipient_key_id,
+        )
         digest = record.digest()
         now = datetime.now(UTC).isoformat()
         with closing(self._connect()) as connection, connection:
@@ -126,6 +134,7 @@ class SealedSpool:
             payload,
             limits=self.limits,
             allow_legacy_unsigned=self.allow_legacy_unsigned,
+            allow_legacy_blank_recipient_key_id=self.allow_legacy_blank_recipient_key_id,
         )
         if record.digest() != record_digest:
             raise IntegrityError("sealed spool record digest mismatch")
@@ -139,6 +148,8 @@ class SealedSpool:
             )
 
     def list_entries(self, *, limit: int = 100) -> tuple[SpoolEntry, ...]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10_000:
+            raise ValueError("spool limit is outside supported range")
         with closing(self._connect()) as connection, connection:
             rows = connection.execute(
                 """

@@ -81,7 +81,12 @@ the complete parser path is sandboxed.
 
 `BlindSourceAgent` validates the plan before touching payload data. Source-stage deterministic transforms run here because they require plaintext. Destination-stage operations such as foreign-key lookup are deferred.
 
-Every mapped field is then encoded canonically and encrypted to the destination X25519 public key. The source process does not need the destination private key.
+Every mapped field is then encoded canonically and encrypted to the destination X25519 public key.
+For protocol v3, the normal source path resolves that key from a signed recipient certificate
+whose Ed25519 destination identity is pinned independently of the control plane. Tenant,
+destination, validity and monotonic rotation metadata are verified before plaintext is touched.
+The selected recipient key ID is authenticated in every field context. The source process does
+not need the destination private key.
 
 Protocol v3 signs the complete encrypted record with a separate Ed25519 source identity. The
 verification key is independently bound to one tenant and source connector. Recipient encryption
@@ -102,7 +107,9 @@ The relay still learns metadata required for routing, including tenant, connecto
 ## 7. Destination trust boundary
 
 `BlindDestinationAgent` independently re-verifies source identity and revocation, then verifies
-tenant, destination and allowed plan digests before opening envelopes. `DestinationRuntime` then:
+tenant, destination, recipient key ID and allowed plan digests before opening envelopes. An
+explicit operator-supplied set of old recipient private keys can drain records across a planned rotation;
+the key ID chooses one exact key rather than trial-decrypting. `DestinationRuntime` then:
 
 1. verifies that the plan supplies every required, non-generated target field
 2. claims the delivery identity in the ledger

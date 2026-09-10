@@ -5,6 +5,7 @@
 - record payload values
 - passwords, tokens and connector credentials
 - destination recipient private keys
+- destination identity-signing private keys
 - source record-signing keys
 - capability signing keys
 - mapping authorization integrity
@@ -46,6 +47,19 @@ Protocol v3 records carry an Ed25519 signature from a key independently bound to
 source connector. The destination repeats verification, so a relay cannot invent source provenance
 or bypass a hard-revoked source key. Unsigned v2 acceptance is a temporary, explicit migration
 exception and removes this property for the affected route.
+
+A control plane could otherwise replace the destination X25519 public key and make an honest
+source encrypt correctly signed records to an attacker. Protocol-v3 sources now reject raw
+recipient keys by default. They accept only a certificate signed by a separately pinned Ed25519
+destination identity and bound to the exact tenant and destination connector. Certificate
+generations form an exact predecessor chain. A compromised control plane can withhold a valid
+rotation and cause an availability failure, but cannot forge a replacement key without the
+destination identity signer.
+
+The identity trust anchor must be provisioned independently. If it is fetched from the same
+compromised control plane as the certificate, the authenticity property collapses. A durable local
+head rejects ordinary replay after restart, but rollback of that host state itself is not detectable
+without an external monotonic checkpoint or hardware-backed counter.
 
 This property depends on deployment separation. Running source, relay and destination in one compromised process collapses those host-level trust boundaries even though the APIs remain separated.
 
@@ -90,6 +104,8 @@ The built-in recipient key file protects a raw X25519 private key with Argon2id-
 - hostile containment of schema parsing and record iteration in the current alpha
 - hardware-backed signing or recipient keys in the built-in implementation
 - authenticated distribution and rollback protection for source trust bundles
+- external monotonic checkpoints for recipient trust-state rollback
+- destination identity-key rotation and emergency recipient revocation without a replacement
 - traffic-analysis resistance for routing metadata and ciphertext sizes
 - arbitrary undocumented API exploration
 - automatic resolution of genuinely ambiguous business semantics

@@ -136,16 +136,46 @@ class JsonFileConnector:
         with self._open_verified_binary():
             pass
 
-    @staticmethod
-    def _validate_value(value: object) -> None:
-        if isinstance(value, float) and not math.isfinite(value):
-            raise ValueError("JSON source contains a non-finite number")
-        if isinstance(value, list):
-            for item in value:
-                JsonFileConnector._validate_value(item)
-        elif isinstance(value, dict):
-            for item in value.values():
-                JsonFileConnector._validate_value(item)
+    def _validate_value(self, value: object) -> None:
+        stack: list[tuple[object, int, bool]] = [(value, 0, False)]
+        active_containers: set[int] = set()
+        item_count = 0
+        while stack:
+            current, parent_depth, leaving = stack.pop()
+            if leaving:
+                active_containers.remove(id(current))
+                continue
+            if current is None or isinstance(current, (str, bool, int)):
+                continue
+            if isinstance(current, float):
+                if not math.isfinite(current):
+                    raise ValueError("JSON value contains a non-finite number")
+                continue
+            if not isinstance(current, (list, tuple, dict)):
+                raise ValueError("JSON value contains a type that JSON cannot represent")
+            if isinstance(current, dict) and not all(isinstance(key, str) for key in current):
+                raise ValueError("JSON object keys must be strings")
+
+            depth = parent_depth + 1
+            if depth > self.max_structured_text_depth:
+                raise ValueError(
+                    "JSON source exceeds the configured nesting depth "
+                    f"of {self.max_structured_text_depth}"
+                )
+            identity = id(current)
+            if identity in active_containers:
+                raise ValueError("JSON source contains a cyclic container")
+            active_containers.add(identity)
+            item_count += len(current)
+            if item_count > self.max_json_items:
+                raise ValueError(
+                    "JSON source exceeds the configured item limit "
+                    f"of {self.max_json_items} members and array items"
+                )
+
+            stack.append((current, parent_depth, True))
+            children = current if isinstance(current, (list, tuple)) else current.values()
+            stack.extend((child, depth, False) for child in children)
 
     def _load(self) -> list[dict[str, object]]:
         if self._cache is not None:
@@ -196,10 +226,7 @@ class JsonFileConnector:
             self._format_cache = "json5"
         else:
             self._format_cache = "json"
-        try:
-            self._validate_value(data)
-        except RecursionError:
-            raise ValueError("JSON source exceeds the configured nesting depth") from None
+        self._validate_value(data)
         if isinstance(data, dict):
             records = [data]
         elif isinstance(data, list) and all(isinstance(item, dict) for item in data):
@@ -243,10 +270,25 @@ class JsonFileConnector:
         *,
         context: DeliveryContext | None = None,
     ) -> int:
-        materialized = [dict(record) for record in records]
-        self._validate_value(materialized)
-        if not materialized:
-            return 0
+        try:
+            materialized: list[dict[str, object]] = []
+            top_level_items = 0
+            for record in records:
+                top_level_items += 1 + len(record)
+                if top_level_items > self.max_json_items:
+                    raise ValueError(
+                        "JSON destination exceeds the configured item limit "
+                        f"of {self.max_json_items} members and array items"
+                    )
+                materialized.append(dict(record))
+            self._validate_value(materialized)
+            if not materialized:
+                return 0
+        except Exception as exc:
+            raise ConnectorWriteError(
+                "JSON destination input could not be materialized",
+                outcome=WriteOutcome.NOT_COMMITTED,
+            ) from exc
 
         try:
             with exclusive_path_lock(self.path, timeout_seconds=self.write_lock_timeout):
@@ -268,22 +310,26 @@ class JsonFileConnector:
                         "JSON destination records must have identical fields; "
                         f"mismatch at record {unreal[0]}"
                     )
+                self._validate_value(combined)
                 encoded = json.dumps(
                     combined,
                     indent=2,
                     ensure_ascii=False,
                     allow_nan=False,
                 )
-                if len(encoded.encode("utf-8")) > self.max_file_bytes:
+                published = encoded + "\n"
+                if len(published.encode("utf-8")) > self.max_file_bytes:
                     raise ValueError("JSON destination exceeds configured file size limit")
                 if target_existed:
                     self._verify_cached_source()
                 atomic_write_text(
                     self.path,
-                    encoded + "\n",
+                    published,
                     overwrite=target_existed,
                 )
-        except (OSError, ConnectorError) as exc:
+        except ConnectorWriteError:
+            raise
+        except (OSError, ConnectorError, RecursionError, TypeError, ValueError) as exc:
             raise ConnectorWriteError(
                 "JSON destination write did not commit",
                 outcome=WriteOutcome.NOT_COMMITTED,

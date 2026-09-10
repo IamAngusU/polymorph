@@ -13,6 +13,16 @@ X25519 sealing alone is not sender authentication because anybody may know the d
 public key. Relays and destinations therefore verify the v3 signature against a trust-store key
 that is independently bound to the declared tenant and source connector.
 
+Raw destination public keys are also not authenticated merely because encryption succeeds.
+Protocol-v3 sources therefore require a `RecipientKeyTrustStore` by default. Its trust anchor is a
+separately provisioned Ed25519 destination identity. That identity signs a certificate covering
+the tenant, destination connector, X25519 key ID, generation, predecessor, validity interval and
+identity key ID. The X25519 key ID hashes the RFC 7748-decoded u-coordinate, including the
+required masking of the final input bit and reduction modulo the field prime. Two byte encodings
+that X25519 treats as the same key
+therefore cannot appear as distinct rotation generations. Supplying a raw public key instead
+requires the explicit `allow_unauthenticated_recipient_key=True` migration exception.
+
 ## Field envelope
 
 Each mapped field is independently sealed using:
@@ -36,8 +46,17 @@ The authenticated context includes:
 - mapping plan digest
 - protocol version
 - optional issuance and expiration timestamps
+- destination recipient key ID for records created by current sources
 
 Changing authenticated metadata without re-encrypting the field causes authentication failure at the destination.
+
+Current v3 records must carry a non-empty recipient key ID. Record decoding, relay policy,
+outbox/spool persistence and destination opening reject a blank ID by default. A deployment that
+must drain older source-signed v3 records can enable the separate
+`allow_legacy_blank_recipient_key_id=True` migration policy at each of those boundaries. This flag
+does not weaken certificate verification for newly created records and must be removed after the
+legacy queue drains. Protocol v2 has no recipient key ID and retains its existing wire format;
+a non-empty ID on a v2 context is rejected instead of being ignored.
 
 ## Record integrity
 
@@ -57,6 +76,27 @@ identity stable if identical encrypted content is re-signed during planned key r
 digest is not a payload hash of plaintext.
 
 ## Key lifecycle
+
+Recipient certificate bootstrap accepts only generation 1 without a predecessor. Each rotation
+must be signed by the pinned destination identity, advance by exactly one generation and name the
+current recipient key ID as its predecessor. A stale generation, alternate certificate at an
+already accepted generation, skipped generation, wrong predecessor, previously used recipient key
+or unusable low-order X25519 key fails closed. The bounded persisted history tracks up to 512
+distinct recipient keys across normal restarts. The source resolves the current certificate again
+for each record, so an accepted rotation takes effect without rebuilding the source agent.
+
+The destination can retain explicitly supplied older private keys while already using the new key
+as primary. The authenticated recipient key ID selects exactly one available private key, allowing
+queued records to drain without trying every key. Removing an old private key ends that drain.
+
+When configured with a state path, certificate acceptance uses a cooperative cross-process lock
+and atomic private write. This detects network or control-plane replay across normal process
+restarts. It does not detect an attacker who can roll back the source host's trust-state file and
+all external checkpoints together. POSIX acceptance also fsyncs the parent directory after the
+atomic replacement. Windows has no portable parent-directory fsync in this implementation. See
+[recipient key rotation](RECIPIENT_KEY_ROTATION.md).
+
+### Source signing key lifecycle
 
 Trusted source keys are bound to one tenant and source connector. `ACTIVE` and `VERIFY_ONLY` keys
 may verify records. Rotation moves the previous key to `VERIFY_ONLY` while adding a new `ACTIVE`

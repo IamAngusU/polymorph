@@ -36,10 +36,18 @@ class TransferContext:
     plan_id: str = ""
     plan_digest: str = ""
     protocol_version: int = 3
+    recipient_key_id: str = ""
     issued_at: datetime | None = None
     expires_at: datetime | None = None
 
     def __post_init__(self) -> None:
+        if self.protocol_version == 2 and self.recipient_key_id:
+            raise ProtocolError("v2 transfer contexts may not carry a recipient key id")
+        if self.recipient_key_id and (
+            len(self.recipient_key_id) != 64
+            or any(char not in "0123456789abcdef" for char in self.recipient_key_id)
+        ):
+            raise ProtocolError("recipient key id must be a lowercase SHA-256 digest")
         if self.issued_at is not None:
             object.__setattr__(self, "issued_at", _utc(self.issued_at))
         if self.expires_at is not None:
@@ -64,6 +72,8 @@ class TransferContext:
             "tenant": self.tenant,
             "transfer_id": self.transfer_id,
         }
+        if self.recipient_key_id:
+            payload["recipient_key_id"] = self.recipient_key_id
         if self.issued_at is not None:
             payload["issued_at"] = _utc(self.issued_at).isoformat()
         if self.expires_at is not None:
@@ -96,7 +106,7 @@ class TransferContext:
                 return None
             try:
                 return _utc(datetime.fromisoformat(str(raw)))
-            except (TypeError, ValueError) as exc:
+            except (OverflowError, TypeError, ValueError) as exc:
                 raise ProtocolError(f"authenticated {name} timestamp is invalid") from exc
 
         raw_version = payload.get("protocol_version", 0)
@@ -118,6 +128,7 @@ class TransferContext:
             plan_id=str(payload.get("plan_id", "")),
             plan_digest=str(payload.get("plan_digest", "")),
             protocol_version=protocol_version,
+            recipient_key_id=str(payload.get("recipient_key_id", "")),
             issued_at=parse_time("issued_at"),
             expires_at=parse_time("expires_at"),
         )
@@ -159,6 +170,20 @@ def _b64_decode(value: str, *, field: str, max_bytes: int) -> bytes:
     if len(decoded) > max_bytes:
         raise ProtocolError(f"{field} exceeds protocol size limit")
     return decoded
+
+
+def validate_recipient_public_key(public_key: bytes) -> X25519PublicKey:
+    """Parse an X25519 key and reject points that yield a null shared secret."""
+
+    raw = bytes(public_key)
+    if len(raw) != 32:
+        raise ProtocolError("recipient X25519 public key must be 32 bytes")
+    try:
+        recipient = X25519PublicKey.from_public_bytes(raw)
+        X25519PrivateKey.from_private_bytes(b"\x42" * 32).exchange(recipient)
+    except ValueError as exc:
+        raise ProtocolError("recipient X25519 public key is unusable or low-order") from exc
+    return recipient
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -220,11 +245,9 @@ def seal_for_recipient(
     recipient_public_key: bytes,
     context: TransferContext,
 ) -> OpaqueEnvelope:
-    if len(recipient_public_key) != 32:
-        raise ProtocolError("recipient X25519 public key must be 32 bytes")
     context.validate_time()
     ephemeral_private = X25519PrivateKey.generate()
-    recipient_public = X25519PublicKey.from_public_bytes(recipient_public_key)
+    recipient_public = validate_recipient_public_key(recipient_public_key)
     shared = ephemeral_private.exchange(recipient_public)
     key = _derive_key(shared, context)
     nonce = os.urandom(12)

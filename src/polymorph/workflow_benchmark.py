@@ -7,6 +7,7 @@ import tempfile
 import time
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import NoReturn, TypeVar
@@ -22,10 +23,19 @@ from .ledger import DeliveryLedger
 from .matching.hybrid import HybridMatcher
 from .models.mapping import MappingDecision, MappingPlan, MappingStatus
 from .models.schema import SchemaDescriptor
-from .observability import WORKFLOW_STAGE_COMPONENTS, EventStream, EventWriteStatus
+from .observability import (
+    DEFAULT_EVENT_STREAM_BYTES,
+    MAX_COMPACT_EVENT_BYTES,
+    MAX_EVENT_STREAM_BYTES,
+    MIN_EVENT_STREAM_BYTES,
+    WORKFLOW_STAGE_COMPONENTS,
+    EventStream,
+    EventWriteStatus,
+)
 from .outbox import SourceOutbox
 from .planning import build_plan
 from .preflight import PreflightReport, PreflightRunner
+from .recipient_auth import RecipientKeyCertificate, RecipientKeyTrustStore
 from .relay import LeasedRecord, RelayPolicy, RouteBinding, SealedRelayQueue
 from .runtime import AuditWriteStatus, DeliveryReceipt, DeliveryStatus, DestinationRuntime
 from .signing import SigningKeyPair, SourceTrustStore, TrustedSourceKey, signing_key_id
@@ -55,6 +65,30 @@ _SQLITE_FILE_SUFFIXES = ("", "-wal", "-journal", "-shm")
 _SCAN_CHUNK_BYTES = 64 * 1024
 _MAX_LATENCY_SAMPLES = 10_000
 _STAGE_ORDER = WORKFLOW_STAGE_COMPONENTS
+
+
+def _required_event_stream_bytes(records: int, batch_size: int) -> int:
+    maximum_batches = (records + batch_size - 1) // batch_size
+    maximum_events = records + maximum_batches + len(WORKFLOW_STAGE_COMPONENTS) + 2
+    return maximum_events * MAX_COMPACT_EVENT_BYTES
+
+
+def _validate_event_stream_capacity(records: int, batch_size: int, maximum_bytes: int) -> int:
+    if isinstance(maximum_bytes, bool) or not isinstance(maximum_bytes, int):
+        raise TypeError("workflow event stream size limit must be an integer")
+    if not MIN_EVENT_STREAM_BYTES <= maximum_bytes <= MAX_EVENT_STREAM_BYTES:
+        raise ValueError(
+            "workflow event stream size limit must be between "
+            f"{MIN_EVENT_STREAM_BYTES} and {MAX_EVENT_STREAM_BYTES} bytes"
+        )
+    required = _required_event_stream_bytes(records, batch_size)
+    if required > maximum_bytes:
+        raise ValueError(
+            "workflow event stream capacity is too small: "
+            f"the run reserves {required} bytes but only {maximum_bytes} are configured; "
+            "increase --event-stream-max-mib, reduce --records, or increase --batch-size"
+        )
+    return required
 
 
 def _percentile(values: list[float], percentile: float) -> float:
@@ -143,6 +177,8 @@ class WorkflowBenchmarkReport:
                 "records": self.records_requested,
                 "batch_size": self.batch_size,
                 "signed_audit": self.signed_audit_enabled,
+                "event_stream_max_bytes": self.observability.get("max_stream_bytes"),
+                "event_stream_reserved_bytes": self.observability.get("reserved_stream_bytes"),
             },
             "artifacts": {
                 "retained": self.artifacts_retained,
@@ -455,6 +491,39 @@ def _make_transport_runtime(
     signed_audit: bool,
 ) -> _TransportRuntime:
     recipient = RecipientKeyPair.generate()
+    recipient_identity = SigningKeyPair.generate()
+    recipient_identity_public_key = recipient_identity.public_bytes()
+    recipient_trust_state_path = root / "recipient-trust-state.json"
+    recipient_trust = RecipientKeyTrustStore(
+        identity_public_key=recipient_identity_public_key,
+        tenant="workflow-benchmark",
+        destination_connector=_DESTINATION_CONNECTOR,
+        state_path=recipient_trust_state_path,
+    )
+    certificate_time = datetime.now(UTC)
+    recipient_trust.accept(
+        RecipientKeyCertificate.issue(
+            tenant="workflow-benchmark",
+            destination_connector=_DESTINATION_CONNECTOR,
+            public_key=recipient.public_bytes(),
+            generation=1,
+            previous_key_id=None,
+            identity_signer=recipient_identity,
+            issued_at=certificate_time,
+            not_before=certificate_time,
+            not_after=certificate_time + timedelta(days=1),
+        ),
+        now=certificate_time,
+    )
+    # Force the measured source path to reload and verify the durable checkpoint instead of
+    # continuing with the in-memory object that performed the initial acceptance.
+    recipient_trust = RecipientKeyTrustStore(
+        identity_public_key=recipient_identity_public_key,
+        tenant="workflow-benchmark",
+        destination_connector=_DESTINATION_CONNECTOR,
+        state_path=recipient_trust_state_path,
+    )
+    recipient_trust.current(now=certificate_time)
     source_signer = SigningKeyPair.generate()
     source_key_id = signing_key_id(source_signer.public_bytes())
     trust = SourceTrustStore(
@@ -467,8 +536,9 @@ def _make_transport_runtime(
         source_schema=source_schema,
         target_schema=target_schema,
         plan=plan,
-        destination_public_key=recipient.public_bytes(),
+        destination_public_key=None,
         signing_key=source_signer,
+        recipient_key_trust_store=recipient_trust,
     )
     outbox = SourceOutbox(root / "source-outbox.sqlite")
     relay = SealedRelayQueue(
@@ -686,6 +756,9 @@ def _known_plaintext_canaries_absent(root: Path) -> bool:
         for state_path in _sqlite_family_paths(root, database_name):
             if _file_contains_any(state_path, canaries):
                 return False
+    recipient_trust_state = root / "recipient-trust-state.json"
+    if recipient_trust_state.is_file() and _file_contains_any(recipient_trust_state, canaries):
+        return False
     event_path = root / "operational-events.jsonl"
     return not (event_path.is_file() and _file_contains_any(event_path, canaries))
 
@@ -699,6 +772,7 @@ def _artifact_storage_bytes(root: Path) -> dict[str, int]:
         "delivery_ledger": _sqlite_family_paths(root, "delivery-ledger.sqlite"),
         "sealed_spool": _sqlite_family_paths(root, "sealed-spool.sqlite"),
         "audit": _sqlite_family_paths(root, "audit.sqlite"),
+        "recipient_trust": (root / "recipient-trust-state.json",),
         "operational_events": (root / "operational-events.jsonl",),
     }
     storage = {
@@ -983,12 +1057,17 @@ def _execute_workflow(
     *,
     records: int,
     batch_size: int,
+    event_stream_max_bytes: int,
+    event_stream_reserved_bytes: int,
     signed_audit: bool,
     artifacts_retained: bool,
 ) -> WorkflowBenchmarkReport:
     stages = _StageBook()
     progress = _Progress()
-    events = EventStream(root / "operational-events.jsonl")
+    events = EventStream(
+        root / "operational-events.jsonl",
+        max_stream_bytes=event_stream_max_bytes,
+    )
     workflow_correlation_id = events.correlation_id("workflow")
     mapping_summary = {
         "source_fields": 0,
@@ -1256,6 +1335,8 @@ def _execute_workflow(
         progress,
         failure,
     )
+    observability["max_stream_bytes"] = event_stream_max_bytes
+    observability["reserved_stream_bytes"] = event_stream_reserved_bytes
     if final_state:
         final_state["storage_bytes"] = _artifact_storage_bytes(root)
 
@@ -1311,13 +1392,23 @@ def run_workflow_benchmark(
     keep_work_dir: bool = False,
     signed_audit: bool = True,
     trace_python_allocations: bool = False,
+    event_stream_max_bytes: int = DEFAULT_EVENT_STREAM_BYTES,
 ) -> tuple[WorkflowBenchmarkReport, BenchmarkResult]:
     """Run the real local data path and return payload-free timing and state evidence."""
 
-    if not 1 <= records <= 1_000_000:
+    if isinstance(records, bool) or not isinstance(records, int) or not 1 <= records <= 1_000_000:
         raise ValueError("workflow benchmark records must be between 1 and 1000000")
-    if not 1 <= batch_size <= 10_000:
+    if (
+        isinstance(batch_size, bool)
+        or not isinstance(batch_size, int)
+        or not 1 <= batch_size <= 10_000
+    ):
         raise ValueError("workflow benchmark batch size must be between 1 and 10000")
+    event_stream_reserved_bytes = _validate_event_stream_capacity(
+        records,
+        batch_size,
+        event_stream_max_bytes,
+    )
     root, retained, temporary = _prepare_workspace(work_dir, keep_work_dir=keep_work_dir)
     report, resources = benchmark_call(
         "workflow_end_to_end",
@@ -1325,6 +1416,8 @@ def run_workflow_benchmark(
             root,
             records=records,
             batch_size=batch_size,
+            event_stream_max_bytes=event_stream_max_bytes,
+            event_stream_reserved_bytes=event_stream_reserved_bytes,
             signed_audit=signed_audit,
             artifacts_retained=retained,
         ),

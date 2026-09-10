@@ -53,7 +53,7 @@ from .matching.semantic import (
 )
 from .models.mapping import MappingDecision
 from .models.schema import SchemaDescriptor
-from .observability import EventStream
+from .observability import DEFAULT_EVENT_STREAM_BYTES, MAX_EVENT_STREAM_BYTES, EventStream
 from .paths import model_home, recipe_store_path
 from .planning import build_plan
 from .preflight import PreflightReport, PreflightRunner
@@ -63,6 +63,7 @@ from .recipes import (
     RecipeRunOutcome,
     RecipeStore,
 )
+from .recipient_auth import RecipientKeyCertificate, RecipientKeyTrustStore
 from .repair import RepairSeverity, propose_plan_repair
 from .serialization import (
     load_plan,
@@ -170,7 +171,11 @@ def _recipe_observation(report: PreflightReport) -> tuple[RecipeRunOutcome, str]
                 outcome = (
                     RecipeRunOutcome.QUARANTINED
                     if preflight_finding.code
-                    in {"foreign_key_lookup_failed", "source_iteration_failed"}
+                    in {
+                        "foreign_key_lookup_failed",
+                        "input_record_limit_exceeded",
+                        "source_iteration_failed",
+                    }
                     else RecipeRunOutcome.REJECTED
                 )
                 return outcome, preflight_finding.code
@@ -237,7 +242,6 @@ def _matcher_for_args(args: argparse.Namespace) -> HybridMatcher:
     reranker_dir = getattr(args, "reranker_dir", None)
     if getattr(args, "models", False):
         model_dir = model_dir or str(model_home(MULTILINGUAL_CPU.name))
-        reranker_dir = reranker_dir or str(model_home(RERANKER_MULTILINGUAL_CPU.name))
     return _matcher(model_dir, reranker_dir)
 
 
@@ -452,7 +456,10 @@ def _event_stream_path(value: str) -> Path:
 
 def _events_summary(args: argparse.Namespace) -> None:
     _protect_write_path(args.output, args.path)
-    stream = EventStream(_event_stream_path(args.path))
+    stream = EventStream(
+        _event_stream_path(args.path),
+        max_stream_bytes=args.event_stream_max_mib * 1024 * 1024,
+    )
     summary = stream.summary(run_id=args.run_id)
     payload = summary.as_dict()
     payload["valid"] = True
@@ -465,7 +472,10 @@ def _events_summary(args: argparse.Namespace) -> None:
 
 def _events_check(args: argparse.Namespace) -> None:
     _protect_write_path(args.output, args.path)
-    stream = EventStream(_event_stream_path(args.path))
+    stream = EventStream(
+        _event_stream_path(args.path),
+        max_stream_bytes=args.event_stream_max_mib * 1024 * 1024,
+    )
     summary = stream.summary(run_id=args.run_id)
     healthy_statuses = {"delivered", "duplicate", "passed", "started"}
     status_counts = {
@@ -563,6 +573,60 @@ def _key_validate(args: argparse.Namespace) -> None:
     passphrase = getpass.getpass("Key passphrase: ")
     public = EncryptedRecipientKeyFile.validate(args.path, passphrase)
     _emit({"valid": True, "public_key_hex": public.hex()})
+
+
+def _recipient_identity_public_key(value: str) -> bytes:
+    try:
+        public_key = bytes.fromhex(value)
+    except ValueError as exc:
+        raise ValueError("recipient identity public key must be hexadecimal") from exc
+    if len(public_key) != 32:
+        raise ValueError("recipient identity public key must encode exactly 32 bytes")
+    return public_key
+
+
+def _recipient_certificate_payload(
+    certificate: RecipientKeyCertificate,
+    *,
+    state_path: str | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "valid": True,
+        "tenant": certificate.tenant,
+        "destination_connector": certificate.destination_connector,
+        "generation": certificate.generation,
+        "key_id": certificate.key_id,
+        "previous_key_id": certificate.previous_key_id,
+        "identity_key_id": certificate.identity_key_id,
+        "not_before": certificate.not_before.isoformat(),
+        "not_after": certificate.not_after.isoformat(),
+    }
+    if state_path is not None:
+        payload["state_path"] = str(Path(state_path).absolute())
+    return payload
+
+
+def _recipient_certificate_inspect(args: argparse.Namespace) -> None:
+    certificate = RecipientKeyCertificate.load(args.path)
+    trust = RecipientKeyTrustStore(
+        identity_public_key=_recipient_identity_public_key(args.identity_public_key_hex),
+        tenant=args.tenant,
+        destination_connector=args.destination_connector,
+    )
+    trust.verify(certificate)
+    _emit(_recipient_certificate_payload(certificate))
+
+
+def _recipient_certificate_accept(args: argparse.Namespace) -> None:
+    certificate = RecipientKeyCertificate.load(args.path)
+    trust = RecipientKeyTrustStore(
+        identity_public_key=_recipient_identity_public_key(args.identity_public_key_hex),
+        tenant=args.tenant,
+        destination_connector=args.destination_connector,
+        state_path=args.state,
+    )
+    trust.accept(certificate)
+    _emit(_recipient_certificate_payload(certificate, state_path=args.state))
 
 
 def _inspector(use_magika: bool) -> ContentInspector:
@@ -736,6 +800,7 @@ def _preflight_file(args: argparse.Namespace) -> None:
             target,
             plan,
             max_records=args.max_records,
+            max_input_records=args.max_input_records,
             foreign_key_resolver=resolver,
         )
     finally:
@@ -902,6 +967,7 @@ def _prepare(args: argparse.Namespace) -> None:
             target,
             plan,
             max_records=args.max_records,
+            max_input_records=args.max_input_records,
             foreign_key_resolver=resolver,
         )
     finally:
@@ -1148,10 +1214,17 @@ def _doctor(args: argparse.Namespace) -> None:
         "keyring": importlib.util.find_spec("keyring") is not None,
     }
     models: dict[str, object] = {}
-    for profile in (MULTILINGUAL_CPU, RERANKER_MULTILINGUAL_CPU):
+    for profile, usage in (
+        (MULTILINGUAL_CPU, "research_only"),
+        (RERANKER_MULTILINGUAL_CPU, "research_only"),
+    ):
         location = model_home(profile.name)
         if not location.exists():
-            models[profile.name] = {"installed": False, "path": str(location)}
+            models[profile.name] = {
+                "installed": False,
+                "path": str(location),
+                "usage": usage,
+            }
             continue
         try:
             model_path = verify_installed_profile(profile, location)
@@ -1160,6 +1233,7 @@ def _doctor(args: argparse.Namespace) -> None:
                 "installed": True,
                 "valid": False,
                 "path": str(location),
+                "usage": usage,
                 "error": str(exc),
             }
         else:
@@ -1167,6 +1241,7 @@ def _doctor(args: argparse.Namespace) -> None:
                 "installed": True,
                 "valid": True,
                 "path": str(model_path),
+                "usage": usage,
             }
     _emit(
         {
@@ -1684,6 +1759,7 @@ def _benchmark_workflow(args: argparse.Namespace) -> None:
         keep_work_dir=args.keep_work_dir,
         signed_audit=args.audit,
         trace_python_allocations=args.tracemalloc,
+        event_stream_max_bytes=args.event_stream_max_mib * 1024 * 1024,
     )
     resource_payload = _benchmark_resource_payload(resources)
     _emit(
@@ -1744,9 +1820,16 @@ def _add_parser_worker_options(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_model_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--models", action="store_true", help="use both installed CPU profiles")
+    parser.add_argument(
+        "--models",
+        action="store_true",
+        help="use the installed research-only CPU descriptor encoder after provenance review",
+    )
     parser.add_argument("--model-dir")
-    parser.add_argument("--reranker-dir")
+    parser.add_argument(
+        "--reranker-dir",
+        help="explicit experimental reranker directory; review model provenance before use",
+    )
 
 
 def _benchmark_measurement_payload(trace_python_allocations: bool) -> dict[str, object]:
@@ -1860,7 +1943,7 @@ def build_parser() -> argparse.ArgumentParser:
     repair.add_argument("--allow-review", action="store_true")
     repair.set_defaults(func=_plan_repair)
 
-    model = sub.add_parser("model", help="manage the optional local semantic encoder")
+    model = sub.add_parser("model", help="manage optional local semantic model profiles")
     model_sub = model.add_subparsers(dest="model_command", required=True)
     install = model_sub.add_parser("install")
     install.add_argument(
@@ -1878,6 +1961,11 @@ def build_parser() -> argparse.ArgumentParser:
     preflight.add_argument("target_schema")
     preflight.add_argument("plan")
     preflight.add_argument("--max-records", type=int)
+    preflight.add_argument(
+        "--max-input-records",
+        type=int,
+        help="block when the source contains more records than this explicit run budget",
+    )
     preflight.add_argument("--magika", action="store_true")
     preflight.add_argument("--resolver-db-url")
     preflight.add_argument("--resolver-db-table")
@@ -1897,6 +1985,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_model_options(prepare)
     prepare.add_argument("--magika", action="store_true")
     prepare.add_argument("--max-records", type=int)
+    prepare.add_argument(
+        "--max-input-records",
+        type=int,
+        help="block readiness when the source exceeds this explicit run budget",
+    )
     prepare.add_argument("--resolver-db-url")
     prepare.add_argument("--resolver-db-table")
     prepare.add_argument("--resolver-db-schema")
@@ -2002,6 +2095,12 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_workflow.add_argument("--records", type=int, default=1000)
     benchmark_workflow.add_argument("--batch-size", type=int, default=100)
     benchmark_workflow.add_argument(
+        "--event-stream-max-mib",
+        type=int,
+        default=64,
+        help="operational event-stream budget in MiB (default: 64, maximum: 1024)",
+    )
+    benchmark_workflow.add_argument(
         "--work-dir",
         help="use and retain this new or empty directory for benchmark state",
     )
@@ -2035,6 +2134,25 @@ def build_parser() -> argparse.ArgumentParser:
     key_validate = key_sub.add_parser("validate")
     key_validate.add_argument("path")
     key_validate.set_defaults(func=_key_validate)
+    certificate_inspect = key_sub.add_parser(
+        "certificate-inspect",
+        help="verify a signed destination recipient-key certificate",
+    )
+    certificate_inspect.add_argument("path")
+    certificate_inspect.add_argument("--identity-public-key-hex", required=True)
+    certificate_inspect.add_argument("--tenant", required=True)
+    certificate_inspect.add_argument("--destination-connector", required=True)
+    certificate_inspect.set_defaults(func=_recipient_certificate_inspect)
+    certificate_accept = key_sub.add_parser(
+        "certificate-accept",
+        help="verify and advance a durable recipient-key rotation checkpoint",
+    )
+    certificate_accept.add_argument("path")
+    certificate_accept.add_argument("--identity-public-key-hex", required=True)
+    certificate_accept.add_argument("--tenant", required=True)
+    certificate_accept.add_argument("--destination-connector", required=True)
+    certificate_accept.add_argument("--state", required=True)
+    certificate_accept.set_defaults(func=_recipient_certificate_accept)
 
     audit = sub.add_parser("audit", help="verify or export the metadata-only audit chain")
     audit_sub = audit.add_subparsers(dest="audit_command", required=True)
@@ -2058,6 +2176,16 @@ def build_parser() -> argparse.ArgumentParser:
     events_summary = events_sub.add_parser("summary")
     events_summary.add_argument("path")
     events_summary.add_argument("--run-id")
+    events_summary.add_argument(
+        "--event-stream-max-mib",
+        type=int,
+        default=DEFAULT_EVENT_STREAM_BYTES // (1024 * 1024),
+        help=(
+            "maximum accepted stream size in MiB "
+            f"(default: {DEFAULT_EVENT_STREAM_BYTES // (1024 * 1024)}, "
+            f"maximum: {MAX_EVENT_STREAM_BYTES // (1024 * 1024)})"
+        ),
+    )
     _add_output(events_summary)
     events_summary.set_defaults(func=_events_summary)
     events_check = events_sub.add_parser(
@@ -2065,6 +2193,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     events_check.add_argument("path")
     events_check.add_argument("--run-id", required=True)
+    events_check.add_argument(
+        "--event-stream-max-mib",
+        type=int,
+        default=DEFAULT_EVENT_STREAM_BYTES // (1024 * 1024),
+        help=(
+            "maximum accepted stream size in MiB "
+            f"(default: {DEFAULT_EVENT_STREAM_BYTES // (1024 * 1024)}, "
+            f"maximum: {MAX_EVENT_STREAM_BYTES // (1024 * 1024)})"
+        ),
+    )
     _add_output(events_check)
     events_check.set_defaults(func=_events_check)
 

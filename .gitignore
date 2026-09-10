@@ -15,6 +15,7 @@ venv/
 .polymorph/
 .polymorph-write-*.lock
 dist/
+dist-final-*/
 build/
 .DS_Store
 *.key

@@ -12,12 +12,19 @@ from decimal import Decimal
 
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
-from .crypto import OpaqueEnvelope, TransferContext, open_envelope, seal_for_recipient
+from .crypto import (
+    OpaqueEnvelope,
+    RecipientKeyPair,
+    TransferContext,
+    open_envelope,
+    seal_for_recipient,
+)
 from .errors import IntegrityError, ProtocolError
 from .models.mapping import MappingPlan
 from .models.schema import SchemaDescriptor
 from .models.types import Sensitivity
 from .policy import PolicyEngine
+from .recipient_auth import RecipientKeyTrustStore, recipient_key_id
 from .signing import SigningKeyPair, SourceTrustStore, signing_key_id
 from .transforms import TransformStage, apply_transform, transform_stage
 from .validation import PlanValidator
@@ -188,6 +195,7 @@ class BlindTransportRecord:
     record_id: str
     fields: tuple[SealedField, ...]
     authentication: RecordAuthentication | None = None
+    allow_legacy_blank_recipient_key_id: bool = False
 
     def __post_init__(self) -> None:
         if not self.fields:
@@ -214,6 +222,7 @@ class BlindTransportRecord:
                 "plan_digest",
                 "schema_version",
                 "protocol_version",
+                "recipient_key_id",
                 "issued_at",
                 "expires_at",
             ):
@@ -221,6 +230,16 @@ class BlindTransportRecord:
                     raise ProtocolError(f"mixed {name} values in one blind transport record")
         if first.protocol_version == 2 and self.authentication is not None:
             raise ProtocolError("legacy transport records may not carry v3 source authentication")
+        if first.protocol_version == 2 and first.recipient_key_id:
+            raise ProtocolError("legacy v2 transport records may not carry a recipient key id")
+        if first.protocol_version == 2 and self.allow_legacy_blank_recipient_key_id:
+            raise ProtocolError("legacy recipient-key-id policy applies only to v3 records")
+        if (
+            first.protocol_version == 3
+            and not first.recipient_key_id
+            and not self.allow_legacy_blank_recipient_key_id
+        ):
+            raise ProtocolError("v3 transport record has no authenticated recipient key id")
 
     def __repr__(self) -> str:
         field_ids = ", ".join(field.target_field_id for field in self.fields)
@@ -288,6 +307,7 @@ class BlindTransportRecord:
             self.record_id,
             self.fields,
             RecordAuthentication(key_id=key_id, signature=signature),
+            self.allow_legacy_blank_recipient_key_id,
         )
 
     def to_wire(self) -> dict[str, object]:
@@ -320,6 +340,7 @@ class BlindTransportRecord:
         *,
         limits: ProtocolLimits | None = None,
         allow_legacy_unsigned: bool = False,
+        allow_legacy_blank_recipient_key_id: bool = False,
     ) -> BlindTransportRecord:
         limits = limits or ProtocolLimits()
         if payload.get("protocol") != "opaque-record":
@@ -357,6 +378,11 @@ class BlindTransportRecord:
             record_id=str(payload["record_id"]),
             fields=fields,
             authentication=authentication,
+            allow_legacy_blank_recipient_key_id=(
+                version == 3
+                and not fields[0].context.recipient_key_id
+                and allow_legacy_blank_recipient_key_id
+            ),
         )
         if record.protocol_version != version:
             raise ProtocolError("outer record version does not match authenticated field context")
@@ -373,12 +399,14 @@ class BlindSourceAgent:
     source_schema: SchemaDescriptor
     target_schema: SchemaDescriptor
     plan: MappingPlan
-    destination_public_key: bytes
+    destination_public_key: bytes | None = None
     signing_key: SigningKeyPair | None = None
     schema_version: str = "1"
     transfer_ttl: timedelta | None = None
     protocol_version: int = 3
     allow_legacy_unsigned: bool = False
+    recipient_key_trust_store: RecipientKeyTrustStore | None = None
+    allow_unauthenticated_recipient_key: bool = False
 
     def __post_init__(self) -> None:
         PlanValidator().validate(
@@ -390,6 +418,37 @@ class BlindSourceAgent:
             raise ValueError("record protocol v2 requires explicit legacy opt-in")
         if self.protocol_version not in {2, 3}:
             raise ValueError("unsupported source record protocol version")
+        if self.recipient_key_trust_store is not None:
+            if self.destination_public_key is not None:
+                raise ValueError(
+                    "destination public key must come only from the recipient key trust store"
+                )
+            self.recipient_key_trust_store.authorize(
+                tenant=self.tenant,
+                destination_connector=self.destination_connector_id,
+            )
+        elif self.protocol_version == 3 and not self.allow_unauthenticated_recipient_key:
+            raise ValueError(
+                "record protocol v3 requires an authenticated recipient key trust store; "
+                "legacy raw keys require explicit opt-in"
+            )
+        elif self.destination_public_key is None:
+            raise ValueError("legacy recipient key mode requires a destination public key")
+        else:
+            recipient_key_id(self.destination_public_key)
+
+    def _recipient_key(self, *, now: datetime) -> tuple[bytes, str]:
+        if self.recipient_key_trust_store is not None:
+            certificate = self.recipient_key_trust_store.authorize(
+                tenant=self.tenant,
+                destination_connector=self.destination_connector_id,
+                now=now,
+            )
+            key_id = certificate.key_id if self.protocol_version == 3 else ""
+            return certificate.public_key, key_id
+        assert self.destination_public_key is not None
+        key_id = recipient_key_id(self.destination_public_key) if self.protocol_version == 3 else ""
+        return self.destination_public_key, key_id
 
     def prepare_record(
         self,
@@ -406,6 +465,7 @@ class BlindSourceAgent:
         issued_at = datetime.now(UTC)
         expires_at = issued_at + self.transfer_ttl if self.transfer_ttl is not None else None
         plan_digest = self.plan.digest()
+        destination_public_key, destination_key_id = self._recipient_key(now=issued_at)
 
         for rule in self.plan.rules:
             source = source_fields[rule.source_field_id]
@@ -434,12 +494,13 @@ class BlindSourceAgent:
                 plan_id=self.plan.id,
                 plan_digest=plan_digest,
                 protocol_version=self.protocol_version,
+                recipient_key_id=destination_key_id,
                 issued_at=issued_at,
                 expires_at=expires_at,
             )
             envelope = seal_for_recipient(
                 PayloadCodec.encode(transformed),
-                self.destination_public_key,
+                destination_public_key,
                 context,
             )
             sealed.append(SealedField(target.id, context, envelope))
@@ -461,8 +522,30 @@ class BlindDestinationAgent:
     allowed_plan_digests: frozenset[str] | None = None
     source_trust_store: SourceTrustStore | None = None
     allow_legacy_unsigned: bool = False
+    additional_private_keys: tuple[X25519PrivateKey, ...] = ()
+    allow_legacy_blank_recipient_key_id: bool = False
 
-    def _authorize_record(self, transport: BlindTransportRecord) -> None:
+    def _recipient_private_key(self, transport: BlindTransportRecord) -> X25519PrivateKey:
+        authenticated_recipient = transport.fields[0].context.recipient_key_id
+        if not authenticated_recipient:
+            return self.private_key
+        matches = [
+            private_key
+            for private_key in (self.private_key, *self.additional_private_keys)
+            if recipient_key_id(RecipientKeyPair(private_key).public_bytes())
+            == authenticated_recipient
+        ]
+        if len(matches) != 1:
+            raise IntegrityError("transport record targets an unavailable recipient key")
+        return matches[0]
+
+    def _authorize_record(self, transport: BlindTransportRecord) -> X25519PrivateKey:
+        if (
+            transport.protocol_version == 3
+            and not transport.fields[0].context.recipient_key_id
+            and not self.allow_legacy_blank_recipient_key_id
+        ):
+            raise IntegrityError("v3 transport record has no authenticated recipient key id")
         if transport.protocol_version == 2:
             if not self.allow_legacy_unsigned:
                 raise IntegrityError("unsigned v2 transport record is not allowed")
@@ -477,16 +560,18 @@ class BlindDestinationAgent:
             and transport.destination_connector != self.expected_connector_id
         ):
             raise IntegrityError("transport is addressed to a different destination connector")
+        private_key = self._recipient_private_key(transport)
         if (
             self.allowed_plan_digests is not None
             and transport.plan_digest not in self.allowed_plan_digests
         ):
             raise IntegrityError("transport mapping plan is not authorized")
+        return private_key
 
     def open_record(self, transport: BlindTransportRecord) -> dict[str, object]:
-        self._authorize_record(transport)
+        private_key = self._authorize_record(transport)
         output: dict[str, object] = {}
         for field in transport.fields:
-            plaintext = open_envelope(field.envelope, self.private_key, field.context)
+            plaintext = open_envelope(field.envelope, private_key, field.context)
             output[field.target_field_id] = PayloadCodec.decode(plaintext)
         return output

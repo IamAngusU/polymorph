@@ -47,10 +47,12 @@ class SourceOutbox:
         *,
         limits: ProtocolLimits | None = None,
         allow_legacy_unsigned: bool = False,
+        allow_legacy_blank_recipient_key_id: bool = False,
     ) -> None:
         self.path = Path(path)
         self.limits = limits or ProtocolLimits()
         self.allow_legacy_unsigned = allow_legacy_unsigned
+        self.allow_legacy_blank_recipient_key_id = allow_legacy_blank_recipient_key_id
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
         if os.name == "posix":
@@ -96,6 +98,7 @@ class SourceOutbox:
             json.loads(wire.decode("utf-8")),
             limits=self.limits,
             allow_legacy_unsigned=self.allow_legacy_unsigned,
+            allow_legacy_blank_recipient_key_id=self.allow_legacy_blank_recipient_key_id,
         )
         digest = parsed.digest()
         if digest != record.digest():
@@ -179,6 +182,7 @@ class SourceOutbox:
                 json.loads(wire.decode("utf-8")),
                 limits=self.limits,
                 allow_legacy_unsigned=self.allow_legacy_unsigned,
+                allow_legacy_blank_recipient_key_id=self.allow_legacy_blank_recipient_key_id,
             )
             if record.digest() != row["record_digest"]:
                 raise IntegrityError("sealed source outbox record digest mismatch")

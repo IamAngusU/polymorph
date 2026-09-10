@@ -67,6 +67,17 @@ def test_json5_is_selected_by_content_not_extension(tmp_path) -> None:
     assert schema.metadata["format"] == "json5"
 
 
+@pytest.mark.parametrize("literal", ("NaN", "Infinity", "-Infinity"))
+def test_non_finite_numbers_are_not_classified_as_strict_json(tmp_path, literal: str) -> None:
+    path = tmp_path / "non-finite.json"
+    path.write_text(f'[{{"value": {literal}}}]', encoding="utf-8")
+
+    report = ContentInspector().inspect(path)
+
+    assert report.kind is ContentKind.JSON5
+    assert "JSON5 parser accepted full content" in report.signals
+
+
 def test_excel_is_detected_from_ooxml_structure_without_xlsx_suffix(tmp_path) -> None:
     original = tmp_path / "book.xlsx"
     renamed = tmp_path / "opaque-upload.bin"

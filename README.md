@@ -36,6 +36,9 @@ Stable protocol and persisted-state namespaces are intentionally decoupled from 
 - Full-record blind transport using X25519, HKDF-SHA256 and ChaCha20-Poly1305.
 - Ed25519 source authentication bound to tenant and connector identity, including finite rotation
   drain and hard revocation.
+- Destination recipient keys are accepted from a separately pinned Ed25519 destination identity,
+  not from control-plane claims alone. Signed, route-bound certificates form a monotonic rotation
+  chain, and an optional local checkpoint rejects stale generations and competing forks.
 - Durable source outbox that persists exact signed ciphertext for safe retry after a lost
   acknowledgement.
 - Ciphertext-only relay queue with fenced leases, durable idempotency ledger, sealed quarantine
@@ -81,10 +84,15 @@ Stable protocol and persisted-state namespaces are intentionally decoupled from 
 
 The relay still sees the metadata required to route a record. Payload confidentiality is not traffic-analysis resistance. The source and destination endpoints necessarily see plaintext at their respective trust boundaries.
 
+The destination identity public key must reach the source through an operator-controlled channel
+that is independent of the control plane. The control plane may distribute signed recipient-key
+certificates, but cannot replace their tenant, destination, key, validity or rotation metadata.
+See [recipient key authenticity and rotation](https://github.com/IamAngusU/polymorph/blob/main/docs/RECIPIENT_KEY_ROTATION.md).
+
 ## Fast path
 
 Python 3.11 through 3.14 is exercised in CI. For a development checkout with the core development
-checks and both pinned local models:
+checks and the deterministic model-free path:
 
 ```bash
 git clone https://github.com/IamAngusU/polymorph.git
@@ -93,12 +101,9 @@ python scripts/bootstrap.py
 python scripts/dev.py doctor
 ```
 
-The two model profiles use about 247 MB on disk. They verify eagerly but allocate ONNX sessions
-only when a genuinely ambiguous mapping needs model evidence. On the current Windows reference
-machine, the full seven-case model smoke peaked at 437.8 MiB RSS. The fully durable, signed and
-audited local transport moved 1,000 seven-field records at 65.88 records/s with a memory sink.
-Treat those as local measurements, not cross-platform guarantees. The core works
-without the models:
+The fully durable, signed and audited local transport moved 1,000 five-field records at a median
+52.41 records/s with a SQLite destination and 85.42 MiB median peak RSS. Treat those as local
+measurements, not cross-platform guarantees. Optional research models are not needed for the core:
 
 ```bash
 python scripts/bootstrap.py --skip-models
@@ -114,10 +119,11 @@ Create source and target schemas as usual, or let `prepare` inspect a supported 
 
 ```bash
 polymorph inspect db 'sqlite:///target.sqlite' --table orders -o target.schema.json
-polymorph prepare ./incoming-file target.schema.json --output-plan orders.plan.json --remember
+polymorph prepare ./incoming-file target.schema.json --output-plan orders.plan.json --remember \
+  --max-input-records 5000
 ```
 
-`prepare` performs content detection, schema inspection, recipe lookup, fresh mapping when needed and a full no-write preflight. A plan is only written when the route is promotable. If the evidence is insufficient, the command exits as review-required instead of manufacturing confidence.
+`prepare` performs content detection, schema inspection, recipe lookup, fresh mapping when needed and a full no-write preflight. A plan is only written when the route is promotable. If the evidence is insufficient, the command exits as review-required instead of manufacturing confidence. `--max-input-records` is a hard per-run blast-radius budget: the first record above it blocks readiness instead of turning an unexpectedly large source into an approved plan.
 
 For a foreign-key route, add a read-only destination resolver so preflight can prove the natural-key lookup before promotion:
 
@@ -137,21 +143,29 @@ polymorph preflight ./upload.bin target.schema.json route.plan.json
 
 Review-level decisions are not inserted into a plan by default. `--allow-review` exists for an explicit operator decision, not as a way to make the matcher more permissive.
 
-## Optional local specialist models
+## Optional research model profiles
 
-The core is fully functional without a model. The CPU-first profile uses a multilingual descriptor encoder and an optional cross-encoder reranker. Both are local-only at runtime, pinned to upstream revisions and hash-verified during installation. The native SentencePiece tokenizer avoids loading the much larger JSON vocabulary representation twice.
+The core is fully functional without a model. The CPU descriptor encoder is local-only at runtime,
+pinned to an upstream revision and hash-verified during installation. The native SentencePiece
+tokenizer avoids loading the much larger JSON vocabulary representation.
 
 ```bash
 pip install -e ".[semantic]"
 polymorph model install --profile multilingual-cpu
-polymorph model install --profile reranker-multilingual-cpu
 ```
 
-After installation, `--models` enables both profiles without repeating their paths:
+After explicit installation, `--models` enables the encoder without repeating its path:
 
 ```bash
 polymorph prepare ./incoming-file target.schema.json --models
 ```
+
+Both current profiles are research-only for product use. The encoder's English teacher used
+`msmarco-triplets`; the reranker documents mMARCO/MS MARCO directly. Their weight cards say
+Apache-2.0, while the underlying MS MARCO dataset terms say noncommercial research. The standard
+bootstrap therefore downloads neither model. After reviewing the provenance, a lab can install
+them explicitly with `--include-research-encoder` or `--include-research-reranker`. See the model
+profile document before using either in a commercial path.
 
 Models receive schema descriptors, not record payload values. Their evidence can improve ranking and reduce review work, but automatic promotion still requires an independently strong deterministic mapping.
 
@@ -176,6 +190,8 @@ polymorph explain write_outcome_unknown
 ```
 
 `RUN_ID` is the `workflow.observability.run_id` value in `workflow.json`.
+If the workflow used an event budget above 64 MiB, pass the same
+`--event-stream-max-mib` value to `events summary` or `events check`.
 On Windows, trusted local files can be measured with
 `--backend process --require-containment process`. That is process separation only, not a
 filesystem or network sandbox.

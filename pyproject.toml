@@ -47,6 +47,7 @@ semantic = [
 ]
 dev = [
   "build>=1.2,!=1.6.0",
+  "hypothesis>=6.100",
   "keyring>=25.0",
   "pytest>=8.0",
   "pytest-cov>=5.0",

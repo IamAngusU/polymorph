@@ -77,6 +77,14 @@ def test_wire_timestamps_must_be_timezone_aware() -> None:
         TransferContext.from_wire(wire)
 
 
+def test_wire_timestamp_normalization_overflow_is_a_protocol_error() -> None:
+    wire = context().to_wire()
+    wire["issued_at"] = "9999-12-31T23:59:59-23:59"
+
+    with pytest.raises(ProtocolError, match="issued_at timestamp is invalid"):
+        TransferContext.from_wire(wire)
+
+
 def test_inverted_transfer_validity_is_rejected() -> None:
     now = datetime.now(UTC)
 

@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -5,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import polymorph.filesystem as filesystem
 from polymorph.agents import (
     BlindDestinationAgent,
     BlindSourceAgent,
@@ -21,6 +23,7 @@ from polymorph.capabilities import (
 )
 from polymorph.connectors.base import ConnectorCapabilities, DeliveryContext
 from polymorph.connectors.csv_file import CsvConnector
+from polymorph.connectors.json_file import JsonFileConnector
 from polymorph.crypto import RecipientKeyPair, seal_for_recipient
 from polymorph.errors import IntegrityError, PolicyViolation
 from polymorph.ledger import ClaimDisposition, DeliveryLedger, DeliveryState
@@ -137,6 +140,7 @@ def _transport(secret: str = "s3cr3t"):
         plan=plan,
         destination_public_key=keys.public_bytes(),
         signing_key=signer,
+        allow_unauthenticated_recipient_key=True,
     ).prepare_record({"token": secret}, record_id="r1", transfer_id="t1")
     trust = SourceTrustStore([TrustedSourceKey(signer.public_bytes(), "tenant", "excel")])
     return record, keys, plan, trust
@@ -198,6 +202,7 @@ def _typed_runtime(
         plan=plan,
         destination_public_key=keys.public_bytes(),
         signing_key=signer,
+        allow_unauthenticated_recipient_key=True,
     ).prepare_record({"value": value}, record_id="r1", transfer_id="t1")
     destination = MemoryDestination()
     agent = BlindDestinationAgent(
@@ -229,6 +234,30 @@ def test_runtime_delivers_once_and_deduplicates(tmp_path):
     assert second.status is DeliveryStatus.DUPLICATE
     assert destination.calls == 1
     assert destination.records == [{"token": "s3cr3t"}]
+
+
+def test_json_post_publish_cleanup_failure_cannot_trigger_duplicate_retry(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "destination.json"
+    record, runtime = _runtime(tmp_path, JsonFileConnector(target))
+    real_unlink = filesystem.os.unlink
+
+    def fail_temporary_cleanup(path) -> None:
+        if Path(path).name.startswith(f".{target.name}."):
+            raise PermissionError("simulated post-publish cleanup failure")
+        real_unlink(path)
+
+    monkeypatch.setattr(filesystem.os, "unlink", fail_temporary_cleanup)
+    first = runtime.deliver(record)
+    monkeypatch.setattr(filesystem.os, "unlink", real_unlink)
+    second = runtime.deliver(record)
+
+    assert first.status is DeliveryStatus.DELIVERED
+    assert second.status is DeliveryStatus.DUPLICATE
+    assert json.loads(target.read_text(encoding="utf-8")) == [{"token": "s3cr3t"}]
+    for leftover in tmp_path.glob(f".{target.name}.*"):
+        leftover.unlink()
 
 
 def test_runtime_pins_unrestricted_agent_to_exact_plan(tmp_path) -> None:
@@ -626,6 +655,23 @@ def test_known_not_committed_write_is_safe_to_replay(tmp_path) -> None:
     assert replayed.status is DeliveryStatus.DELIVERED
     assert len(connector.records) == 1
     assert runtime.audit.summary().event_types == {"replay": 1}
+
+
+def test_json_limit_rejection_is_not_marked_as_an_uncertain_write(tmp_path) -> None:
+    path = tmp_path / "destination.json"
+    connector = JsonFileConnector(path, max_json_items=2)
+    assert connector.write_records([{"token": "already-committed"}]) == 1
+    committed = path.read_bytes()
+    record, runtime = _runtime(tmp_path, connector)
+
+    receipt = runtime.deliver(record)
+
+    assert receipt.status is DeliveryStatus.QUARANTINED
+    assert receipt.reason_code == "write_not_committed"
+    assert receipt.retry_safe
+    assert runtime.ledger.get(record).state is DeliveryState.QUARANTINED
+    assert runtime.spool.get(record.digest()) is not None
+    assert path.read_bytes() == committed
 
 
 def test_validly_signed_malformed_payload_is_quarantined_without_write(tmp_path) -> None:

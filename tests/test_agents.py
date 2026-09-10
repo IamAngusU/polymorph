@@ -83,6 +83,7 @@ def test_blind_transport_hides_entire_record_from_orchestrator():
         plan=plan,
         destination_public_key=keys.public_bytes(),
         signing_key=signer,
+        allow_unauthenticated_recipient_key=True,
     )
 
     transport = source_agent.prepare_record(
@@ -136,6 +137,7 @@ def test_blind_transport_wire_roundtrip_remains_opaque():
         plan=plan,
         destination_public_key=keys.public_bytes(),
         signing_key=signer,
+        allow_unauthenticated_recipient_key=True,
     ).prepare_record({"token": "top-secret-token"}, record_id="row-1", transfer_id="tx-1")
 
     wire = transport.to_wire()
@@ -174,6 +176,7 @@ def test_destination_agent_rejects_unapproved_plan():
         plan=plan,
         destination_public_key=keys.public_bytes(),
         signing_key=signer,
+        allow_unauthenticated_recipient_key=True,
     ).prepare_record({"v": "hello"}, record_id="row-1", transfer_id="tx-1")
 
     import pytest

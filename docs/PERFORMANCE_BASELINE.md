@@ -11,6 +11,20 @@ Measured on 2026-09-09 and 2026-09-10 on the current Windows development machine
 
 These are local engineering measurements, not cross-platform performance promises.
 
+## Release verification snapshot
+
+The final Windows verification run on 2026-09-10 collected 903 tests: 895 passed, eight were
+platform-conditional skips, and none failed or errored in 36.425 seconds. Statement coverage was
+82 percent, with 8,563 of 10,426 statements covered. The narrower failure, recovery, key-auth,
+network-fault and external-corpus job collected 93 tests: 92 passed and the POSIX directory-fsync
+case skipped on Windows in 11.839 seconds. Coverage percentage is a navigation aid, not a claim
+that every critical state transition is proven; use the security matrix for that.
+
+After the Windows atomic-publication fix, 20 fresh-process repetitions of the six-writer JSON
+contention test passed 20 of 20 in 37.830 seconds. Each repetition required every child to complete
+four appends and then verified all 24 unique records. This is regression evidence on one NTFS host,
+not a filesystem-wide atomicity guarantee.
+
 ## File inspection
 
 Each fixture contains 50,000 rows and seven fields. Schema discovery inspected the complete input,
@@ -35,8 +49,8 @@ polymorph benchmark inspect ./input-file --records 10000 --magika
 
 ## Mapping models
 
-The expanded synthetic regression corpus was run with both pinned model profiles in a fresh
-process on 2026-09-10:
+The expanded synthetic regression corpus was run with the research-only encoder in a fresh process
+on 2026-09-10:
 
 ```bash
 python scripts/dev.py benchmark mapping benchmarks/safety-regression.json --models \
@@ -47,20 +61,22 @@ python scripts/dev.py benchmark mapping benchmarks/safety-regression.json --mode
 | Metric | Result |
 | --- | ---: |
 | Cases and labelled fields | 42 / 45 |
-| Wall time | 2.635 s |
-| CPU time | 37.500 s |
-| Throughput | 17.08 fields/s |
-| Peak RSS | 438.30 MiB |
+| Wall time | 0.926 s |
+| CPU time | 8.672 s |
+| Throughput | 48.59 fields/s |
+| Peak RSS | 284.52 MiB |
 | Automatic precision | 100% (17 of 17 automatic decisions) |
 | Eligible automation coverage | 89.47% (17 of 19 eligible fields) |
 | Overall automation rate | 62.96% (17 of 27 mappable fields) |
 | Unsafe automatic decisions | 0 |
 | Suggestion accuracy | 68.89% (31 of 45 fields) |
 
-The deterministic profile produced the same decisions in 4.52 ms at 78.16 MiB peak RSS. On this
-corpus, the models add ranking evidence but no measurable decision-quality gain. Keeping them
-optional is therefore the correct default until a source-separated holdout shows a benefit. This
-corpus verifies regression behavior and model packaging, not real-world mapping quality.
+The deterministic profile produced the same decisions in 4.02 ms at 73.30 MiB peak RSS. An
+explicit encoder-plus-mMARCO-reranker comparison also produced the same decisions, but took
+2.325 seconds, 32.875 CPU seconds and 437.87 MiB peak RSS. On this corpus, neither model path
+adds measurable decision quality. The reranker additionally needs a commercial-provenance review
+before product use. This corpus verifies regression behavior and model packaging, not real-world
+mapping quality.
 
 ## Parser-worker boundary
 
@@ -81,35 +97,44 @@ because a process can exit between polling intervals.
 
 ## Full secure transport
 
-The full local path was measured over 1,000 records with seven string fields and batches of 100:
+The current local path was measured in three fresh work directories over 1,000 records with five
+string fields and batches of 100. Each run included:
 
-1. X25519 and ChaCha20-Poly1305 seal, then Ed25519 source signature
-2. durable source outbox stage
-3. relay validation, enqueue and fenced lease
-4. destination authentication, decrypt, contract validation and ledger fences
-5. memory destination write, sealed spool cleanup and signed hash-chain audit
-6. relay and source-outbox acknowledgement
+1. destination-signed recipient certificate verification and a persisted recipient trust head
+2. X25519 and ChaCha20-Poly1305 seal, then Ed25519 source signature
+3. durable source outbox stage
+4. relay validation, enqueue and fenced lease
+5. destination authentication, decrypt, contract validation and ledger fences
+6. SQLite destination write, sealed spool cleanup and signed hash-chain audit
+7. relay and source-outbox acknowledgement
 
 | Metric | Result |
 | --- | ---: |
-| Full wall time | 17.829 s |
-| Throughput | 56.09 records/s |
-| Peak RSS | 86.43 MiB |
-| Destination delivery p50 / p95 | 9.519 / 10.674 ms |
-| Seal and durable outbox stage p50 / p95 | 2.465 / 2.873 ms |
-| Complete final verification | 96.26 ms |
-| Destination operational-event check | 1.31 ms |
+| Successful runs | 3 of 3 |
+| Full wall time | 19.074 to 19.769 s; median 19.079 s |
+| Throughput | 50.59 to 52.43 records/s; median 52.41 records/s |
+| CPU time | median 12.344 s |
+| Peak RSS | 85.33 to 85.49 MiB; median 85.42 MiB |
+| Destination delivery wall time | median 9.480 s |
+| Destination delivery p50 / p95 | median 9.341 / 10.592 ms |
+| Seal and durable outbox stage p50 / p95 | median 3.917 / 4.425 ms |
+| Acknowledgement p50 / p95 | median 2.821 / 3.426 ms |
+| Retained fixture and state files | median 2.702 MiB |
 
-All 1,000 records were delivered once, both queues ended empty, and all 1,000 signed audit events
-passed hash-chain and signature verification. The destination was a local SQLite database using
-`DELETE` journal mode and `FULL` synchronous durability. The operational stream contained 1,029
-contract-valid events with unique IDs, a closed workflow lifecycle and no unhealthy status. A
-network database, HTTP service or file sink adds its own latency.
+All 1,000 records were delivered once in every run. The outbox, relay and quarantine ended empty,
+and all 1,000 signed audit events per run passed hash-chain and signature verification. The
+destination was a local SQLite database using `DELETE` journal mode and `FULL` synchronous
+durability. Every operational stream contained 1,029 contract-valid events with unique IDs, exact
+workflow counts, a closed lifecycle and no unhealthy status. The event reservation was 1,055,744
+bytes against the default 64 MiB stream budget. Each run atomically persisted a 1,015-byte
+recipient trust head, reopened it and verified its signature, route, generation and history before
+the source used it. A network database, HTTP service or file sink adds its own latency.
 
-Separate durable SQLite commits dominate this profile. Cryptography stays below 1 ms per record.
-The useful optimization targets are transaction batching with the existing per-record fences,
-connection reuse and batch acknowledgements. Relaxing durability or deleting safety checks just to
-improve this number would make the benchmark prettier and the product worse.
+Separate durable SQLite commits dominate this profile. The retained report measures sealing and
+the durable source-outbox append together at 3.917 ms p50; it does not isolate cryptographic CPU
+time. The useful optimization targets are transaction batching with the existing per-record
+fences, connection reuse and batch acknowledgements. Relaxing durability or deleting safety
+checks just to improve this number would make the benchmark prettier and the product worse.
 
 ## Measurement rules
 

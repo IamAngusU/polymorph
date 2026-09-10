@@ -569,6 +569,13 @@ _REASONS = {
             "do_not_auto_promote",
         ),
         _reason(
+            "input_record_limit_exceeded",
+            "blast_radius",
+            "The source exceeds the explicit record budget for this run.",
+            "Confirm the source selection or approve a larger record budget before delivery.",
+            "do_not_retry_unchanged",
+        ),
+        _reason(
             "spreadsheet_formula_cache",
             "spreadsheet_freshness",
             "Spreadsheet formula values came from an unverified workbook cache.",

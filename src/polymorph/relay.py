@@ -57,8 +57,15 @@ class RelayPolicy:
     max_lifetime: timedelta | None = timedelta(hours=24)
     source_trust_store: SourceTrustStore | None = None
     allow_legacy_unsigned: bool = False
+    allow_legacy_blank_recipient_key_id: bool = False
 
     def validate(self, record: BlindTransportRecord, *, now: datetime | None = None) -> None:
+        if (
+            record.protocol_version == 3
+            and not record.fields[0].context.recipient_key_id
+            and not self.allow_legacy_blank_recipient_key_id
+        ):
+            raise PolicyViolation("v3 transport record has no authenticated recipient key id")
         if record.protocol_version == 2:
             if not self.allow_legacy_unsigned:
                 raise PolicyViolation("unsigned v2 transport record is not allowed by relay policy")
@@ -119,6 +126,7 @@ def _decode_queued_record(
     *,
     limits: ProtocolLimits,
     allow_legacy_unsigned: bool,
+    allow_legacy_blank_recipient_key_id: bool,
 ) -> BlindTransportRecord:
     def reject_constant(value: str) -> object:
         raise ProtocolError(f"non-finite JSON constant is not allowed: {value}")
@@ -148,6 +156,7 @@ def _decode_queued_record(
             cast(dict[str, object], decoded),
             limits=limits,
             allow_legacy_unsigned=allow_legacy_unsigned,
+            allow_legacy_blank_recipient_key_id=allow_legacy_blank_recipient_key_id,
         )
     except (
         KeyError,
@@ -402,6 +411,9 @@ class SealedRelayQueue:
                         wire,
                         limits=self.limits,
                         allow_legacy_unsigned=self.policy.allow_legacy_unsigned,
+                        allow_legacy_blank_recipient_key_id=(
+                            self.policy.allow_legacy_blank_recipient_key_id
+                        ),
                     )
                     self.policy.validate(record, now=now)
                 except TransferExpired:

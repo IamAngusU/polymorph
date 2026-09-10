@@ -2,9 +2,9 @@
 
 Models are optional evidence providers. Polymorph does not require a generative model and does not send record payload values to a model interface.
 
-## CPU-first descriptor encoder
+## Research-only descriptor encoder
 
-Default optional profile:
+Comparison profile:
 
 `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
 
@@ -24,13 +24,33 @@ Pinned upstream revision:
 
 `e8f8c211226b894fcb81acc59f3b34ba3efd5f42`
 
-## Ambiguity reranker
+The Hugging Face weight card declares Apache-2.0. Sentence Transformers documents the English
+teacher model as trained on several datasets including `msmarco-triplets`, then documents this
+profile as its multilingual distilled version. Microsoft's MS MARCO terms restrict that dataset to
+noncommercial research and explicitly recommend an independent legal review for research outputs
+used in products. Polymorph therefore does not install or enable this profile by default. Keep it
+out of a commercial path unless a proper rights review clears it. Explicit lab installation uses
+bootstrap's `--include-research-encoder`; activation still requires `--models` or `--model-dir`.
 
-Optional profile:
+The 42-case local safety regression completed in 0.926 seconds at 48.59 fields per second
+with 284.52 MiB peak RSS. It made the same 17 safe automatic decisions and the same 31 correct
+suggestions as the deterministic and two-model profiles.
+
+## Experimental ambiguity reranker
+
+Research-only comparison profile:
 
 `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`
 
 Role: compare only the top few target candidates when initial deterministic/embedding evidence is close. The reranker is not called for clear cases.
+
+This profile is not installed by default and `--models` does not enable it. The Hugging Face
+weight card declares Apache-2.0, but the model card documents mMARCO/MS MARCO training data.
+Microsoft's official MS MARCO terms restrict that dataset to noncommercial research. That
+provenance is a bad fit for a planned paid edition even though Polymorph does not redistribute
+the weights. Keep it out of commercial evaluation unless a proper rights review clears it.
+Bootstrap's `--include-research-reranker` switch installs it. Runtime activation still requires
+`--reranker-dir`.
 
 Selected properties:
 
@@ -58,7 +78,11 @@ Larger specialist models can improve retrieval quality, but they increase startu
 
 Current lab candidates include the Qwen3 0.6B embedding/reranking pair for a future precision mode. They support a much larger multilingual surface but are substantially heavier and the reranker is implemented on a causal-language-model base. They should earn inclusion by improving Polymorph's own source-separated mapping corpus without introducing incorrect automatic promotions.
 
-`multilingual-e5-small` is another useful benchmark candidate with broad multilingual support. The current CPU-first default remains MiniLM because the upstream profile we pin provides practical quantized AVX2 and ARM64 artifacts for the architectures we want to support directly.
+`multilingual-e5-small` is another useful benchmark candidate with broad multilingual support.
+MiniLM remains the compact lab baseline because the upstream profile we pin provides practical
+quantized AVX2 and ARM64 artifacts for the architectures we want to measure directly. Neither is a
+default until its full training provenance is commercially reviewable and it improves the held-out
+Polymorph corpus.
 
 ## Supply-chain pinning
 
@@ -79,8 +103,10 @@ local measurements:
 
 - encoder verification only: about 33 MiB process RSS
 - encoder after first inference: about 240 MiB process RSS
-- seven-case safety smoke with both profiles: 73 MiB before, 424 MiB after, 435 MiB peak
+- 42-case safety regression with both profiles: 75.48 MiB before, 427.29 MiB after,
+  437.87 MiB peak and 2.325 s wall time
 - both installed profiles after removing obsolete JSON tokenizer copies: about 247 MB on disk
+- research encoder alone on disk: 123.5 MB, or 117.81 MiB
 
 These numbers are evidence for one machine, not a hardware guarantee. Operators should run the
 included benchmark on their target CPU and corpus. The ONNX graph optimizer, memory pattern and

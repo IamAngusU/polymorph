@@ -8,10 +8,16 @@ from pathlib import Path
 
 import pytest
 
-from scripts.bootstrap import PythonDetails, _require_matching_venv
+from scripts.bootstrap import (
+    PythonDetails,
+    _parse_args,
+    _require_matching_venv,
+    _research_profiles,
+)
 from scripts.check_sdist import (
     archive_file_paths,
     expected_release_paths,
+    mismatched_release_paths,
     missing_release_paths,
 )
 
@@ -20,6 +26,14 @@ def _write_sdist(path: Path, names: tuple[str, ...]) -> None:
     with tarfile.open(path, "w:gz") as archive:
         for name in names:
             payload = name.encode("utf-8")
+            info = tarfile.TarInfo(f"polymorph_bridge-1.0/{name}")
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+
+
+def _write_sdist_contents(path: Path, contents: dict[str, bytes]) -> None:
+    with tarfile.open(path, "w:gz") as archive:
+        for name, payload in contents.items():
             info = tarfile.TarInfo(f"polymorph_bridge-1.0/{name}")
             info.size = len(payload)
             archive.addfile(info, io.BytesIO(payload))
@@ -58,6 +72,45 @@ def test_sdist_gate_normalizes_one_release_root(tmp_path) -> None:
         "pyproject.toml",
         "src/polymorph/new_module.py",
     }
+
+
+def test_sdist_gate_accepts_files_matching_workspace_bytes(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    local = workspace / "src" / "polymorph" / "new_module.py"
+    local.parent.mkdir(parents=True)
+    local.write_bytes(b"current release bytes\n")
+    sdist = tmp_path / "release.tar.gz"
+    _write_sdist_contents(
+        sdist,
+        {"src/polymorph/new_module.py": local.read_bytes()},
+    )
+
+    assert (
+        mismatched_release_paths(
+            sdist,
+            {"src/polymorph/new_module.py"},
+            root=workspace,
+        )
+        == []
+    )
+
+
+def test_sdist_gate_reports_stale_file_bytes(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    local = workspace / "tests" / "fixtures" / "LICENSE.txt"
+    local.parent.mkdir(parents=True)
+    local.write_bytes(b"corrected upstream notice\n")
+    sdist = tmp_path / "release.tar.gz"
+    _write_sdist_contents(
+        sdist,
+        {"tests/fixtures/LICENSE.txt": b"incorrect upstream notice\n"},
+    )
+
+    assert mismatched_release_paths(
+        sdist,
+        {"tests/fixtures/LICENSE.txt"},
+        root=workspace,
+    ) == ["tests/fixtures/LICENSE.txt"]
 
 
 def test_recovery_manifest_matches_every_executable_recovery_test() -> None:
@@ -109,3 +162,30 @@ def test_bootstrap_accepts_exact_requested_python() -> None:
     requested = PythonDetails((3, 14), "arm64", "win-arm64", 64)
 
     _require_matching_venv(requested, requested)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    (
+        ([], ()),
+        (["--skip-models"], ()),
+        (["--include-research-encoder"], ("multilingual-cpu",)),
+        (["--include-research-reranker"], ("reranker-multilingual-cpu",)),
+        (
+            ["--include-research-encoder", "--include-research-reranker"],
+            ("multilingual-cpu", "reranker-multilingual-cpu"),
+        ),
+    ),
+)
+def test_bootstrap_model_selection_is_explicit(
+    arguments: list[str],
+    expected: tuple[str, ...],
+) -> None:
+    assert _research_profiles(_parse_args(arguments)) == expected
+
+
+def test_bootstrap_rejects_skip_models_with_research_model() -> None:
+    with pytest.raises(SystemExit) as captured:
+        _parse_args(["--skip-models", "--include-research-encoder"])
+
+    assert captured.value.code == 2

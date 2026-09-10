@@ -8,7 +8,7 @@ from polymorph.models.schema import (
     SchemaDescriptor,
 )
 from polymorph.models.types import DataType, FieldRole
-from polymorph.preflight import PreflightRunner
+from polymorph.preflight import PreflightRunner, PreflightSeverity
 
 
 def _basic():
@@ -61,6 +61,103 @@ def test_sampled_preflight_never_auto_promotes() -> None:
     assert report.valid
     assert not report.complete_scan
     assert not report.promotable
+
+
+def test_preflight_blocks_an_input_record_blast_radius_overrun() -> None:
+    source, target, plan = _basic()
+    yielded = 0
+
+    def records():
+        nonlocal yielded
+        for value in ("1,00", "2,00", "3,00", "4,00"):
+            yielded += 1
+            yield {"c1": value}
+
+    report = PreflightRunner().run(
+        records(),
+        source,
+        target,
+        plan,
+        max_input_records=2,
+    )
+
+    assert not report.valid
+    assert not report.promotable
+    assert not report.complete_scan
+    assert report.records_checked == 2
+    assert report.max_input_records == 2
+    assert report.input_record_limit_exceeded
+    assert yielded == 3
+    finding = next(item for item in report.findings if item.code == "input_record_limit_exceeded")
+    assert finding.severity is PreflightSeverity.BLOCKING
+    assert finding.record_index == 3
+
+
+def test_preflight_accepts_a_source_exactly_at_the_input_record_limit() -> None:
+    source, target, plan = _basic()
+    report = PreflightRunner().run(
+        ({"c1": value} for value in ("1,00", "2,00")),
+        source,
+        target,
+        plan,
+        max_input_records=2,
+    )
+
+    assert report.valid
+    assert report.complete_scan
+    assert report.promotable
+    assert report.records_checked == 2
+    assert not report.input_record_limit_exceeded
+
+
+def test_input_record_limit_remains_enforced_after_diagnostic_sample() -> None:
+    source, target, plan = _basic()
+    yielded = 0
+
+    def records():
+        nonlocal yielded
+        for index in range(1, 7):
+            yielded += 1
+            yield {"c1": f"{index},00"}
+
+    report = PreflightRunner().run(
+        records(),
+        source,
+        target,
+        plan,
+        max_records=2,
+        max_input_records=5,
+    )
+
+    assert not report.valid
+    assert not report.promotable
+    assert not report.complete_scan
+    assert report.records_checked == 2
+    assert report.input_record_limit_exceeded
+    assert yielded == 6
+    finding = next(item for item in report.findings if item.code == "input_record_limit_exceeded")
+    assert finding.record_index == 6
+
+
+def test_diagnostic_sample_counts_to_input_limit_without_validating_extra_records() -> None:
+    source, target, plan = _basic()
+    records = [{"c1": "1,00"}, {"c1": "2,00"}, object(), object()]
+
+    report = PreflightRunner().run(
+        records,
+        source,
+        target,
+        plan,
+        max_records=2,
+        max_input_records=5,
+    )
+
+    assert report.valid
+    assert not report.promotable
+    assert not report.complete_scan
+    assert report.records_checked == 2
+    assert not report.input_record_limit_exceeded
+    assert {finding.code for finding in report.findings} == {"sampled_scan"}
 
 
 def test_preflight_reports_transform_failure_without_exposing_value() -> None:

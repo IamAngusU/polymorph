@@ -1,0 +1,8 @@
+*.csv -text
+*.tsv -text
+*.csv -whitespace
+*.tsv -whitespace
+*.base64 text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+SHA256SUMS text eol=lf

@@ -6,6 +6,20 @@ All notable changes to this alpha are documented here.
 
 ### Added
 
+- destination-signed, tenant- and connector-bound recipient-key certificates with strict validity,
+  exact predecessor rotation, durable local head checkpoints and concurrent fork rejection
+- authenticated recipient key IDs in encrypted record context plus explicit multi-key destination
+  drain support for planned rotations
+- CLI certificate inspection and atomic trust-head acceptance backed by a separately provisioned
+  destination identity public key
+- an explicit preflight input-record blast-radius gate that blocks readiness above the configured
+  per-run budget without confusing that policy with diagnostic sampling
+- bounded operational event streams with matching writer and health-reader budgets
+- bounded persisted recipient-key reuse detection, low-order X25519 rejection and POSIX
+  trust-head directory durability
+- fail-closed handling of blank recipient key IDs in source-signed v3 records, with a separate
+  per-boundary legacy-drain opt-in
+- a real localhost TLS acknowledgement-loss lab with an idempotent retry invariant
 - fail-closed isolated content inspection with exact-byte snapshots, a strict JSON worker protocol,
   explicit containment levels, POSIX resource limits and a Linux Bubblewrap backend
 - parser-worker timing and failure evidence plus adversarial timeout, output, protocol, snapshot and
@@ -35,9 +49,13 @@ All notable changes to this alpha are documented here.
 - a ten-scenario concurrent recovery suite covering restarts, lease fencing, process-contended
   schema migration and duplicate
   suppression
+- compact, hash-pinned JSONTestSuite and W3C CSVW regression subsets with retained upstream
+  licenses and byte-level provenance
 
 ### Changed
 
+- default bootstrap is model-free; both existing model profiles require explicit research opt-in
+  pending commercial training-data provenance review
 - commercial licensing and external contribution boundaries are stated explicitly
 - standard benchmarks no longer enable high-overhead CPython allocation tracing unless explicitly
   requested
@@ -56,9 +74,24 @@ All notable changes to this alpha are documented here.
 - foreign-key lookup metadata now carries the lookup column type; legacy untyped keys stay
   reviewable but cannot justify automatic promotion
 - destination preflight and runtime use the same non-coercing value contract
+- JSON destinations count Python tuple arrays, reject non-string object keys and non-JSON values,
+  and revalidate combined old plus new output before replacement
 
 ### Fixed
 
+- the hard input-record budget remains enforced when a smaller diagnostic preflight sample is used
+- strict JSON identification rejects CPython's non-standard `NaN`, `Infinity` and `-Infinity`
+  constants instead of labeling them RFC 8259 JSON
+- transient Windows replacement sharing violations receive a bounded retry while the cooperative
+  writer lock remains held
+- lock files are published only after their lock byte is durable, and a failed temporary-file
+  cleanup after successful hard-link publication is no longer reported as an uncommitted write
+- JSON destination byte limits include the final newline, and pre-write iterator or value failures
+  are classified as definitely not committed
+- a source-volume blast-radius stop degrades a reused recipe without counting as a semantic recipe
+  rejection
+- canonical X25519 recipient key IDs now collapse equivalent RFC 7748 encodings, and protocol-v2
+  contexts reject recipient key IDs instead of silently carrying version-incompatible metadata
 - current Magika score handling no longer touches its removed legacy fallback field or pollutes
   standard error during valid inspection
 - a compatible Magika JSON report no longer rejects a large bounded JSON-like probe as a

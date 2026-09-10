@@ -42,6 +42,8 @@
 - long-running source, relay and destination services
 - mutually authenticated agent control channel
 - durable authenticated distribution of public-key registration, rotation and revocation state
+- external checkpoints or hardware counters for recipient trust-state rollback detection
+- destination identity-key rotation and emergency recipient-key revocation ceremonies
 - OS/HSM-backed key-provider interfaces
 - extend the exact-snapshot content worker to schema parsing and bounded record streaming
 - connector-account least-privilege policy checks

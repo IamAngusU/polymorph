@@ -18,7 +18,12 @@ Cooperating thread and process writers use the same path lock. Each complete JSO
 to disk before the append returns. A writer validates existing lines on first use and again after a
 detected identity, size or modification-time change; an incomplete tail is always rejected. The
 reader caps every line read at 4,097 bytes and rejects records over the 4,096-byte format limit
-without first allocating an unbounded line. The final summary scans the complete stream. This
+without first allocating an unbounded line. Events produced by the compact writer have a stricter
+1,024-byte bound, which is used for workflow capacity reservation. The complete stream is capped
+at 64 MiB by default; the Python API accepts an explicit limit from 4 KiB through 1 GiB. The size
+is checked under the same path lock before append and before read. An append that would cross the
+limit fails without a partial line, and an already oversized file is rejected before parsing. The
+final summary scans the complete bounded stream. This
 catches ordinary damage without turning every append into an increasingly expensive full-file
 scan. It is not protection against deliberate same-file tampering. The benchmark report includes a
 per-run summary and says whether the stream was valid and closed without a known gap.
@@ -108,7 +113,13 @@ Content inspection, mapping, relay decisions and capability denials outside that
 all instrumented. Source outbox and relay state are durable, but acknowledgements outside the
 instrumented workflow still do not produce a global operational journal.
 There is no built-in rotation or retention policy. Storage grows with one event per observed
-destination receipt, so long-running deployments must manage the JSONL file externally.
+destination receipt until the configured stream cap is reached, then appends fail closed. A
+long-running deployment must archive or rotate the JSONL file before that point. Workflow
+benchmarks also emit at least one event per record and one per batch, so large benchmark runs need
+an explicit event-stream budget and must pass the benchmark's early capacity check. Configure it
+with `polymorph benchmark workflow --event-stream-max-mib N`; the CLI accepts at most 1,024 MiB.
+Pass the same value to `events summary` or `events check` when reading a stream written with a
+budget above the 64 MiB default.
 
 Until a dedicated service layer exists, monitor receipt fields, audit summaries, recipe health,
 relay dead letters, destination quarantine and ledger state as separate sources. Do not market the

@@ -49,6 +49,7 @@ The preflight checks:
 - runtime output types after transformation
 - optional read-only foreign-key resolution
 - spreadsheet formula-cache uncertainty
+- an optional hard input-record blast-radius budget
 - completeness of the scan
 
 Secret and opaque values are not inspected. Preflight checks only their presence/nullability where required.
@@ -57,6 +58,14 @@ when the final foreign-key column is nullable. A null source value skips lookup 
 when the final target permits null.
 
 A bounded sample can be useful for diagnosis but cannot automatically promote or remember a recipe. Automatic recipe promotion requires a complete scan.
+
+`--max-records` is only a diagnostic sample size. It never proves a complete run. The separate
+`--max-input-records N` policy is a hard gate: preflight consumes at most `N + 1` records, validates
+up to `N` of them, and emits the blocking `input_record_limit_exceeded` finding when the final probe
+succeeds. If a smaller diagnostic `--max-records` sample is also configured, later records are only
+counted, but the hard input limit is still enforced. This protects against a selected source growing
+from an expected few thousand records to hundreds of thousands. The operator still has to choose
+the budget; the alpha does not infer a safe business blast radius from historical volume.
 
 ## Recipes are memory, not truth
 

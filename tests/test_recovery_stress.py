@@ -88,6 +88,7 @@ def _route(*, records: int = 1) -> _Route:
         plan=plan,
         destination_public_key=recipient.public_bytes(),
         signing_key=signer,
+        allow_unauthenticated_recipient_key=True,
     )
     prepared = tuple(
         agent.prepare_record(

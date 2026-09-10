@@ -62,9 +62,9 @@ system asks or abstains. It does not invent certainty with a larger model.
 
 ### Conservative
 
-The default. Native parsers, deterministic constraints, content inspection, optional MiniLM
-candidate retrieval, a durable local SQLite store and complete preflight. The reranker runs only for close top-k
-candidates. A model cannot authorize a write.
+The default. Native parsers, deterministic constraints, content inspection, a durable local SQLite
+store and complete preflight. Explicit research profiles can add MiniLM candidate retrieval or
+close-top-k reranking after provenance review. A model cannot authorize a write.
 
 ### Precision
 

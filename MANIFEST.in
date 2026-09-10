@@ -5,3 +5,5 @@ recursive-include docs *.md *.png *.webp
 recursive-include scripts *.py
 recursive-include tests *.py
 recursive-include tests/fixtures/csv-spectrum *.csv *.json *.md *.txt SHA256SUMS
+recursive-include tests/fixtures/json-test-suite *.json *.md *.txt SHA256SUMS
+recursive-include tests/fixtures/w3c-csvw *.csv *.tsv *.base64 *.md *.txt SHA256SUMS

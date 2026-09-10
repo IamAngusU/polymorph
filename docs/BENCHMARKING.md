@@ -71,9 +71,9 @@ such as ONNX Runtime do not allocate all memory through Python, so sampled proce
 the relevant whole-process memory measurement.
 
 Model profiles verify their pinned assets immediately but load their runtime lazily. A benchmark
-with `--models` therefore includes model startup only when the corpus actually contains ambiguous
-fields. Report both `rss_before_bytes` and `peak_rss_bytes`; quoting only installed model size is
-not a memory benchmark.
+with `--models` therefore includes research-encoder startup only when the corpus actually contains
+ambiguous fields. Report both `rss_before_bytes` and `peak_rss_bytes`; quoting only installed model
+size is not a memory benchmark.
 
 ## Parser-worker boundary benchmark
 

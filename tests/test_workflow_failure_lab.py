@@ -89,6 +89,7 @@ def _route() -> tuple[
         plan=plan,
         destination_public_key=recipient.public_bytes(),
         signing_key=signer,
+        allow_unauthenticated_recipient_key=True,
     ).prepare_record(
         {"token": SECRET_MARKER},
         record_id="record-1",

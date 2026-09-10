@@ -85,6 +85,7 @@ def _setup(
         plan=plan,
         destination_public_key=keys.public_bytes(),
         signing_key=signer,
+        allow_unauthenticated_recipient_key=True,
     ).prepare_record({"c1": source_value}, record_id="row-1", transfer_id="tx-1")
 
     runtime = DestinationRuntime(

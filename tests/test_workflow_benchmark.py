@@ -22,6 +22,24 @@ from polymorph.models.schema import SchemaDescriptor
 from polymorph.workflow_benchmark import run_workflow_benchmark
 
 
+def test_workflow_event_capacity_reserves_every_possible_event(tmp_path: Path) -> None:
+    records = 5
+    batch_size = 2
+    expected_events = records + 3 + len(workflow_benchmark.WORKFLOW_STAGE_COMPONENTS) + 2
+    expected_bytes = expected_events * workflow_benchmark.MAX_COMPACT_EVENT_BYTES
+
+    assert workflow_benchmark._required_event_stream_bytes(records, batch_size) == expected_bytes
+    report, _ = run_workflow_benchmark(
+        records=records,
+        batch_size=batch_size,
+        work_dir=tmp_path / "capacity-proof",
+    )
+
+    assert report.success
+    assert report.observability["reserved_stream_bytes"] == expected_bytes
+    assert int(report.observability["events"]) <= expected_events
+
+
 def _stage_names(payload: dict[str, object]) -> list[str]:
     stages = payload["stages"]
     assert isinstance(stages, list)
@@ -41,6 +59,18 @@ def test_real_workflow_benchmark_crosses_every_durable_boundary(tmp_path: Path) 
     assert report.records_delivered == 4
     assert report.records_acknowledged == 4
     assert report.batches_completed == 2
+    recipient_trust_state = json.loads(
+        (work_dir / "recipient-trust-state.json").read_text(encoding="utf-8")
+    )
+    assert recipient_trust_state["format"] == "angusu.bridge/recipient-key-trust-state"
+    assert recipient_trust_state["version"] == 2
+    assert recipient_trust_state["current_certificate"]["generation"] == 1
+    assert (
+        recipient_trust_state["current_certificate"]["key_id"]
+        in recipient_trust_state["used_key_ids"]
+    )
+    assert payload["configuration"]["event_stream_max_bytes"] == 64 * 1024 * 1024
+    assert payload["configuration"]["event_stream_reserved_bytes"] > 0
     assert payload["mapping"] == {
         "source_fields": 5,
         "target_fields": 6,
@@ -73,6 +103,7 @@ def test_real_workflow_benchmark_crosses_every_durable_boundary(tmp_path: Path) 
     assert storage["source_fixture"] > 0
     assert storage["destination"] > 0
     assert storage["audit"] > 0
+    assert storage["recipient_trust"] > 0
     assert storage["total"] == sum(value for key, value in storage.items() if key != "total")
     durability = final_state["sqlite_durability"]
     assert durability["destination"]["journal_mode"] in {"delete", "wal"}
@@ -428,6 +459,8 @@ def test_workflow_cli_writes_machine_readable_json(tmp_path: Path) -> None:
             "2",
             "--batch-size",
             "2",
+            "--event-stream-max-mib",
+            "8",
             "--work-dir",
             str(tmp_path / "cli-work"),
             "--no-audit",
@@ -448,7 +481,75 @@ def test_workflow_cli_writes_machine_readable_json(tmp_path: Path) -> None:
     assert payload["environment"]["sqlite_version"]
     assert payload["workflow"]["success"] is True
     assert payload["workflow"]["configuration"]["signed_audit"] is False
+    assert payload["workflow"]["configuration"]["event_stream_max_bytes"] == 8 * 1024 * 1024
     assert str((tmp_path / "cli-work").resolve()) not in json.dumps(payload, sort_keys=True)
+
+
+def test_workflow_rejects_insufficient_event_capacity_before_creating_workspace(
+    tmp_path: Path,
+) -> None:
+    work_dir = tmp_path / "must-not-be-created"
+
+    with pytest.raises(
+        ValueError,
+        match=("increase --event-stream-max-mib, reduce --records, or increase --batch-size"),
+    ):
+        run_workflow_benchmark(
+            records=1,
+            batch_size=1,
+            event_stream_max_bytes=4096,
+            work_dir=work_dir,
+        )
+
+    assert not work_dir.exists()
+
+
+@pytest.mark.parametrize(
+    ("records", "batch_size", "message"),
+    [
+        (True, 1, "records"),
+        (1.5, 1, "records"),
+        (1, False, "batch size"),
+        (1, 2.5, "batch size"),
+    ],
+)
+def test_workflow_rejects_non_integer_counts_before_creating_workspace(
+    tmp_path: Path,
+    records: object,
+    batch_size: object,
+    message: str,
+) -> None:
+    work_dir = tmp_path / "not-created"
+
+    with pytest.raises(ValueError, match=message):
+        run_workflow_benchmark(
+            records=records,  # type: ignore[arg-type]
+            batch_size=batch_size,  # type: ignore[arg-type]
+            work_dir=work_dir,
+        )
+
+    assert not work_dir.exists()
+
+
+def test_workflow_maximum_record_setting_needs_compatible_batch_event_budget(
+    tmp_path: Path,
+) -> None:
+    work_dir = tmp_path / "also-not-created"
+
+    assert workflow_benchmark._required_event_stream_bytes(1_000_000, 100) <= 1024 * 1024 * 1024
+
+    with pytest.raises(
+        ValueError,
+        match=("increase --event-stream-max-mib, reduce --records, or increase --batch-size"),
+    ):
+        run_workflow_benchmark(
+            records=1_000_000,
+            batch_size=1,
+            event_stream_max_bytes=1024 * 1024 * 1024,
+            work_dir=work_dir,
+        )
+
+    assert not work_dir.exists()
 
 
 def test_workflow_benchmark_rejects_nonempty_work_directory(tmp_path: Path) -> None:

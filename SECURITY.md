@@ -2,6 +2,9 @@
 
 Polymorph is security-sensitive infrastructure. Do not place production credentials, plaintext payloads, private keys or customer data in issues, commits, fixtures or debug output.
 
+See [Security coverage and resource boundaries](docs/SECURITY_COVERAGE.md) for the enforced
+defaults, their automated evidence and the aggregate limits that are still open.
+
 ## Reporting
 
 Report security issues privately to [hello@angusu.de](mailto:hello@angusu.de) or through the contact
@@ -29,15 +32,16 @@ snapshots, including 0.3.x and earlier, are unsupported and should not be deploy
 12. A sampled preflight cannot automatically promote or remember a route. Automatic promotion requires a complete no-write preflight.
 13. Blind transport authenticates route, record, field, transfer, schema and plan metadata together with the ciphertext.
 14. Protocol v3 additionally authenticates the source with an Ed25519 key independently bound to its tenant and connector. Unsigned v2 intake is fail-closed unless every boundary explicitly enables migration mode.
-15. The sealed relay queue has no recipient private-key parameter or decrypt method. Ack and release require the current unexpired random lease token.
-16. Schema drift cannot silently change sensitivity or invalidate an approved foreign-key lookup proof.
-17. The destination runtime checks the exact plan and target schema plus required fields, nullability and runtime types before writing.
-18. A write with unknown durability is never treated as safely retryable merely because an exception occurred.
-19. Exact duplicate deliveries are detected before a second decrypt/write attempt once a commit is recorded.
-20. Quarantine and audit persistence accept machine-readable metadata and sealed records, not arbitrary payload-bearing exception text.
-21. CSV destinations reject spreadsheet formula-like values by default. Enabling them is an explicit connector policy.
-22. Connector credentials are represented by references when a secret provider is used and are never serialized into mapping plans.
-23. Recipient private-key files are encrypted, created without overwriting an existing key and use restrictive POSIX permissions where supported.
+15. Protocol-v3 sources reject unauthenticated destination recipient keys by default. Accepted keys are signed by an independently pinned destination identity, bound to the route and advanced through an exact monotonic predecessor chain.
+16. The sealed relay queue has no recipient private-key parameter or decrypt method. Ack and release require the current unexpired random lease token.
+17. Schema drift cannot silently change sensitivity or invalidate an approved foreign-key lookup proof.
+18. The destination runtime checks the exact plan and target schema plus required fields, nullability and runtime types before writing.
+19. A write with unknown durability is never treated as safely retryable merely because an exception occurred.
+20. Exact duplicate deliveries are detected before a second decrypt/write attempt once a commit is recorded.
+21. Quarantine and audit persistence accept machine-readable metadata and sealed records, not arbitrary payload-bearing exception text.
+22. CSV destinations reject spreadsheet formula-like values by default. Enabling them is an explicit connector policy.
+23. Connector credentials are represented by references when a secret provider is used and are never serialized into mapping plans.
+24. Recipient private-key files are encrypted, created without overwriting an existing key and use restrictive POSIX permissions where supported.
 
 ## Parser containment
 
@@ -73,6 +77,9 @@ Optional semantic models are not redistributed in this repository. Their install
 - Only content inspection has a separately enforced worker; schema parsing and record iteration are
   not isolated yet.
 - Source trust keys are in-memory primitives. Durable authenticated trust-bundle distribution is not implemented.
+- Recipient certificate heads can be persisted locally, but source-host state rollback needs an
+  independent checkpoint. Destination identity rotation and replacement-free emergency revocation
+  are not implemented.
 - Queue limits are per record and message, not cumulative per tenant or disk.
 - The local audit chain has no external checkpoint, so an attacker with storage access may truncate a valid suffix.
 - CLI database URLs may be exposed by shell history. Use structured endpoints and secret providers in automation.

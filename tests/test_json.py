@@ -1,5 +1,6 @@
 import json
 import multiprocessing
+import traceback
 
 import pytest
 
@@ -20,10 +21,11 @@ def _append_json_in_process(path, worker_id, ready, start, result) -> None:
             raise TimeoutError("concurrent JSON test start was not released")
         for sequence in range(4):
             connector.write_records([{"writer": worker_id, "sequence": sequence, "value": "kept"}])
-    except Exception as exc:
+    except Exception:
+        detail = traceback.format_exc()
         if not start.is_set():
-            ready.put(f"{type(exc).__name__}: {exc}")
-        result.put(f"{type(exc).__name__}: {exc}")
+            ready.put(detail)
+        result.put(detail)
     else:
         result.put(None)
 
@@ -186,8 +188,11 @@ def test_json_writer_rejects_non_finite_values(tmp_path):
 
     path = tmp_path / "output.json"
     connector = JsonFileConnector(path)
-    with pytest.raises(ValueError):
+    with pytest.raises(ConnectorWriteError) as caught:
         connector.write_records([{"value": math.nan}])
+
+    assert caught.value.outcome is WriteOutcome.NOT_COMMITTED
+    assert not path.exists()
 
 
 def test_json5_non_finite_numbers_are_rejected(tmp_path) -> None:
@@ -233,6 +238,134 @@ def test_json_destination_appends_without_losing_prior_records(tmp_path) -> None
         {"name": "Alice"},
         {"name": "Bob"},
     ]
+
+
+def test_json_destination_stops_consuming_an_unbounded_batch_at_item_limit(tmp_path) -> None:
+    path = tmp_path / "out.json"
+    yielded = 0
+
+    def records():
+        nonlocal yielded
+        while True:
+            yielded += 1
+            yield {}
+
+    connector = JsonFileConnector(path, max_json_items=3)
+
+    with pytest.raises(ConnectorWriteError) as caught:
+        connector.write_records(records())
+
+    assert caught.value.outcome is WriteOutcome.NOT_COMMITTED
+    assert yielded == 4
+    assert not path.exists()
+
+
+def test_json_destination_iterator_failure_is_known_not_committed(tmp_path) -> None:
+    path = tmp_path / "out.json"
+
+    def records():
+        yield {"value": "first"}
+        raise RuntimeError("source iterator failed")
+
+    with pytest.raises(ConnectorWriteError) as caught:
+        JsonFileConnector(path).write_records(records())
+
+    assert caught.value.outcome is WriteOutcome.NOT_COMMITTED
+    assert isinstance(caught.value.__cause__, RuntimeError)
+    assert not path.exists()
+
+
+def test_json_destination_size_budget_includes_published_newline(tmp_path) -> None:
+    path = tmp_path / "out.json"
+    record = {"value": 1}
+    encoded_without_newline = json.dumps([record], indent=2, ensure_ascii=False, allow_nan=False)
+
+    with pytest.raises(ConnectorWriteError) as caught:
+        JsonFileConnector(
+            path, max_file_bytes=len(encoded_without_newline.encode("utf-8"))
+        ).write_records([record])
+
+    assert caught.value.outcome is WriteOutcome.NOT_COMMITTED
+    assert not path.exists()
+
+
+def test_json_destination_rechecks_combined_output_item_limit(tmp_path) -> None:
+    path = tmp_path / "out.json"
+    connector = JsonFileConnector(path, max_json_items=4)
+    connector.write_records([{"name": "Alice"}])
+    committed = path.read_bytes()
+
+    with pytest.raises(ConnectorWriteError) as caught:
+        connector.write_records([{"name": "Bob"}, {"name": "Carol"}])
+
+    assert caught.value.outcome is WriteOutcome.NOT_COMMITTED
+    assert path.read_bytes() == committed
+
+
+def test_json_destination_rejects_deep_or_cyclic_values_before_encoding(tmp_path) -> None:
+    deep_path = tmp_path / "deep.json"
+    with pytest.raises(ConnectorWriteError) as deep_error:
+        JsonFileConnector(deep_path, max_structured_text_depth=2).write_records([{"value": [[]]}])
+    assert deep_error.value.outcome is WriteOutcome.NOT_COMMITTED
+    assert not deep_path.exists()
+
+    cyclic_path = tmp_path / "cyclic.json"
+    cyclic: list[object] = []
+    cyclic.append(cyclic)
+    with pytest.raises(ConnectorWriteError) as cyclic_error:
+        JsonFileConnector(cyclic_path).write_records([{"value": cyclic}])
+    assert cyclic_error.value.outcome is WriteOutcome.NOT_COMMITTED
+    assert not cyclic_path.exists()
+
+
+def test_json_destination_counts_tuple_arrays_before_encoding(tmp_path) -> None:
+    accepted = tmp_path / "tuple.json"
+    connector = JsonFileConnector(accepted)
+    assert connector.write_records([{"value": (1, 2, 3)}]) == 1
+    assert json.loads(accepted.read_text(encoding="utf-8")) == [{"value": [1, 2, 3]}]
+
+    rejected = tmp_path / "deep-tuple.json"
+    with pytest.raises(ConnectorWriteError) as caught:
+        JsonFileConnector(rejected, max_structured_text_depth=2).write_records([{"value": ((1,),)}])
+
+    assert caught.value.outcome is WriteOutcome.NOT_COMMITTED
+    assert not rejected.exists()
+
+
+def test_json_destination_rejects_non_json_values_before_encoding(tmp_path) -> None:
+    path = tmp_path / "bytes.json"
+
+    with pytest.raises(ConnectorWriteError) as caught:
+        JsonFileConnector(path).write_records([{"value": b"not-json"}])
+
+    assert caught.value.outcome is WriteOutcome.NOT_COMMITTED
+    assert not path.exists()
+
+
+def test_json_destination_rejects_non_string_object_keys_before_encoding(tmp_path) -> None:
+    path = tmp_path / "keys.json"
+    ambiguous_keys = {1: "numeric", "1": "text"}
+
+    with pytest.raises(ConnectorWriteError) as caught:
+        JsonFileConnector(path).write_records(  # type: ignore[arg-type]
+            [{"value": ambiguous_keys}]
+        )
+
+    assert caught.value.outcome is WriteOutcome.NOT_COMMITTED
+    assert not path.exists()
+
+
+def test_json_destination_applies_item_limit_to_existing_and_new_records(tmp_path) -> None:
+    path = tmp_path / "out.json"
+    connector = JsonFileConnector(path, max_json_items=4)
+    assert connector.write_records([{"value": 1}]) == 1
+    original = path.read_bytes()
+
+    with pytest.raises(ConnectorWriteError) as caught:
+        connector.write_records([{"value": 2}, {"value": 3}])
+
+    assert caught.value.outcome is WriteOutcome.NOT_COMMITTED
+    assert path.read_bytes() == original
 
 
 def test_json_rejects_path_swap_after_content_gate_even_with_parsed_cache(tmp_path) -> None:

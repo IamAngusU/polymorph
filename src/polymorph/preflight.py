@@ -48,6 +48,8 @@ class PreflightReport:
     plan_validation: PlanValidationReport
     findings: tuple[PreflightFinding, ...]
     destination_lookups_checked: int = 0
+    max_input_records: int | None = None
+    input_record_limit_exceeded: bool = False
 
     @property
     def valid(self) -> bool:
@@ -81,6 +83,8 @@ class PreflightReport:
             "records_checked": self.records_checked,
             "complete_scan": self.complete_scan,
             "destination_lookups_checked": self.destination_lookups_checked,
+            "max_input_records": self.max_input_records,
+            "input_record_limit_exceeded": self.input_record_limit_exceeded,
             "valid": self.valid,
             "requires_review": self.requires_review,
             "promotable": self.promotable,
@@ -127,11 +131,29 @@ class PreflightRunner:
         plan: MappingPlan,
         *,
         max_records: int | None = None,
+        max_input_records: int | None = None,
         foreign_key_resolver: ForeignKeyResolver | None = None,
     ) -> PreflightReport:
+        if max_records is not None and (
+            isinstance(max_records, bool) or not isinstance(max_records, int) or max_records < 1
+        ):
+            raise ValueError("preflight sample size must be a positive integer")
+        if max_input_records is not None and (
+            isinstance(max_input_records, bool)
+            or not isinstance(max_input_records, int)
+            or max_input_records < 1
+        ):
+            raise ValueError("preflight input record limit must be a positive integer")
         plan_report = self.validator.validate(plan, source_schema, target_schema)
         if not plan_report.valid:
-            return PreflightReport(plan.digest(), 0, False, plan_report, ())
+            return PreflightReport(
+                plan.digest(),
+                0,
+                False,
+                plan_report,
+                (),
+                max_input_records=max_input_records,
+            )
 
         source_fields = source_schema.by_id()
         target_fields = target_schema.by_id()
@@ -150,10 +172,28 @@ class PreflightRunner:
         checked = 0
         lookup_checks = 0
         complete = True
+        input_record_limit_exceeded = False
 
         try:
             iterator = iter(records)
             while True:
+                if max_input_records is not None and checked >= max_input_records:
+                    try:
+                        next(iterator)
+                    except StopIteration:
+                        complete = True
+                    else:
+                        complete = False
+                        input_record_limit_exceeded = True
+                        findings.append(
+                            PreflightFinding(
+                                PreflightSeverity.BLOCKING,
+                                "input_record_limit_exceeded",
+                                "source exceeds the configured input record blast-radius limit",
+                                record_index=checked + 1,
+                            )
+                        )
+                    break
                 if max_records is not None and checked >= max_records:
                     try:
                         next(iterator)
@@ -161,6 +201,32 @@ class PreflightRunner:
                         complete = True
                     else:
                         complete = False
+                        if max_input_records is not None:
+                            records_seen = checked + 1
+                            while records_seen < max_input_records:
+                                try:
+                                    next(iterator)
+                                except StopIteration:
+                                    break
+                                records_seen += 1
+                            else:
+                                try:
+                                    next(iterator)
+                                except StopIteration:
+                                    pass
+                                else:
+                                    input_record_limit_exceeded = True
+                                    findings.append(
+                                        PreflightFinding(
+                                            PreflightSeverity.BLOCKING,
+                                            "input_record_limit_exceeded",
+                                            (
+                                                "source exceeds the configured input record "
+                                                "blast-radius limit"
+                                            ),
+                                            record_index=max_input_records + 1,
+                                        )
+                                    )
                     break
                 try:
                     record = next(iterator)
@@ -362,7 +428,7 @@ class PreflightRunner:
                     "preflight did not observe any records",
                 )
             )
-        if not complete:
+        if not complete and not input_record_limit_exceeded:
             findings.append(
                 PreflightFinding(
                     PreflightSeverity.INFO,
@@ -378,6 +444,8 @@ class PreflightRunner:
             plan_report,
             tuple(findings),
             lookup_checks,
+            max_input_records,
+            input_record_limit_exceeded,
         )
 
 

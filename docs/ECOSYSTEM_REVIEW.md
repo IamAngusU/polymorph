@@ -1,32 +1,56 @@
 # Ecosystem review
 
-Reviewed on 2026-09-09. A useful dependency must improve a measured failure mode without becoming
+Reviewed on 2026-09-10. A useful dependency must improve a measured failure mode without becoming
 new parser authority or an implicit network service.
 
-## Keep in the current profile
+## Current decisions
 
 | Component | Role | Decision |
 | --- | --- | --- |
 | [Magika](https://github.com/google/magika) | Independent file-type evidence | Keep. It may veto a conflict but never selects a parser by itself. |
 | [CleverCSV](https://github.com/alan-turing-institute/CleverCSV) | Additional CSV dialect candidate | Keep. A close disagreement still abstains. |
-| multilingual MiniLM | Schema descriptor retrieval | Keep the pinned local profile. |
-| multilingual mMARCO cross-encoder | Ambiguous candidate reranking | Keep the pinned local profile. It cannot authorize an automatic mapping. |
+| multilingual MiniLM | Schema descriptor retrieval | Keep as an explicit research comparator. Its English teacher used MS MARCO triplets, so commercial use needs the same provenance review as the reranker. It produced no measured corpus gain. |
+| multilingual mMARCO cross-encoder | Ambiguous candidate reranking | Exclude from defaults. Its documented MS MARCO training source is noncommercial-research data and it produced no measured corpus gain. Keep only as an explicit research comparator pending rights review. |
 
-No additional embedding model should be installed by default. A challenger must beat the current
-pair on a held-out, source-separated corpus for safety, useful coverage, CPU support, cold and warm
-latency, and peak RSS.
+No embedding model is installed by default. A challenger must have commercially reviewable
+training provenance and beat the deterministic profile on a held-out, source-separated corpus for
+safety, useful coverage, CPU support, cold and warm latency, and peak RSS.
 
-## Add or evaluate next
+## Corpus and parser evidence
 
-### Small regression corpora
+### Integrated regression corpora
 
 - [csv-spectrum](https://github.com/max-mapper/csv-spectrum) is a BSD-2-Clause collection of tiny
-  CSV correctness cases. It is suitable for checked-in regression fixtures with pinned provenance.
+  CSV correctness cases. Its 11 case pairs are pinned with byte-level provenance.
+- [JSONTestSuite](https://github.com/nst/JSONTestSuite) contributes a pinned 20-file accept, reject
+  and implementation-defined subset under MIT. Its `i_` case remains expectation-free. The first
+  run exposed CPython's permissive non-finite constants, which Polymorph now excludes from strict
+  JSON identification.
+- [W3C CSVW tests](https://github.com/w3c/csvw/tree/gh-pages/tests) contribute seven pinned CSV/TSV
+  sources under the W3C three-clause BSD test license. They cover CRLF, Unicode, tabs, empty data
+  and ragged rows without claiming the full CSVW metadata model.
+
+### Candidate regression corpora
+
 - [Magika test data](https://github.com/google/magika/tree/main/tests_data) contains compact file
   identification and polyglot regressions. Use a curated subset, never as training data.
 - [Apache parquet-testing](https://github.com/apache/parquet-testing) contains valid and invalid
   Parquet files. Run dangerous cases only inside a hard-limited worker. A 4 KB fixture in that set
   intentionally expands one column chunk beyond 2 GiB.
+
+### Fuzzing and independent parser evidence
+
+- [Atheris](https://github.com/google/atheris) and
+  [ClusterFuzzLite](https://github.com/google/clusterfuzzlite) are Apache-2.0 Linux-CI candidates
+  for coverage-guided JSON, CSV, ZIP/OOXML and worker-protocol fuzzing. Persist minimized crashes
+  with revision, seed and expected classification.
+- [Mitra](https://github.com/corkami/mitra) is an MIT-licensed polyglot generator.
+  [PolyFile](https://github.com/trailofbits/polyfile) is an Apache-2.0 independent embedded-file
+  oracle. Both belong in a no-network, time- and memory-limited lab worker, not the runtime.
+- [Open XML SDK](https://github.com/dotnet/Open-XML-SDK) and
+  [Apache POI](https://github.com/apache/poi) are independent MIT or Apache-2.0 XLSX structure
+  oracles. A .NET sidecar is the lighter first experiment. Parser disagreement means abstention,
+  and neither implementation receives authority to execute links, macros or formulas.
 
 ### Encoding evidence
 
@@ -58,6 +82,9 @@ first user file.
 
 ## Evaluation-only baselines
 
+- [GitTables](https://gittables.github.io/) version 0.0.6 supplies a source-separated semantic
+  column-type holdout. Use only a per-table license allowlist and retain original source URLs and
+  attribution; the corpus-wide CC BY label does not erase source-repository terms.
 - [WDC Schema Matching Benchmark](https://webdatacommons.org/structureddata/smb/) is a strong fit
   for header-only, values-only and hybrid mapping evaluation. Its public page does not state a
   redistribution license, so fetch it for local evaluation but do not vendor it.

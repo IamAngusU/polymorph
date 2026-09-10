@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from io import StringIO
 from pathlib import Path
-from typing import BinaryIO, Protocol
+from typing import BinaryIO, Never, Protocol
 from xml.sax import SAXException
 from xml.sax.handler import ContentHandler
 from xml.sax.xmlreader import AttributesImpl
@@ -298,6 +298,10 @@ _WINDOWS_RESERVED_NAMES = frozenset(
     }
 )
 _WINDOWS_INVALID_NAME_CHARS = frozenset('<>:"|?*')
+
+
+def _reject_nonfinite_json_constant(value: str) -> Never:
+    raise ValueError(f"strict JSON cannot contain non-finite number {value}")
 
 
 def _is_windows_reparse_point(metadata: os.stat_result) -> bool:
@@ -1159,7 +1163,7 @@ class ContentInspector:
                     ),
                 )
             try:
-                json.loads(complete_text)
+                json.loads(complete_text, parse_constant=_reject_nonfinite_json_constant)
             except RecursionError:
                 return (
                     ContentKind.TEXT,

@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+import polymorph.cli as cli_module
 from polymorph.cli import _auto_source, build_parser
 from polymorph.errors import ConnectorError, IntegrityError, PolymorphError
 
@@ -21,6 +22,76 @@ def test_cli_supports_csv_and_plan_commands() -> None:
         ["plan", "create", "source.json", "target.json", "-o", "plan.json"]
     )
     assert plan_args.output == "plan.json"
+
+    preflight_args = parser.parse_args(
+        [
+            "preflight",
+            "orders.csv",
+            "target.json",
+            "plan.json",
+            "--max-input-records",
+            "5000",
+        ]
+    )
+    prepare_args = parser.parse_args(
+        ["prepare", "orders.csv", "target.json", "--max-input-records", "5000"]
+    )
+    assert preflight_args.max_input_records == 5000
+    assert prepare_args.max_input_records == 5000
+
+
+def test_event_commands_accept_the_writer_stream_budget() -> None:
+    parser = build_parser()
+    summary = parser.parse_args(
+        ["events", "summary", "events.jsonl", "--event-stream-max-mib", "256"]
+    )
+    check = parser.parse_args(
+        [
+            "events",
+            "check",
+            "events.jsonl",
+            "--run-id",
+            "11" * 16,
+            "--event-stream-max-mib",
+            "1024",
+        ]
+    )
+
+    assert summary.event_stream_max_mib == 256
+    assert check.event_stream_max_mib == 1024
+
+
+def test_event_summary_uses_its_explicit_stream_budget(tmp_path) -> None:
+    path = tmp_path / "oversized-for-default.jsonl"
+    with path.open("wb") as handle:
+        handle.truncate(65 * 1024 * 1024)
+    args = build_parser().parse_args(
+        ["events", "summary", str(path), "--event-stream-max-mib", "66"]
+    )
+
+    # Passing the configured writer budget gets beyond the total-size gate. The deliberately
+    # malformed sparse body is then rejected by the independent per-line boundary.
+    with pytest.raises(IntegrityError, match="line 1 exceeds the size limit"):
+        args.func(args)
+
+
+def test_cli_supports_recipient_certificate_inspect_and_accept() -> None:
+    parser = build_parser()
+    common = [
+        "certificate.json",
+        "--identity-public-key-hex",
+        "11" * 32,
+        "--tenant",
+        "tenant-1",
+        "--destination-connector",
+        "destination-1",
+    ]
+    inspect = parser.parse_args(["key", "certificate-inspect", *common])
+    assert inspect.path == "certificate.json"
+    accept = parser.parse_args(
+        ["key", "certificate-accept", *common, "--state", "recipient-trust.json"]
+    )
+    assert accept.state == "recipient-trust.json"
 
 
 def test_cli_supports_content_auto_preflight_and_recipes() -> None:
@@ -51,9 +122,37 @@ def test_cli_supports_optional_reranker_profile() -> None:
     assert args.destination is None
 
 
-def test_cli_can_enable_both_installed_models_with_one_flag() -> None:
+def test_cli_models_flag_selects_research_encoder_without_reranker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected: dict[str, str | None] = {}
+    sentinel = object()
+
+    def capture(model_dir: str | None, reranker_dir: str | None = None):
+        selected.update(model=model_dir, reranker=reranker_dir)
+        return sentinel
+
+    monkeypatch.setattr(cli_module, "_matcher", capture)
     args = build_parser().parse_args(["map", "source.json", "target.json", "--models"])
     assert args.models is True
+    assert args.reranker_dir is None
+    assert cli_module._matcher_for_args(args) is sentinel
+    assert selected["model"] is not None
+    assert selected["model"].endswith("multilingual-cpu")
+    assert selected["reranker"] is None
+
+
+def test_doctor_labels_both_model_profiles_as_research_only(
+    tmp_path, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli_module, "model_home", lambda name: tmp_path / name)
+    args = build_parser().parse_args(["doctor"])
+
+    args.func(args)
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["models"]["multilingual-cpu"]["usage"] == "research_only"
+    assert payload["models"]["reranker-multilingual-cpu"]["usage"] == "research_only"
 
 
 def test_cli_benchmark_is_explicit_opt_in() -> None:
@@ -364,6 +463,58 @@ def test_prepare_suspends_rejected_recipe_and_builds_fresh_version(tmp_path, cap
     assert adapted["recipe_monitoring"]["adaptation"]["code"] == ("recipe_auto_reuse_suspended")
     assert adapted["recipe_monitoring"]["candidate_health"]["state"] == "suspended"
     assert adapted["recipe_monitoring"]["active_health"]["state"] == "healthy"
+
+
+def test_prepare_blast_limit_does_not_punish_a_valid_recipe(tmp_path, capsys) -> None:
+    from polymorph.models.schema import FieldDescriptor, SchemaDescriptor
+    from polymorph.models.types import DataType
+    from polymorph.recipes import RecipeHealthState, RecipeRunOutcome, RecipeStore
+    from polymorph.serialization import save_schema
+
+    source_path = tmp_path / "payload.unknown"
+    source_path.write_text(
+        '[{"customer id":"A-1"},{"customer id":"A-2"}]',
+        encoding="utf-8",
+    )
+    target_path = tmp_path / "target.json"
+    save_schema(
+        target_path,
+        SchemaDescriptor(
+            "target",
+            (FieldDescriptor("customer_id", "customer id", DataType.STRING, nullable=False),),
+        ),
+    )
+    recipe_path = tmp_path / "recipes.sqlite3"
+    base_arguments = [
+        "prepare",
+        str(source_path),
+        str(target_path),
+        "--recipe-store",
+        str(recipe_path),
+        "--remember",
+    ]
+    first_args = build_parser().parse_args(base_arguments)
+    first_args.func(first_args)
+    first = json.loads(capsys.readouterr().out)
+    assert first["ready"] is True
+
+    limited_args = build_parser().parse_args([*base_arguments, "--max-input-records", "1"])
+    with pytest.raises(SystemExit) as stopped:
+        limited_args.func(limited_args)
+    limited = json.loads(capsys.readouterr().out)
+
+    store = RecipeStore(recipe_path)
+    recipe = store.get(first["recipe_id"])
+    assert recipe is not None
+    health = store.health(recipe)
+    assert limited["ready"] is False
+    assert stopped.value.code == 2
+    assert limited["route_source"] == "recipe"
+    assert limited["preflight"]["input_record_limit_exceeded"] is True
+    assert health.state is RecipeHealthState.DEGRADED
+    assert health.last_outcome is RecipeRunOutcome.QUARANTINED
+    assert health.consecutive_rejections == 0
+    assert health.auto_reuse_allowed
 
 
 def test_recipe_find_reports_suspension_while_allowing_manual_plan_export(tmp_path, capsys) -> None:
