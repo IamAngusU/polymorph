@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from polymorph.diagnostics import explain_reason
+from polymorph.isolation import SandboxErrorCode
 
 
 @pytest.mark.parametrize(
@@ -15,6 +16,12 @@ from polymorph.diagnostics import explain_reason
         "observability_event_count_mismatch",
         "destination_operational_event_status_unexpected",
         "destination_operational_event_context_missing",
+        "containment_too_weak",
+        "backend_unavailable",
+        "worker_timeout",
+        "worker_output_limit",
+        "input_snapshot_changed",
+        "protocol_error",
         "operational_run_not_found",
         "operational_failure_status_present",
         "operational_run_not_closed",
@@ -110,3 +117,12 @@ def test_unknown_reason_code_fails_to_generic_inspection_guidance() -> None:
 
     assert diagnostic.category == "unknown"
     assert diagnostic.retry_policy == "inspect_before_retry"
+
+
+@pytest.mark.parametrize("code", [item.value for item in SandboxErrorCode])
+def test_parser_worker_failures_have_specific_operator_guidance(code: str) -> None:
+    diagnostic = explain_reason(code)
+
+    assert diagnostic.category == "parser_containment"
+    assert diagnostic.next_action
+    assert diagnostic.retry_policy

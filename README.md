@@ -13,9 +13,15 @@ Stable protocol and persisted-state namespaces are intentionally decoupled from 
 ## v0.4 alpha hardening
 
 - Content-first file inspection. Parser selection does not trust the extension or display name.
+- A fail-closed parser-worker foundation can run content inspection against an exact-byte snapshot.
+  Non-setid Linux Bubblewrap 0.12.0 or newer is the strict backend; a normal Windows child process
+  is reported only as process separation. Structured schema and record parsers are not claimed as
+  isolated yet.
 - Opened-handle identity binding for CSV, JSON and Excel closes ordinary path-swap gaps between
   inspection and parsing. This is not a claim of hostile-code process isolation.
 - ZIP/OOXML central-directory checks for traversal, symlinks, duplicate or encrypted members, suspicious expansion, oversized members, macros and external workbook links and data connections before a workbook parser is opened.
+- GZIP members are validated with bounded streaming and member-count limits. JSON and XML have
+  explicit parse, depth, item, element and per-tag attribute budgets before expensive parser work.
 - Optional local Magika evidence. A high-confidence conflict between independent detectors blocks automatic parser selection rather than picking a favorite.
 - Excel parsing requires XML hardening through `defusedxml`, then performs layout discovery for title rows, moved columns, repeated headers and fixed-width identifiers such as `000042`.
 - Spreadsheet formulas are detected separately. Cached formula results are treated as freshness-unproven and prevent automatic recipe promotion.
@@ -156,8 +162,11 @@ See [Model profiles](https://github.com/IamAngusU/polymorph/blob/main/docs/MODEL
 ```bash
 pip install -e ".[fileid,csv-detection,benchmark]"
 polymorph inspect auto ./unknown-upload --magika
+# Strict Linux boundary. Fails closed when compatible Bubblewrap is unavailable.
+polymorph inspect isolated-content ./unknown-upload
 polymorph doctor
 polymorph benchmark inspect ./unknown-upload --records 10000 --magika
+polymorph benchmark parser-worker ./unknown-upload --runs 5
 polymorph benchmark mapping ./benchmarks/safety-regression.json --require-auto-precision 1.0 --require-automation-coverage 0.70
 polymorph benchmark workflow --records 1000 --batch-size 100 --work-dir ./workflow-run --output workflow.json
 polymorph recipe health
@@ -167,6 +176,9 @@ polymorph explain write_outcome_unknown
 ```
 
 `RUN_ID` is the `workflow.observability.run_id` value in `workflow.json`.
+On Windows, trusted local files can be measured with
+`--backend process --require-containment process`. That is process separation only, not a
+filesystem or network sandbox.
 
 The benchmark commands are explicit diagnostics. Production code paths do not start Python allocation tracing or memory polling.
 
@@ -175,6 +187,7 @@ The benchmark commands are explicit diagnostics. Production code paths do not st
 - [Architecture](https://github.com/IamAngusU/polymorph/blob/main/docs/ARCHITECTURE.md)
 - [Reliability model](https://github.com/IamAngusU/polymorph/blob/main/docs/RELIABILITY.md)
 - [File trust gate](https://github.com/IamAngusU/polymorph/blob/main/docs/FILE_TRUST.md)
+- [Parser isolation](https://github.com/IamAngusU/polymorph/blob/main/docs/PARSER_ISOLATION.md)
 - [Recipes](https://github.com/IamAngusU/polymorph/blob/main/docs/RECIPES.md)
 - [Benchmarking](https://github.com/IamAngusU/polymorph/blob/main/docs/BENCHMARKING.md)
 - [Workflow and failure lab](https://github.com/IamAngusU/polymorph/blob/main/docs/WORKFLOW_LAB.md)
@@ -196,11 +209,12 @@ Polymorph remains an alpha. Inspection, mapping, planning and preflight are avai
 CLI. Source transport, relay and destination delivery are tested Python APIs; long-running agent
 services, an authenticated control channel and a deployment supervisor are still roadmap work.
 
-There is no parser process sandbox yet, no durable trust-bundle distribution, no cumulative
-per-tenant queue quota and no external audit checkpoint against log-suffix truncation. Raw database
-URLs can also leak credentials through shell history, so production automation should use
-`DatabaseEndpoint` plus a secret provider. Automatic-promotion policy still needs a large,
-source-separated adversarial corpus and independent security review.
+Strict Linux containment is available for the content-inspection stage when Bubblewrap is usable.
+Structured schema parsing and record iteration are not isolated yet. There is also no durable
+trust-bundle distribution, cumulative per-tenant queue quota or external audit checkpoint against
+log-suffix truncation. Raw database URLs can leak credentials through shell history, so production
+automation should use `DatabaseEndpoint` plus a secret provider. Automatic-promotion policy still
+needs a large, source-separated adversarial corpus and independent security review.
 
 The alpha is not fully self-monitoring. The benchmark and destination runtime now write a local
 payload-free event stream with run and correlation IDs, plus a CLI health gate for lifecycle,

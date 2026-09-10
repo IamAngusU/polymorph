@@ -41,9 +41,24 @@ snapshots, including 0.3.x and earlier, are unsupported and should not be deploy
 
 ## Parser containment
 
-The current content gate and contract preflight are not a claim of hostile-code operating-system containment. Supported parsers execute in the local Polymorph process after the input gate accepts them. Resource limits, archive checks and hardened XML parsing reduce risk but do not replace a process sandbox.
+The content gate and contract preflight are not by themselves a claim of hostile-code
+operating-system containment. Polymorph now has a fail-closed worker for the content-inspection
+stage. It parses an exact-byte snapshot under an explicitly reported containment level. The strict
+Linux backend uses Bubblewrap; a plain child process is never labelled as a filesystem or network
+sandbox.
 
-`polymorph doctor` reports whether Bubblewrap or Firejail is available but does not treat their presence as an active security boundary. Parser-worker isolation is planned as a separate, explicit capability so unsupported hosts do not receive a false security claim.
+The Bubblewrap backend requires a non-setuid and non-setgid Bubblewrap 0.12.0 or newer. Older
+versions are rejected because 0.12.0 fixes an upstream sandbox-setup
+[symlink escape](https://github.com/containers/bubblewrap/security/advisories/GHSA-pxhw-h44j-8pfx).
+Run Polymorph under a dedicated unprivileged service account. Binary discovery and a version check
+are not treated as proof that the host kernel permits the requested namespace boundary; the worker
+must launch successfully.
+
+Supported schema parsers and record iterators still run in the local Polymorph process. Resource
+limits, archive checks, hardened XML parsing and isolated content detection reduce risk but do not
+yet contain that complete path. `polymorph doctor` reports concrete worker capabilities and keeps
+binary presence distinct from a successfully exercised security boundary. See
+[Parser isolation](docs/PARSER_ISOLATION.md).
 
 ## Key material
 
@@ -55,7 +70,8 @@ Optional semantic models are not redistributed in this repository. Their install
 
 ## Known alpha limitations
 
-- There is no separately enforced parser process sandbox yet.
+- Only content inspection has a separately enforced worker; schema parsing and record iteration are
+  not isolated yet.
 - Source trust keys are in-memory primitives. Durable authenticated trust-bundle distribution is not implemented.
 - Queue limits are per record and message, not cumulative per tenant or disk.
 - The local audit chain has no external checkpoint, so an attacker with storage access may truncate a valid suffix.

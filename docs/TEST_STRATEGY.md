@@ -12,6 +12,8 @@ layers.
 - mapping safety corpus with zero unsafe AUTO decisions
 - deterministic serialization and digest tests
 - Windows and Linux jobs for filesystem, SQLite and process behavior
+- a Linux job that installs Bubblewrap, exercises a real strict worker and retains its benchmark
+  plus JUnit evidence
 
 ## Workflow tests
 
@@ -29,11 +31,18 @@ layers.
 - polyglots and truncated magic values
 - ZIP traversal, symlinks, duplicate normalized names, encryption and expansion bombs
 - Office macros, external links, data connections and stale formula caches
-- XML entity and quadratic expansion attacks
-- duplicate JSON keys, non-finite numbers, deep nesting and oversized scalar values
+- XML entity and quadratic expansion attacks, deep trees, excessive elements and attribute bombs
+- duplicate JSON keys, non-finite numbers, deep nesting, excessive item counts and oversized
+  scalar values
+- concatenated GZIP member floods, forged footers, padding-diluted ratios and aggregate expansion
 - CSV delimiter, quoting, encoding and line-ending ambiguity
 - Excel date epochs, leading zeros, hidden rows, merged cells and repeated headers
 - malformed Parquet footers when the columnar pack exists
+
+The parser-worker suite separately attacks the boundary itself: malformed and duplicated protocol
+fields, non-finite values, stdout and stderr floods, timeouts, descendant processes, snapshot
+replacement or growth, environment leakage, unavailable backends and containment downgrades. A
+binary-presence check is not accepted as proof that the sandbox invocation works.
 
 ## Mapping corpus design
 

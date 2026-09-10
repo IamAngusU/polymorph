@@ -6,6 +6,17 @@ All notable changes to this alpha are documented here.
 
 ### Added
 
+- fail-closed isolated content inspection with exact-byte snapshots, a strict JSON worker protocol,
+  explicit containment levels, POSIX resource limits and a Linux Bubblewrap backend
+- parser-worker timing and failure evidence plus adversarial timeout, output, protocol, snapshot and
+  containment tests
+- early JSON and JSON5 depth and size gates, bounded XML SAX validation, streamed multi-member GZIP
+  validation with member-count and padding-safe ratio checks, and ZIP central-directory guards
+  before expensive parsers run
+- Windows reparse-input rejection plus archive path collision checks for case folding, trailing
+  spaces, Unicode normalization and reserved device aliases
+- linked input parents are rejected, JSON breadth and XML attributes are bounded before parser
+  materialization, and connector-specific JSON5 limits reach the content gate
 - metadata-only recipe outcome tracking and a conservative automatic-reuse circuit after repeated
   rejected runs
 - verified audit summaries, reason-code explanations and safe next-action guidance

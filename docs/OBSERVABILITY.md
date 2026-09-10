@@ -84,6 +84,22 @@ polymorph recipe health --store ./recipes.sqlite3
 This is a closed safety loop, not autonomous semantic learning. Its only automatic response is to
 reduce trust in repeated failed reuse.
 
+## Parser-worker evidence
+
+Isolated content inspection reports the actual backend, containment level, snapshot digest,
+protocol byte counts and stage timings. Its benchmark also checks that every run returns the same
+snapshot and normalized inspection. A failed benchmark writes a stable reason code, failed sample
+number, completed-run count, stderr SHA-256 and operator guidance before exiting non-zero. Raw
+stderr, parser tracebacks and the original path are not copied into that report.
+
+With the benchmark extra installed, parser-worker benchmark evidence also includes sampled child
+and descendant RSS, CPU and I/O counters. These are conservative observations from a 5 ms sampler,
+not enforcement claims. The report separately records the limits sent to and enforced by a POSIX
+worker.
+
+These command reports are retained evidence, not an always-on event feed. Parser-worker lifecycle
+events are not appended to the local operational JSONL stream yet.
+
 ## Current boundary
 
 There is no always-on supervisor, alert delivery, queue metric exporter or globally complete event

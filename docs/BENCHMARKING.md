@@ -75,6 +75,39 @@ with `--models` therefore includes model startup only when the corpus actually c
 fields. Report both `rss_before_bytes` and `peak_rss_bytes`; quoting only installed model size is
 not a memory benchmark.
 
+## Parser-worker boundary benchmark
+
+```bash
+polymorph benchmark parser-worker ./incoming-file --runs 10
+```
+
+The default is fail-closed and requires the Linux Bubblewrap backend. For a trusted local file on
+Windows, process separation can be measured explicitly:
+
+```bash
+polymorph benchmark parser-worker ./incoming-file --runs 10 \
+  --backend process --require-containment process
+```
+
+Every sample creates and hashes a fresh private snapshot, starts a new worker, validates the bounded
+protocol response and verifies the snapshot again. The report keeps per-run evidence plus min, p50,
+p95 and max timing for snapshot creation, worker execution and the complete call. It also records
+the actual containment level, capabilities, configured limits and protocol byte counts. Identical
+input digests and inspection results across all samples are a correctness gate, not just metadata.
+If a run fails, the command writes the completed-run count, failed sample number, stable reason
+code, bounded stderr digest and operator guidance before returning a non-zero exit status.
+
+When the `benchmark` extra is installed, the supervisor samples the worker and its descendants at
+5 ms intervals and reports observed peak RSS, maximum observed CPU time, I/O counters and sample
+counts. This observer runs only for the explicit benchmark, has measurable overhead and can miss a
+short-lived final resource peak. Without `psutil`, these fields are null and the report says that
+measurement was unavailable. The POSIX worker independently enforces its configured address-space,
+CPU, file, process and open-file limits. CI builds a checksum-pinned Bubblewrap 0.12.0, executes a
+real strict-boundary smoke test and runs the dedicated adversarial isolation suite. Its retained
+toolchain report records the installed binary hash, compiler, libcap, Meson, Ninja, Python and
+relevant package versions. The source archive is reproducibly identified; the build is not claimed
+to be bit-for-bit reproducible because Ubuntu and PyPI toolchains are not fully locked.
+
 ## Mapping correctness corpus
 
 ```bash

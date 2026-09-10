@@ -83,8 +83,8 @@ jobs:
 
   workflow-lab:
     name: Real workflow and failure lab
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -96,11 +96,167 @@ jobs:
       - name: Install workflow lab
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,benchmark]"
+          python -m pip install -e ".[dev,benchmark,fileid]"
+      - name: Install Linux sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential libcap-dev meson ninja-build pkg-config
+          archive="$RUNNER_TEMP/bubblewrap-0.12.0.tar.xz"
+          source_dir="$RUNNER_TEMP/bubblewrap-0.12.0"
+          build_dir="$source_dir/build"
+          install_prefix="$RUNNER_TEMP/bubblewrap-prefix"
+          curl --fail --location --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 60 --proto '=https' --tlsv1.2 \
+            --output "$archive" \
+            https://github.com/containers/bubblewrap/releases/download/v0.12.0/bubblewrap-0.12.0.tar.xz
+          echo "9760d007363e3abba7c747489910f9f82d9fca53ba3bd3282e396fa3c97a3314  $archive" \
+            | sha256sum --check --strict
+          tar --extract --file "$archive" --directory "$RUNNER_TEMP"
+          meson setup "$build_dir" "$source_dir" --buildtype=release \
+            --prefix="$install_prefix" -Dtests=false -Dman=disabled \
+            -Dselinux=disabled -Dbash_completion=disabled -Dzsh_completion=disabled
+          meson compile --jobs 2 --verbose -C "$build_dir"
+          meson install --no-rebuild -C "$build_dir"
+          export PATH="$install_prefix/bin:$PATH"
+          echo "$install_prefix/bin" >> "$GITHUB_PATH"
+          hash -r
+          bwrap_path="$(command -v bwrap)"
+          test -x "$bwrap_path"
+          test ! -u "$bwrap_path"
+          test ! -g "$bwrap_path"
+          test "$(bwrap --version)" = "bubblewrap 0.12.0"
+          if sysctl kernel.apparmor_restrict_unprivileged_userns; then
+            sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --bind / / --tmpfs /tmp true
+      - name: Record sandbox toolchain evidence
+        run: |
+          python - <<'PY'
+          import hashlib
+          import importlib.metadata
+          import json
+          import platform
+          import shutil
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          bwrap = Path(shutil.which("bwrap") or "").resolve(strict=True)
+
+          def command_version(*command: str) -> str:
+              return subprocess.run(
+                  command,
+                  check=True,
+                  capture_output=True,
+                  text=True,
+                  timeout=10,
+              ).stdout.strip()
+
+          def debian_package_version(name: str) -> str:
+              return command_version(
+                  "dpkg-query",
+                  "--show",
+                  "--showformat=${Version}",
+                  name,
+              )
+
+          payload = {
+              "bubblewrap": {
+                  "binary_sha256": hashlib.sha256(bwrap.read_bytes()).hexdigest(),
+                  "source_archive_sha256":
+                      "9760d007363e3abba7c747489910f9f82d9fca53ba3bd3282e396fa3c97a3314",
+                  "version": command_version(str(bwrap), "--version"),
+              },
+              "build_tools": {
+                  "gcc": command_version("gcc", "--version").splitlines()[0],
+                  "libcap-dev": debian_package_version("libcap-dev"),
+                  "meson": command_version("meson", "--version"),
+                  "ninja": command_version("ninja", "--version"),
+              },
+              "platform": platform.platform(),
+              "python": sys.version,
+              "python_packages": {
+                  name: importlib.metadata.version(name)
+                  for name in ("magika", "polymorph-bridge", "psutil")
+              },
+          }
+          Path("sandbox-toolchain.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
       - name: Measure the real local workflow
         run: >-
           python -W error -m polymorph benchmark workflow --records 100 --batch-size 25
           --work-dir workflow-run --output workflow-benchmark.json
+      - name: Prove strict parser-worker OS sandbox
+        if: always()
+        run: |
+          python -W error -m polymorph inspect isolated-content \
+            tests/fixtures/csv-spectrum/csvs/comma_in_quotes.csv \
+            --backend bubblewrap --require-containment os-sandbox \
+            --output parser-worker-strict-inspection.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(
+              Path("parser-worker-strict-inspection.json").read_text(encoding="utf-8")
+          )
+          worker = payload["worker"]
+          assert worker["backend"] == "bubblewrap", worker
+          assert worker["isolation_level"] == "os_sandbox", worker
+          assert worker["os_sandboxed"] is True, worker
+          assert worker["structured_parsers_isolated"] is False, worker
+          PY
+      - name: Prove strict parser-worker with Magika
+        if: always()
+        run: |
+          python -W error -m polymorph inspect isolated-content \
+            tests/fixtures/csv-spectrum/csvs/comma_in_quotes.csv \
+            --magika --backend bubblewrap --require-containment os-sandbox \
+            --output parser-worker-strict-magika.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(
+              Path("parser-worker-strict-magika.json").read_text(encoding="utf-8")
+          )
+          worker = payload["worker"]
+          classifier = payload["content"]["classifier"]
+          assert worker["backend"] == "bubblewrap", worker
+          assert worker["os_sandboxed"] is True, worker
+          assert classifier is not None, payload["content"]
+          assert classifier["provider"] == "magika", classifier
+          PY
+      - name: Measure strict parser-worker boundary
+        if: always()
+        run: |
+          python -W error -m polymorph benchmark parser-worker \
+            tests/fixtures/csv-spectrum/csvs/comma_in_quotes.csv \
+            --runs 5 --backend bubblewrap --require-containment os-sandbox \
+            --output parser-worker-benchmark.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(
+              Path("parser-worker-benchmark.json").read_text(encoding="utf-8")
+          )
+          assert payload["backend"] == "bubblewrap", payload
+          assert payload["isolation_level"] == "os_sandbox", payload
+          assert payload["os_sandboxed"] is True, payload
+          assert payload["consistent"] is True, payload
+          assert payload["runs"] == 5, payload
+          assert payload["scope"] == "content_inspection_only", payload
+          assert payload["structured_parsers_isolated"] is False, payload
+          resources = payload["resource_observation"]
+          assert resources["mode"] == "sampled_process_tree", resources
+          assert resources["successful_sample_count"] >= payload["runs"], resources
+          assert payload["child_peak_rss_bytes"] > 0, payload
+          PY
       - name: Validate operational event health
         if: always()
         run: |
@@ -114,15 +270,27 @@ jobs:
           tests/test_recovery_stress.py tests/test_recovery_processes.py
           --strict-config --strict-markers
           --durations=0 --junitxml=workflow-failure-and-recovery-lab.xml
+      - name: Exercise parser-worker isolation boundaries
+        if: always()
+        run: >-
+          python -W error -m pytest tests/test_isolation.py tests/test_isolation_cli.py
+          tests/test_parser_worker.py tests/test_content_limits.py
+          --strict-config --strict-markers
+          --durations=0 --junitxml=parser-worker-isolation.xml
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: workflow-lab-evidence
           path: |
             workflow-benchmark.json
+            parser-worker-strict-inspection.json
+            parser-worker-strict-magika.json
+            parser-worker-benchmark.json
+            sandbox-toolchain.json
             operational-health.json
             workflow-run/operational-events.jsonl
             workflow-failure-and-recovery-lab.xml
+            parser-worker-isolation.xml
           if-no-files-found: warn
           retention-days: 14
 

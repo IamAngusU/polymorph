@@ -46,6 +46,15 @@ Polymorph itself is licensed separately under the terms in `LICENSE`.
 - Upstream license: BSD 3-Clause
 - Purpose: opt-in RSS measurements during explicit benchmark commands only.
 
+## Linux parser sandbox
+
+- Component: Bubblewrap 0.12.0 or newer
+- Upstream: https://github.com/containers/bubblewrap
+- Upstream license: LGPL-2.0-or-later
+- Purpose: optional operating-system containment for the content-inspection worker on Linux.
+- Distribution: Polymorph does not bundle the binary. The strict CI job builds a checksum-pinned
+  upstream release and records the resulting toolchain evidence.
+
 ## CSV parser regression fixtures
 
 - Component: csv-spectrum 2.0.0

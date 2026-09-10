@@ -8,6 +8,11 @@ For ZIP and OOXML inputs, the gate inspects the central directory without extrac
 
 Magika may be enabled as an independent local classifier. Its result is evidence only. A high-confidence disagreement with the deterministic detector reduces trust and blocks parser selection by default.
 
+An optional short-lived worker can perform this content-inspection stage against a private,
+SHA-256-bound snapshot. Its strict policy requires an OS sandbox and never silently downgrades.
+The initial worker does not yet carry schema parsing or record iteration, so normal connector paths
+remain in-process and are documented as such.
+
 The Excel path additionally requires openpyxl's `defusedxml` hardening. Formula cells are detected independently from cached values because openpyxl does not calculate formulas.
 
 ## 1. Schema plane
@@ -67,7 +72,10 @@ Secret and opaque payloads are not interpreted. Preflight checks only presence a
 
 Formula-bearing spreadsheets are marked review-required because cached workbook results have unproven freshness. A complete scan is required for automatic promotion.
 
-This contract sandbox is distinct from hostile-code OS containment. In the current alpha, supported parsers still execute in the local process after the content gate accepts the file. Process-level parser isolation is a separate deployment capability planned for the agent runtime.
+This contract sandbox is distinct from hostile-code OS containment. In the current alpha, supported
+schema parsers and record iterators still execute in the local process after the content gate accepts
+the file. The isolated content worker is the first staged deployment capability, not a claim that
+the complete parser path is sandboxed.
 
 ## 5. Source trust boundary
 

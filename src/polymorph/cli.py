@@ -8,7 +8,9 @@ import os
 import platform
 import shutil
 import sqlite3
+import statistics
 import sys
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import unquote
@@ -32,6 +34,13 @@ from .connectors.json_file import JsonFileConnector
 from .content import ContentInspector, ContentKind, FileInspection, MagikaClassifier
 from .diagnostics import explain_reason
 from .errors import PolymorphError
+from .isolation import (
+    IsolatedContentInspection,
+    IsolationLevel,
+    ParserWorkerClient,
+    SandboxError,
+    SandboxPolicy,
+)
 from .keys import EncryptedRecipientKeyFile
 from .matching.hybrid import HybridMatcher
 from .matching.semantic import (
@@ -596,6 +605,88 @@ def _inspect_auto(args: argparse.Namespace) -> None:
     _emit(payload, output=args.output)
 
 
+_CONTAINMENT_LEVELS = {
+    "process": IsolationLevel.PROCESS,
+    "resource-limited": IsolationLevel.RESOURCE_LIMITED_PROCESS,
+    "os-sandbox": IsolationLevel.OS_SANDBOX,
+}
+
+
+def _parser_worker_policy(args: argparse.Namespace) -> SandboxPolicy:
+    max_input_mib = args.max_input_mib
+    if isinstance(max_input_mib, bool) or not isinstance(max_input_mib, int):
+        raise ValueError("--max-input-mib must be an integer")
+    if not 1 <= max_input_mib <= 1024 * 1024:
+        raise ValueError("--max-input-mib must be between 1 and 1048576")
+    return SandboxPolicy(
+        minimum_level=_CONTAINMENT_LEVELS[args.require_containment],
+        wall_timeout_seconds=args.timeout,
+        max_input_bytes=max_input_mib * 1024 * 1024,
+    )
+
+
+def _isolated_content_payload(result: IsolatedContentInspection) -> dict[str, object]:
+    return {
+        "content": result.inspection,
+        "worker": {
+            "scope": "content_inspection_only",
+            "structured_parsers_isolated": False,
+            "success": True,
+            "request_id": result.request_id,
+            "backend": result.backend,
+            "isolation_level": result.isolation_level.name.lower(),
+            "os_sandboxed": result.os_sandboxed,
+            "capabilities": list(result.backend_capabilities),
+            "snapshot": {
+                "sha256": result.snapshot_sha256,
+                "size_bytes": result.snapshot_size_bytes,
+            },
+            "timing_ms": {
+                "snapshot": result.snapshot_duration_seconds * 1000,
+                "worker": result.worker_duration_seconds * 1000,
+                "end_to_end": result.end_to_end_duration_seconds * 1000,
+            },
+            "protocol_output_bytes": {
+                "stdout": result.stdout_bytes,
+                "stderr": result.stderr_bytes,
+            },
+        },
+    }
+
+
+def _parser_worker_failure_payload(error: SandboxError) -> dict[str, object]:
+    return {
+        "reason_code": error.code.value,
+        "message": str(error),
+        "worker_error_code": error.worker_error_code,
+        "stderr_sha256": error.stderr_digest,
+        "diagnostic": _diagnostic_payload(error.code.value),
+    }
+
+
+def _inspect_isolated_content(args: argparse.Namespace) -> None:
+    _protect_write_path(args.output, args.path)
+    client = ParserWorkerClient(_parser_worker_policy(args), backend=args.backend)
+    try:
+        result = client.inspect_content(args.path, use_magika=args.magika)
+    except SandboxError as exc:
+        if args.output:
+            _emit(
+                {
+                    "content": None,
+                    "worker": {
+                        "scope": "content_inspection_only",
+                        "structured_parsers_isolated": False,
+                        "success": False,
+                        "failure": _parser_worker_failure_payload(exc),
+                    },
+                },
+                output=args.output,
+            )
+        raise
+    _emit(_isolated_content_payload(result), output=args.output)
+
+
 def _resolver_from_args(args: argparse.Namespace) -> DatabaseConnector | None:
     resolver_db_url = getattr(args, "resolver_db_url", None)
     if not resolver_db_url:
@@ -1027,6 +1118,27 @@ def _excel_xml_hardening_status() -> dict[str, object]:
     }
 
 
+def _parser_worker_status() -> dict[str, object]:
+    policy = SandboxPolicy()
+    backends = ParserWorkerClient(policy).backend_info()
+    return {
+        "implemented": True,
+        "scope": "content_inspection_only",
+        "structured_parsers_isolated": False,
+        "default_minimum_level": policy.minimum_level.name.lower(),
+        "backends": [
+            {
+                "name": backend.name,
+                "level": backend.level.name.lower(),
+                "available": backend.available,
+                "capabilities": list(backend.capabilities),
+                "reason": backend.reason,
+            }
+            for backend in backends
+        ],
+    }
+
+
 def _doctor(args: argparse.Namespace) -> None:
     optional = {
         "magika": importlib.util.find_spec("magika") is not None,
@@ -1085,8 +1197,9 @@ def _doctor(args: argparse.Namespace) -> None:
             "parser_os_sandbox": {
                 "bubblewrap": shutil.which("bwrap") is not None,
                 "firejail": shutil.which("firejail") is not None,
-                "note": "availability only; no OS sandbox is assumed by default",
+                "note": "binary presence only; see parser_worker for active capabilities",
             },
+            "parser_worker": _parser_worker_status(),
             "optional": optional,
             "models": models,
             "recipe_store": str(recipe_store_path()),
@@ -1135,6 +1248,188 @@ def _benchmark_inspect(args: argparse.Namespace) -> None:
                 )
                 metric_payloads.append(_benchmark_resource_payload(records_metrics))
     _emit(payload, output=args.output)
+
+
+def _measurement_percentile(values: list[float], percentile: float) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        return 0.0
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = (len(ordered) - 1) * percentile
+    lower = int(rank)
+    upper = min(lower + 1, len(ordered) - 1)
+    return ordered[lower] * (upper - rank) + ordered[upper] * (rank - lower)
+
+
+def _timing_summary(values: list[float]) -> dict[str, float]:
+    return {
+        "min": min(values, default=0.0),
+        "p50": statistics.median(values) if values else 0.0,
+        "p95": _measurement_percentile(values, 0.95),
+        "max": max(values, default=0.0),
+    }
+
+
+def _benchmark_parser_worker(args: argparse.Namespace) -> None:
+    _protect_write_path(args.output, args.path)
+    if isinstance(args.runs, bool) or not 1 <= args.runs <= 100:
+        raise ValueError("--runs must be between 1 and 100")
+    policy = _parser_worker_policy(args)
+    client = ParserWorkerClient(policy, backend=args.backend, observe_resources=True)
+    results = []
+    elapsed_ms: list[float] = []
+    for run_index in range(1, args.runs + 1):
+        started = time.perf_counter()
+        try:
+            results.append(client.inspect_content(args.path, use_magika=args.magika))
+        except SandboxError as exc:
+            failed_elapsed_ms = (time.perf_counter() - started) * 1000
+            _emit(
+                {
+                    "scope": "content_inspection_only",
+                    "structured_parsers_isolated": False,
+                    "success": False,
+                    "requested_runs": args.runs,
+                    "completed_runs": len(results),
+                    "failed_run": run_index,
+                    "backend_requested": args.backend,
+                    "minimum_containment": policy.minimum_level.name.lower(),
+                    "failure": _parser_worker_failure_payload(exc),
+                    "timing_ms": {
+                        "completed_end_to_end": _timing_summary(elapsed_ms),
+                        "failed_end_to_end": failed_elapsed_ms,
+                    },
+                },
+                output=args.output,
+            )
+            raise
+        elapsed_ms.append(results[-1].end_to_end_duration_seconds * 1000)
+
+    first = results[0]
+    canonical_inspection = json.dumps(
+        first.inspection,
+        allow_nan=False,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    if any(
+        result.snapshot_sha256 != first.snapshot_sha256
+        or result.snapshot_size_bytes != first.snapshot_size_bytes
+        or json.dumps(
+            result.inspection,
+            allow_nan=False,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        != canonical_inspection
+        for result in results[1:]
+    ):
+        raise PolymorphError("parser-worker benchmark produced inconsistent snapshots or results")
+
+    snapshot_ms = [result.snapshot_duration_seconds * 1000 for result in results]
+    worker_ms = [result.worker_duration_seconds * 1000 for result in results]
+    measured_rss = [
+        result.child_peak_rss_bytes for result in results if result.child_peak_rss_bytes is not None
+    ]
+    measured_cpu = [
+        result.child_cpu_seconds for result in results if result.child_cpu_seconds is not None
+    ]
+    measured_reads = [
+        result.child_read_bytes for result in results if result.child_read_bytes is not None
+    ]
+    measured_writes = [
+        result.child_write_bytes for result in results if result.child_write_bytes is not None
+    ]
+    median_elapsed = statistics.median(elapsed_ms)
+    input_mib = first.snapshot_size_bytes / (1024 * 1024)
+    throughput = input_mib / (median_elapsed / 1000) if median_elapsed > 0 else 0.0
+    _emit(
+        {
+            "scope": "content_inspection_only",
+            "structured_parsers_isolated": False,
+            "success": True,
+            "runs": args.runs,
+            "consistent": True,
+            "backend": first.backend,
+            "isolation_level": first.isolation_level.name.lower(),
+            "os_sandboxed": first.os_sandboxed,
+            "capabilities": list(first.backend_capabilities),
+            "snapshot": {
+                "sha256": first.snapshot_sha256,
+                "size_bytes": first.snapshot_size_bytes,
+            },
+            "content_kind": first.inspection["kind"],
+            "timing_ms": {
+                "snapshot": _timing_summary(snapshot_ms),
+                "worker": _timing_summary(worker_ms),
+                "end_to_end": _timing_summary(elapsed_ms),
+                "cold_end_to_end": elapsed_ms[0],
+                "warm_end_to_end": (
+                    _timing_summary(elapsed_ms[1:]) if len(elapsed_ms) > 1 else None
+                ),
+            },
+            "throughput_mib_per_second_at_p50": throughput,
+            "protocol_output_bytes": {
+                "stdout_max": max(result.stdout_bytes for result in results),
+                "stderr_max": max(result.stderr_bytes for result in results),
+            },
+            "limits": {
+                "wall_timeout_seconds": policy.wall_timeout_seconds,
+                "cpu_seconds": policy.cpu_seconds,
+                "max_memory_bytes": policy.max_memory_bytes,
+                "max_input_bytes": policy.max_input_bytes,
+                "max_stdout_bytes": policy.max_stdout_bytes,
+                "max_stderr_bytes": policy.max_stderr_bytes,
+                "max_open_files": policy.max_open_files,
+                "max_processes": policy.max_processes,
+                "max_output_file_bytes": policy.max_output_file_bytes,
+                "max_parser_log_bytes": policy.max_parser_log_bytes,
+                "max_tmpfs_bytes": policy.max_tmpfs_bytes,
+            },
+            "child_peak_rss_bytes": max(measured_rss, default=None),
+            "child_cpu_seconds_max": max(measured_cpu, default=None),
+            "child_read_bytes_max": max(measured_reads, default=None),
+            "child_write_bytes_max": max(measured_writes, default=None),
+            "resource_observation": {
+                "mode": (
+                    "sampled_process_tree"
+                    if any(result.resource_sample_count for result in results)
+                    else "unavailable"
+                ),
+                "observer_effect": True,
+                "poll_interval_ms": 5.0,
+                "successful_sample_count": sum(result.resource_sample_count for result in results),
+                "runs_with_samples": sum(result.resource_sample_count > 0 for result in results),
+            },
+            "measurement_note": (
+                "Every sample includes a fresh snapshot and worker. The cold sample also "
+                "includes backend selection and its cached compatibility probe. Child and "
+                "descendant RSS, CPU and I/O are sampled only in benchmark mode when psutil "
+                "is available; fast process exits can make these conservative observations."
+            ),
+            "samples": [
+                {
+                    "temperature": "cold" if index == 0 else "warm_backend_probe_cache",
+                    "end_to_end_ms": elapsed,
+                    "snapshot_ms": result.snapshot_duration_seconds * 1000,
+                    "worker_ms": result.worker_duration_seconds * 1000,
+                    "stdout_bytes": result.stdout_bytes,
+                    "stderr_bytes": result.stderr_bytes,
+                    "resource_measurement": result.resource_measurement,
+                    "resource_sample_count": result.resource_sample_count,
+                    "child_peak_rss_bytes": result.child_peak_rss_bytes,
+                    "child_cpu_seconds": result.child_cpu_seconds,
+                    "child_read_bytes": result.child_read_bytes,
+                    "child_write_bytes": result.child_write_bytes,
+                }
+                for index, (elapsed, result) in enumerate(zip(elapsed_ms, results, strict=True))
+            ],
+        },
+        output=args.output,
+    )
 
 
 def _benchmark_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -1420,6 +1715,34 @@ def _add_output(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output", "-o")
 
 
+def _add_parser_worker_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--magika", action="store_true", help="add local Magika evidence")
+    parser.add_argument(
+        "--backend",
+        choices=("auto", "process", "bubblewrap"),
+        default="auto",
+        help="worker backend; auto never downgrades below the required containment",
+    )
+    parser.add_argument(
+        "--require-containment",
+        choices=tuple(_CONTAINMENT_LEVELS),
+        default="os-sandbox",
+        help="minimum accepted containment level (default: os-sandbox)",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=15.0,
+        help="worker wall timeout in seconds",
+    )
+    parser.add_argument(
+        "--max-input-mib",
+        type=int,
+        default=512,
+        help="maximum snapshot size in MiB",
+    )
+
+
 def _add_model_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--models", action="store_true", help="use both installed CPU profiles")
     parser.add_argument("--model-dir")
@@ -1462,6 +1785,15 @@ def build_parser() -> argparse.ArgumentParser:
     auto.add_argument("--magika", action="store_true", help="add local Magika evidence")
     _add_output(auto)
     auto.set_defaults(func=_inspect_auto)
+
+    isolated_content = inspect_sub.add_parser(
+        "isolated-content",
+        help="inspect content in an exact-snapshot worker; OS sandbox required by default",
+    )
+    isolated_content.add_argument("path")
+    _add_parser_worker_options(isolated_content)
+    _add_output(isolated_content)
+    isolated_content.set_defaults(func=_inspect_isolated_content)
 
     excel = inspect_sub.add_parser("excel")
     excel.add_argument("path")
@@ -1637,6 +1969,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_output(benchmark_inspect)
     benchmark_inspect.set_defaults(func=_benchmark_inspect)
+
+    benchmark_worker = benchmark_sub.add_parser(
+        "parser-worker",
+        help="measure exact-snapshot content-worker startup and inspection",
+    )
+    benchmark_worker.add_argument("path")
+    benchmark_worker.add_argument("--runs", type=int, default=5)
+    _add_parser_worker_options(benchmark_worker)
+    _add_output(benchmark_worker)
+    benchmark_worker.set_defaults(func=_benchmark_parser_worker)
     benchmark_mapping = benchmark_sub.add_parser(
         "mapping", help="score auto precision and coverage against a labelled schema corpus"
     )
@@ -1750,6 +2092,9 @@ def main() -> None:
             sys.stdout.close()
         finally:
             raise SystemExit(0) from None
+    except SandboxError as exc:
+        print(f"error [{exc.code.value}]: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
     except (PolymorphError, ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(2) from None

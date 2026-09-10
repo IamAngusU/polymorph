@@ -43,7 +43,7 @@
 - mutually authenticated agent control channel
 - durable authenticated distribution of public-key registration, rotation and revocation state
 - OS/HSM-backed key-provider interfaces
-- parser-worker isolation with explicit containment level
+- extend the exact-snapshot content worker to schema parsing and bounded record streaming
 - connector-account least-privilege policy checks
 - metadata-only recipe outcome health with conservative suspension after repeated rejected runs
 - verified audit summaries and stable reason-code explanations

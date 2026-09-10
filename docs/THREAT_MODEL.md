@@ -25,13 +25,18 @@
 
 A filename is not evidence of format. Deterministic magic and container structure select supported parsers. ZIP metadata is inspected without extraction and blocking risks stop processing before an Office parser opens the workbook.
 
-Current checks include traversal paths, archived symlinks, duplicate normalized members, encrypted members, entry count, total expansion, individual member size, suspicious compression ratios, VBA projects and external workbook-link and data-connection parts.
+Current checks include traversal paths, archived symlinks, duplicate normalized members, encrypted members, entry count, total expansion, individual member size, suspicious compression ratios, VBA projects and external workbook-link and data-connection parts. JSON item counts and XML element, depth and per-element attribute counts are bounded before recursive or attribute-materializing parsers run.
 
 Excel uses `defusedxml` hardening through openpyxl. This addresses XML entity-expansion classes that plain openpyxl does not guard against by default. Formula results are still a semantic freshness problem rather than an XML problem: openpyxl does not calculate formulas, so cached results are marked unproven and require review before automatic promotion.
 
 Magika can add independent local classification evidence. A confident disagreement is a veto signal, not permission to trust Magika over deterministic structure.
 
-These measures reduce parser attack surface but are not OS-level containment. A malicious parser implementation, native dependency bug or novel parser vulnerability can still affect the local process in the current alpha. Hostile parser isolation is therefore a separate roadmap item.
+These measures reduce parser attack surface but are not complete OS-level containment. The optional
+content-inspection worker can enforce a strict Linux boundary around deterministic detection,
+archive inspection and Magika. Schema parsers and record iteration still run in the local process,
+so a malicious parser implementation, native dependency bug or novel parser vulnerability can
+still affect that process. Moving the remaining parser stages behind the snapshot worker remains a
+roadmap item.
 
 ## Control-plane or relay compromise
 
@@ -82,7 +87,7 @@ The built-in recipient key file protects a raw X25519 private key with Argon2id-
 ## Remaining non-goals
 
 - protection from a fully compromised source or destination operating system
-- hostile parser containment in the current alpha
+- hostile containment of schema parsing and record iteration in the current alpha
 - hardware-backed signing or recipient keys in the built-in implementation
 - authenticated distribution and rollback protection for source trust bundles
 - traffic-analysis resistance for routing metadata and ciphertext sizes

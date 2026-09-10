@@ -3,7 +3,9 @@ import multiprocessing
 
 import pytest
 
+import polymorph.connectors.json_file as json_file_module
 from polymorph.connectors.json_file import JsonFileConnector
+from polymorph.content import FileIdentity
 from polymorph.errors import ConnectorError, ConnectorWriteError, WriteOutcome
 from polymorph.filesystem import exclusive_path_lock
 from polymorph.models.types import DataType
@@ -34,6 +36,139 @@ def test_json5_connector(tmp_path):
     types = {field.id: field.data_type for field in schema.fields}
     assert types["customer"] is DataType.STRING
     assert types["amount"] is DataType.DECIMAL
+
+
+def test_json_connector_enforces_depth_independently_from_inspector(tmp_path) -> None:
+    path = tmp_path / "nested.json"
+    path.write_text('[{"value": [[1]]}]', encoding="utf-8")
+
+    with pytest.raises(ConnectorError, match="json_nesting_too_deep"):
+        JsonFileConnector(path, max_structured_text_depth=3).inspect_schema()
+
+
+def test_json_connector_propagates_raised_depth_limit_to_content_gate(tmp_path) -> None:
+    path = tmp_path / "deep-but-allowed.json"
+    path.write_text(
+        '[{"value": ' + ("[" * 130) + "1" + ("]" * 130) + "}]",
+        encoding="utf-8",
+    )
+
+    schema = JsonFileConnector(path, max_structured_text_depth=140).inspect_schema()
+
+    assert [field.id for field in schema.fields] == ["value"]
+
+
+def test_json_connector_blocks_large_json5_before_fallback_parser(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "large.json5"
+    path.write_text("{value: '" + ("x" * 70_000) + "'}", encoding="utf-8")
+
+    def json5_must_not_run(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("JSON5 parser ran above connector byte limit")
+
+    monkeypatch.setattr(json_file_module.json5, "loads", json5_must_not_run)
+
+    with pytest.raises(ValueError, match="JSON5 source exceeds.*65536 bytes"):
+        JsonFileConnector(path).inspect_schema()
+
+
+def test_json_connector_propagates_custom_json5_limit_to_content_gate(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "custom-limit.json5"
+    path.write_text("{value: '" + ("x" * 54_000) + "'}", encoding="utf-8")
+
+    def json5_must_not_run(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("JSON5 parser ran above the connector's custom byte limit")
+
+    monkeypatch.setattr(json_file_module.json5, "loads", json5_must_not_run)
+
+    with pytest.raises(ValueError, match="JSON5 source exceeds.*1 bytes"):
+        JsonFileConnector(path, max_json5_parse_bytes=1).inspect_schema()
+
+
+def test_json_connector_blocks_wide_input_before_recursive_parser(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "wide.json"
+    path.write_text("[{}, {}, {}]", encoding="utf-8")
+
+    def parser_must_not_run(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("recursive JSON parser ran above the item limit")
+
+    monkeypatch.setattr(json_file_module.json, "loads", parser_must_not_run)
+    monkeypatch.setattr(json_file_module.json5, "loads", parser_must_not_run)
+
+    with pytest.raises(ConnectorError, match="json_too_many_items"):
+        JsonFileConnector(path, max_json_items=2).inspect_schema()
+
+
+def test_json_connector_normalizes_recursive_parser_failure(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "input.json"
+    path.write_text('[{"value": 1}]', encoding="utf-8")
+    metadata = path.stat()
+    identity = FileIdentity.from_stat(metadata)
+    connector = JsonFileConnector(path)
+    monkeypatch.setattr(connector, "_ensure_source_safe", lambda: identity)
+
+    def recursive_failure(*_args: object, **_kwargs: object) -> object:
+        raise RecursionError("parser internals")
+
+    monkeypatch.setattr(json_file_module.json, "loads", recursive_failure)
+
+    with pytest.raises(ValueError, match="configured nesting depth") as caught:
+        connector.inspect_schema()
+    assert "parser internals" not in str(caught.value)
+
+
+def test_json_connector_normalizes_json5_recursive_parser_failure(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "input.json5"
+    path.write_text("[{value: 1}]", encoding="utf-8")
+    metadata = path.stat()
+    identity = FileIdentity.from_stat(metadata)
+    connector = JsonFileConnector(path)
+    monkeypatch.setattr(connector, "_ensure_source_safe", lambda: identity)
+
+    def strict_json_rejects(*_args: object, **_kwargs: object) -> object:
+        raise json_file_module.json.JSONDecodeError("invalid JSON", "", 0)
+
+    def recursive_failure(*_args: object, **_kwargs: object) -> object:
+        raise RecursionError("parser internals")
+
+    monkeypatch.setattr(json_file_module.json, "loads", strict_json_rejects)
+    monkeypatch.setattr(json_file_module.json5, "loads", recursive_failure)
+
+    with pytest.raises(
+        ValueError, match="JSON5 source exceeds the configured nesting depth"
+    ) as caught:
+        connector.inspect_schema()
+    assert "parser internals" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    (
+        ("max_json5_parse_bytes", 0),
+        ("max_json5_parse_bytes", True),
+        ("max_structured_text_depth", -1),
+        ("max_structured_text_depth", 1.5),
+        ("max_json_items", 0),
+        ("max_json_items", True),
+    ),
+)
+def test_json_connector_rejects_invalid_parser_limits(tmp_path, name: str, value: object) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        JsonFileConnector(tmp_path / "input.json", **{name: value})  # type: ignore[arg-type]
 
 
 def test_json_secret_key_is_classified_without_reading_value(tmp_path):

@@ -47,10 +47,10 @@ python scripts/dev.py benchmark mapping benchmarks/safety-regression.json --mode
 | Metric | Result |
 | --- | ---: |
 | Cases and labelled fields | 42 / 45 |
-| Wall time | 2.389 s |
-| CPU time | 36.109 s |
-| Throughput | 18.84 fields/s |
-| Peak RSS | 441.03 MiB |
+| Wall time | 2.635 s |
+| CPU time | 37.500 s |
+| Throughput | 17.08 fields/s |
+| Peak RSS | 438.30 MiB |
 | Automatic precision | 100% (17 of 17 automatic decisions) |
 | Eligible automation coverage | 89.47% (17 of 19 eligible fields) |
 | Overall automation rate | 62.96% (17 of 27 mappable fields) |
@@ -61,6 +61,23 @@ The deterministic profile produced the same decisions in 4.52 ms at 78.16 MiB pe
 corpus, the models add ranking evidence but no measurable decision-quality gain. Keeping them
 optional is therefore the correct default until a source-separated holdout shows a benefit. This
 corpus verifies regression behavior and model packaging, not real-world mapping quality.
+
+## Parser-worker boundary
+
+The content-inspection worker was measured against the repository's 68-byte quoted-CSV fixture.
+Each run created and hashed a new private snapshot and started a new Python process. The benchmark
+extra sampled the child process every 5 ms, which adds observer overhead. Windows provides process
+separation only, so these numbers are not Linux sandbox measurements.
+
+| Mode | Runs | End-to-end p50 / p95 | Worker p50 | Snapshot p50 | Observed child peak RSS | Maximum observed child CPU |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Deterministic inspection | 20 | 208.78 / 224.11 ms | 205.71 ms | 1.35 ms | 49.98 MiB | 0.188 s |
+| Inspection with Magika | 10 | 380.94 / 428.86 ms | 377.88 ms | 1.33 ms | 95.88 MiB | 1.156 s |
+
+All samples returned the same input digest and normalized inspection. The deterministic cold call
+was 201.62 ms. These tiny-file results primarily measure worker startup and containment-boundary
+overhead; they are not useful as file-throughput claims. Sampled resource values are conservative
+because a process can exit between polling intervals.
 
 ## Full secure transport
 
@@ -75,18 +92,19 @@ The full local path was measured over 1,000 records with seven string fields and
 
 | Metric | Result |
 | --- | ---: |
-| Full wall time | 15.179 s |
-| Throughput | 65.88 records/s |
-| Peak RSS | 85.33 MiB |
-| Destination delivery p50 / p95 | 6.974 / 7.947 ms |
-| Seal and sign p50 / p95 | 0.826 / 1.044 ms |
-| Audit verification, 1,000 events | 83.61 ms |
-| Audit summary, 1,000 events | 84.90 ms |
+| Full wall time | 17.829 s |
+| Throughput | 56.09 records/s |
+| Peak RSS | 86.43 MiB |
+| Destination delivery p50 / p95 | 9.519 / 10.674 ms |
+| Seal and durable outbox stage p50 / p95 | 2.465 / 2.873 ms |
+| Complete final verification | 96.26 ms |
+| Destination operational-event check | 1.31 ms |
 
 All 1,000 records were delivered once, both queues ended empty, and all 1,000 signed audit events
-passed hash-chain and signature verification. The destination used an in-memory connector to
-isolate Polymorph's transport overhead. A real database, HTTP service or file sink adds its own
-latency.
+passed hash-chain and signature verification. The destination was a local SQLite database using
+`DELETE` journal mode and `FULL` synchronous durability. The operational stream contained 1,029
+contract-valid events with unique IDs, a closed workflow lifecycle and no unhealthy status. A
+network database, HTTP service or file sink adds its own latency.
 
 Separate durable SQLite commits dominate this profile. Cryptography stays below 1 ms per record.
 The useful optimization targets are transaction batching with the existing per-record fences,

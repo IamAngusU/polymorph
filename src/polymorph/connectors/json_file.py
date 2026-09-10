@@ -14,6 +14,7 @@ from polymorph.content import (
     ContentInspector,
     ContentKind,
     FileIdentity,
+    FileTrustPolicy,
     require_matching_file_identity,
 )
 from polymorph.errors import ConnectorError, ConnectorWriteError, WriteOutcome
@@ -50,20 +51,41 @@ class JsonFileConnector:
         *,
         sensitivity_overrides: Mapping[str, Sensitivity] | None = None,
         max_file_bytes: int = 64 * 1024 * 1024,
+        max_json5_parse_bytes: int = 64 * 1024,
+        max_structured_text_depth: int = 128,
+        max_json_items: int = 100_000,
         schema_sample_records: int = 1024,
         write_lock_timeout: float = 30.0,
         expected_source_identity: FileIdentity | None = None,
     ) -> None:
         self.path = Path(path)
         self.sensitivity_overrides = dict(sensitivity_overrides or {})
+        for name, value in {
+            "max_file_bytes": max_file_bytes,
+            "max_json5_parse_bytes": max_json5_parse_bytes,
+            "max_structured_text_depth": max_structured_text_depth,
+            "max_json_items": max_json_items,
+        }.items():
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
         self.max_file_bytes = max_file_bytes
+        self.max_json5_parse_bytes = max_json5_parse_bytes
+        self.max_structured_text_depth = max_structured_text_depth
+        self.max_json_items = max_json_items
         self.schema_sample_records = max(1, schema_sample_records)
         if not math.isfinite(write_lock_timeout) or write_lock_timeout < 0:
             raise ValueError("JSON write lock timeout must be a finite non-negative number")
         self.write_lock_timeout = write_lock_timeout
         self._cache: list[dict[str, object]] | None = None
         self._format_cache: str | None = None
-        self._content_inspector = ContentInspector()
+        self._content_inspector = ContentInspector(
+            FileTrustPolicy(
+                max_file_bytes=max_file_bytes,
+                max_json5_parse_bytes=max_json5_parse_bytes,
+                max_structured_text_depth=max_structured_text_depth,
+                max_json_items=max_json_items,
+            )
+        )
         self._trusted_identity: FileIdentity | None = None
         self._expected_source_identity = expected_source_identity
 
@@ -140,17 +162,44 @@ class JsonFileConnector:
             text = raw.decode("utf-8-sig")
         except UnicodeDecodeError as exc:
             raise ValueError("JSON source must be UTF-8 text") from exc
+        depth_exceeded, items_exceeded = ContentInspector._json_like_limits_exceeded(
+            text,
+            max_depth=self.max_structured_text_depth,
+            max_items=self.max_json_items,
+        )
+        if depth_exceeded:
+            raise ValueError(
+                "JSON source exceeds the configured nesting depth "
+                f"of {self.max_structured_text_depth}"
+            )
+        if items_exceeded:
+            raise ValueError(
+                "JSON source exceeds the configured item limit "
+                f"of {self.max_json_items} members and array items"
+            )
         try:
             data = json.loads(text, object_pairs_hook=_object_without_duplicate_keys)
+        except RecursionError:
+            raise ValueError("JSON source exceeds the configured nesting depth") from None
         except json.JSONDecodeError:
+            if len(raw) > self.max_json5_parse_bytes:
+                raise ValueError(
+                    "JSON5 source exceeds the configured parse size limit "
+                    f"of {self.max_json5_parse_bytes} bytes"
+                ) from None
             try:
                 data = json5.loads(text, object_pairs_hook=_object_without_duplicate_keys)
+            except RecursionError:
+                raise ValueError("JSON5 source exceeds the configured nesting depth") from None
             except (ValueError, TypeError) as exc:
                 raise ValueError("input is neither valid JSON nor accepted JSON5") from exc
             self._format_cache = "json5"
         else:
             self._format_cache = "json"
-        self._validate_value(data)
+        try:
+            self._validate_value(data)
+        except RecursionError:
+            raise ValueError("JSON source exceeds the configured nesting depth") from None
         if isinstance(data, dict):
             records = [data]
         elif isinstance(data, list) and all(isinstance(item, dict) for item in data):
