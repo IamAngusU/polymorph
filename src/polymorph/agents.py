@@ -5,8 +5,9 @@ import hashlib
 import json
 import math
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -24,10 +25,26 @@ from .models.mapping import MappingPlan
 from .models.schema import SchemaDescriptor
 from .models.types import Sensitivity
 from .policy import PolicyEngine
-from .recipient_auth import RecipientKeyTrustStore, recipient_key_id
+from .recipient_auth import RecipientKeyBatchAuthorization, RecipientKeyTrustStore, recipient_key_id
 from .signing import SigningKeyPair, SourceTrustStore, signing_key_id
 from .transforms import TransformStage, apply_transform, transform_stage
 from .validation import PlanValidator
+
+MAX_SOURCE_BATCH_RECORDS = 10_000
+DEFAULT_SOURCE_BATCH_WIRE_BYTES = 64 * 1024 * 1024
+
+
+def _bounded_new_identifier(value: object, label: str, maximum: int) -> str:
+    """Bound metadata on newly issued records without invalidating older wire records."""
+
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or len(value) > maximum
+        or not value.isprintable()
+    ):
+        raise ProtocolError(f"new source {label} must be bounded printable metadata")
+    return value
 
 
 class PayloadCodec:
@@ -196,6 +213,8 @@ class BlindTransportRecord:
     fields: tuple[SealedField, ...]
     authentication: RecordAuthentication | None = None
     allow_legacy_blank_recipient_key_id: bool = False
+    _wire_cache: bytes | None = dataclass_field(default=None, init=False, repr=False, compare=False)
+    _digest_cache: str | None = dataclass_field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.fields:
@@ -301,6 +320,8 @@ class BlindTransportRecord:
             raise ProtocolError("legacy transport records cannot be source-signed")
         if self.authentication is not None:
             raise ProtocolError("transport record is already source-signed")
+        for field in self.fields:
+            field.context.validate_new_metadata()
         key_id = signing_key_id(signer.public_bytes())
         signature = signer.sign(self.source_authentication_bytes(key_id))
         return BlindTransportRecord(
@@ -317,21 +338,31 @@ class BlindTransportRecord:
         return payload
 
     def canonical_wire_bytes(self) -> bytes:
-        return json.dumps(
+        cached = self._wire_cache
+        if cached is not None:
+            return cached
+        encoded = json.dumps(
             self.to_wire(),
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
         ).encode("utf-8")
+        object.__setattr__(self, "_wire_cache", encoded)
+        return encoded
 
     def digest(self) -> str:
+        cached = self._digest_cache
+        if cached is not None:
+            return cached
         content = json.dumps(
             self._content_wire(),
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
         ).encode("utf-8")
-        return hashlib.sha256(content).hexdigest()
+        digest = hashlib.sha256(content).hexdigest()
+        object.__setattr__(self, "_digest_cache", digest)
+        return digest
 
     @classmethod
     def from_wire(
@@ -409,6 +440,12 @@ class BlindSourceAgent:
     allow_unauthenticated_recipient_key: bool = False
 
     def __post_init__(self) -> None:
+        for label, value in (
+            ("tenant", self.tenant),
+            ("source connector", self.source_connector_id),
+            ("destination connector", self.destination_connector_id),
+        ):
+            _bounded_new_identifier(value, label, 128)
         PlanValidator().validate(
             self.plan, self.source_schema, self.target_schema
         ).raise_if_invalid()
@@ -457,15 +494,122 @@ class BlindSourceAgent:
         record_id: str,
         transfer_id: str | None = None,
     ) -> BlindTransportRecord:
+        _bounded_new_identifier(record_id, "record id", 256)
+        if transfer_id is not None:
+            _bounded_new_identifier(transfer_id, "transfer id", 256)
         transfer_id = transfer_id or str(uuid.uuid4())
+        issued_at = datetime.now(UTC)
+        destination_public_key, destination_key_id = self._recipient_key(now=issued_at)
+        return self._prepare_authorized_record(
+            record,
+            record_id=record_id,
+            transfer_id=transfer_id,
+            issued_at=issued_at,
+            destination_public_key=destination_public_key,
+            destination_key_id=destination_key_id,
+        )
+
+    def prepare_records(
+        self,
+        records: Iterable[Mapping[str, object]],
+        *,
+        record_ids: Iterable[str],
+        transfer_id: str | None = None,
+        max_wire_bytes: int = DEFAULT_SOURCE_BATCH_WIRE_BYTES,
+    ) -> tuple[BlindTransportRecord, ...]:
+        """Seal a bounded transfer while authorizing each record at its issuance time."""
+
+        if (
+            isinstance(max_wire_bytes, bool)
+            or not isinstance(max_wire_bytes, int)
+            or not 1 <= max_wire_bytes <= DEFAULT_SOURCE_BATCH_WIRE_BYTES
+        ):
+            raise ValueError("source batch wire limit is outside supported range")
+        if transfer_id is not None:
+            _bounded_new_identifier(transfer_id, "transfer id", 256)
+        transfer_id = transfer_id or str(uuid.uuid4())
+        static_recipient: tuple[bytes, str] | None = None
+        batch_authorization: RecipientKeyBatchAuthorization | None = None
+        if self.recipient_key_trust_store is None:
+            assert self.destination_public_key is not None
+            static_recipient = (
+                self.destination_public_key,
+                recipient_key_id(self.destination_public_key) if self.protocol_version == 3 else "",
+            )
+        else:
+            batch_authorization = self.recipient_key_trust_store.begin_batch_authorization(
+                tenant=self.tenant,
+                destination_connector=self.destination_connector_id,
+            )
+
+        prepared: list[BlindTransportRecord] = []
+        seen_record_ids: set[str] = set()
+        total_wire_bytes = 0
+        record_iterator = iter(records)
+        identity_iterator = iter(record_ids)
+        exhausted = object()
+        for index in range(MAX_SOURCE_BATCH_RECORDS + 1):
+            record = next(record_iterator, exhausted)
+            record_id = next(identity_iterator, exhausted)
+            if record is exhausted or record_id is exhausted:
+                if record is record_id:
+                    break
+                raise ValueError("source batch records and record ids differ in length")
+            if index >= MAX_SOURCE_BATCH_RECORDS:
+                raise ValueError("source batch exceeds the record count limit")
+            if not isinstance(record, Mapping):
+                raise TypeError("source batch records must be mappings")
+            validated_record_id = _bounded_new_identifier(record_id, "record id", 256)
+            if validated_record_id in seen_record_ids:
+                raise ValueError("source batch contains a duplicate record id")
+            seen_record_ids.add(validated_record_id)
+            issued_at = datetime.now(UTC)
+            if batch_authorization is None:
+                assert static_recipient is not None
+                destination_public_key, destination_key_id = static_recipient
+            else:
+                assert self.recipient_key_trust_store is not None
+                certificate = self.recipient_key_trust_store.authorize_batch_record(
+                    batch_authorization,
+                    now=issued_at,
+                )
+                destination_public_key = certificate.public_key
+                destination_key_id = certificate.key_id if self.protocol_version == 3 else ""
+            sealed = self._prepare_authorized_record(
+                record,
+                record_id=validated_record_id,
+                transfer_id=transfer_id,
+                issued_at=issued_at,
+                destination_public_key=destination_public_key,
+                destination_key_id=destination_key_id,
+            )
+            total_wire_bytes += len(sealed.canonical_wire_bytes())
+            if total_wire_bytes > max_wire_bytes:
+                raise ValueError("source batch exceeds the wire byte limit")
+            prepared.append(sealed)
+        if batch_authorization is not None:
+            assert self.recipient_key_trust_store is not None
+            self.recipient_key_trust_store.confirm_batch_authorization(batch_authorization)
+        return tuple(prepared)
+
+    def _prepare_authorized_record(
+        self,
+        record: Mapping[str, object],
+        *,
+        record_id: str,
+        transfer_id: str,
+        issued_at: datetime,
+        destination_public_key: bytes,
+        destination_key_id: str,
+    ) -> BlindTransportRecord:
+        if not isinstance(record, Mapping):
+            raise TypeError("source record must be a mapping")
         source_fields = self.source_schema.by_id()
         target_fields = self.target_schema.by_id()
         policy = PolicyEngine()
         sealed: list[SealedField] = []
-        issued_at = datetime.now(UTC)
         expires_at = issued_at + self.transfer_ttl if self.transfer_ttl is not None else None
         plan_digest = self.plan.digest()
-        destination_public_key, destination_key_id = self._recipient_key(now=issued_at)
 
         for rule in self.plan.rules:
             source = source_fields[rule.source_field_id]
@@ -524,16 +668,30 @@ class BlindDestinationAgent:
     allow_legacy_unsigned: bool = False
     additional_private_keys: tuple[X25519PrivateKey, ...] = ()
     allow_legacy_blank_recipient_key_id: bool = False
+    _recipient_public_keys_cache: tuple[bytes, ...] = dataclass_field(
+        default=(), init=False, repr=False, compare=False
+    )
+    _recipient_key_ids_cache: tuple[str, ...] = dataclass_field(
+        default=(), init=False, repr=False, compare=False
+    )
 
     def _recipient_private_key(self, transport: BlindTransportRecord) -> X25519PrivateKey:
         authenticated_recipient = transport.fields[0].context.recipient_key_id
         if not authenticated_recipient:
             return self.private_key
+        private_keys = (self.private_key, *self.additional_private_keys)
+        public_keys = tuple(RecipientKeyPair(key).public_bytes() for key in private_keys)
+        if public_keys != self._recipient_public_keys_cache:
+            self._recipient_public_keys_cache = public_keys
+            self._recipient_key_ids_cache = tuple(recipient_key_id(key) for key in public_keys)
         matches = [
             private_key
-            for private_key in (self.private_key, *self.additional_private_keys)
-            if recipient_key_id(RecipientKeyPair(private_key).public_bytes())
-            == authenticated_recipient
+            for private_key, key_id in zip(
+                private_keys,
+                self._recipient_key_ids_cache,
+                strict=True,
+            )
+            if key_id == authenticated_recipient
         ]
         if len(matches) != 1:
             raise IntegrityError("transport record targets an unavailable recipient key")
@@ -570,6 +728,15 @@ class BlindDestinationAgent:
 
     def open_record(self, transport: BlindTransportRecord) -> dict[str, object]:
         private_key = self._authorize_record(transport)
+        return self._open_authorized_record(transport, private_key)
+
+    @staticmethod
+    def _open_authorized_record(
+        transport: BlindTransportRecord,
+        private_key: X25519PrivateKey,
+    ) -> dict[str, object]:
+        """Open a record after the caller has completed destination authorization."""
+
         output: dict[str, object] = {}
         for field in transport.fields:
             plaintext = open_envelope(field.envelope, private_key, field.context)

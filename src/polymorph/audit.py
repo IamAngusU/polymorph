@@ -6,6 +6,7 @@ import json
 import os
 import sqlite3
 from collections import Counter
+from collections.abc import Iterable
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -14,6 +15,10 @@ from pathlib import Path
 from .errors import IntegrityError
 from .signing import SigningKeyPair, verify_ed25519
 from .sqlite_safety import configure_sqlite_durability
+
+MAX_AUDIT_BATCH_EVENTS = 10_000
+MAX_AUDIT_EVENT_BYTES = 16 * 1024
+MAX_AUDIT_BATCH_BYTES = 64 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +34,7 @@ class AuditEvent:
     plan_digest: str
     reason_code: str | None = None
     timestamp: datetime | None = None
+    batch_attempt_id: str | None = None
 
     def canonical_dict(self) -> dict[str, object]:
         machine_fields = {
@@ -36,7 +42,12 @@ class AuditEvent:
             "status": (self.status, 64),
         }
         for label, (value, maximum) in machine_fields.items():
-            if not value or len(value) > maximum or not value.replace("_", "").isalnum():
+            if (
+                not isinstance(value, str)
+                or not value
+                or len(value) > maximum
+                or not value.replace("_", "").isalnum()
+            ):
                 raise ValueError(f"audit {label} must be a short machine-readable identifier")
         metadata_fields = {
             "actor": (self.actor, 128),
@@ -46,26 +57,44 @@ class AuditEvent:
             "record_id": (self.record_id, 256),
         }
         for label, (value, maximum) in metadata_fields.items():
-            if not value or len(value) > maximum or not value.isprintable():
+            if (
+                not isinstance(value, str)
+                or not value
+                or len(value) > maximum
+                or not value.isprintable()
+            ):
                 raise ValueError(f"audit {label} must be bounded printable metadata")
         for label, value in {
             "record_digest": self.record_digest,
             "plan_digest": self.plan_digest,
         }.items():
-            if len(value) != 64 or any(char not in "0123456789abcdefABCDEF" for char in value):
+            if (
+                not isinstance(value, str)
+                or len(value) != 64
+                or any(char not in "0123456789abcdefABCDEF" for char in value)
+            ):
                 raise ValueError(f"audit {label} must be a SHA-256 hex digest")
         timestamp = self.timestamp or datetime.now(UTC)
+        if not isinstance(timestamp, datetime):
+            raise ValueError("audit timestamp must be a datetime")
         if timestamp.tzinfo is None:
             timestamp = timestamp.replace(tzinfo=UTC)
         else:
             timestamp = timestamp.astimezone(UTC)
         if self.reason_code is not None and (
-            not self.reason_code
+            not isinstance(self.reason_code, str)
+            or not self.reason_code
             or len(self.reason_code) > 96
             or not self.reason_code.replace("_", "").isalnum()
         ):
             raise ValueError("audit reason_code must be machine-readable")
-        return {
+        if self.batch_attempt_id is not None and (
+            not isinstance(self.batch_attempt_id, str)
+            or len(self.batch_attempt_id) != 32
+            or any(char not in "0123456789abcdef" for char in self.batch_attempt_id)
+        ):
+            raise ValueError("audit batch_attempt_id must be a lowercase 128-bit identifier")
+        payload: dict[str, object] = {
             "actor": self.actor,
             "connector_id": self.connector_id,
             "event_type": self.event_type,
@@ -78,6 +107,9 @@ class AuditEvent:
             "timestamp": timestamp.isoformat(),
             "transfer_id": self.transfer_id,
         }
+        if self.batch_attempt_id is not None:
+            payload["batch_attempt_id"] = self.batch_attempt_id
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,35 +234,107 @@ class AuditLog:
         return hashlib.sha256(previous_hash.encode("ascii") + b"\x00" + encoded).hexdigest()
 
     def append(self, event: AuditEvent) -> AuditRecord:
+        return self.append_many((event,))[0]
+
+    def append_many(self, events: Iterable[AuditEvent]) -> tuple[AuditRecord, ...]:
+        """Append a bounded event batch in one hash-chain transaction."""
+
         if self._read_only:
             raise IntegrityError("cannot append to a read-only audit store")
-        payload = event.canonical_dict()
+        prepared: list[tuple[dict[str, object], str]] = []
+        total_encoded_bytes = 0
+        for index, event in enumerate(events):
+            if index >= MAX_AUDIT_BATCH_EVENTS:
+                raise ValueError("audit batch exceeds the event count limit")
+            if not isinstance(event, AuditEvent):
+                raise TypeError("audit batch items must be AuditEvent instances")
+            payload = event.canonical_dict()
+            encoded = json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+            encoded_size = len(encoded.encode("utf-8"))
+            if encoded_size > MAX_AUDIT_EVENT_BYTES:
+                raise ValueError("audit event exceeds the encoded size limit")
+            total_encoded_bytes += encoded_size
+            if total_encoded_bytes > MAX_AUDIT_BATCH_BYTES:
+                raise ValueError("audit batch exceeds the encoded size limit")
+            prepared.append((payload, encoded))
+        if not prepared:
+            return ()
+
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
             previous = connection.execute(
                 "SELECT sequence, event_hash FROM audit_events ORDER BY sequence DESC LIMIT 1"
             ).fetchone()
+            initial_sequence = int(previous["sequence"]) if previous is not None else 0
             previous_hash = previous["event_hash"] if previous is not None else "0" * 64
-            event_hash = self._hash(previous_hash, payload)
-            signature = self.signer.sign(bytes.fromhex(event_hash)) if self.signer else None
-            cursor = connection.execute(
+            expected_rows: list[tuple[int, str, str, str, bytes | None]] = []
+            for payload, encoded in prepared:
+                event_hash = self._hash(previous_hash, payload)
+                signature = self.signer.sign(bytes.fromhex(event_hash)) if self.signer else None
+                connection.execute(
+                    """
+                    INSERT INTO audit_events (event_json, previous_hash, event_hash, signature)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (encoded, previous_hash, event_hash, signature),
+                )
+                expected_rows.append(
+                    (
+                        initial_sequence + len(expected_rows) + 1,
+                        encoded,
+                        previous_hash,
+                        event_hash,
+                        signature,
+                    )
+                )
+                previous_hash = event_hash
+
+            stored_rows = connection.execute(
                 """
-                INSERT INTO audit_events (event_json, previous_hash, event_hash, signature)
-                VALUES (?, ?, ?, ?)
+                SELECT sequence, event_json, previous_hash, event_hash, signature
+                FROM audit_events
+                WHERE sequence > ?
+                ORDER BY sequence
                 """,
+                (initial_sequence,),
+            ).fetchall()
+            actual_rows = [
                 (
-                    json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False),
+                    int(row["sequence"]),
+                    str(row["event_json"]),
+                    str(row["previous_hash"]),
+                    str(row["event_hash"]),
+                    bytes(row["signature"]) if row["signature"] is not None else None,
+                )
+                for row in stored_rows
+            ]
+            if actual_rows != expected_rows:
+                raise IntegrityError("audit append postcondition failed")
+
+            records = [
+                AuditRecord(
+                    sequence,
+                    payload,
                     previous_hash,
                     event_hash,
                     signature,
-                ),
-            )
-            if cursor.lastrowid is None:
-                raise IntegrityError("audit insert did not return a sequence")
-            sequence = int(cursor.lastrowid)
+                )
+                for (payload, _), (
+                    sequence,
+                    _,
+                    previous_hash,
+                    event_hash,
+                    signature,
+                ) in zip(prepared, expected_rows, strict=True)
+            ]
             connection.execute("COMMIT")
-            return AuditRecord(sequence, payload, previous_hash, event_hash, signature)
+            return tuple(records)
         except Exception:
             if connection.in_transaction:
                 connection.execute("ROLLBACK")

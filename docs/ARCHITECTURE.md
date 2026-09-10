@@ -100,6 +100,13 @@ metadata, deduplicate transfer identities, reject identity reuse with different 
 records, lease them to workers, and acknowledge or release a lease. Signature and revocation are
 checked again when a record is leased so a revoked queued record cannot pass silently.
 
+Authenticated enqueue and lease batches use one thread-bound `SourceTrustStore` verification
+session. The relay acquires that process-local trust fence before its SQLite transaction and keeps
+it through the queue, lease or dead-letter commit. A concurrent hard revocation or registry
+replacement therefore linearizes either before verification or after the durable relay transition;
+there is no verified-but-uncommitted intake window. One session covers the bounded batch instead
+of acquiring the trust lock once per record.
+
 It cannot decrypt a record because its API has no private-key dependency.
 
 The relay still learns metadata required for routing, including tenant, connector IDs, record ID, transfer ID, plan digest and field IDs. Payload confidentiality does not imply metadata confidentiality.
@@ -117,9 +124,16 @@ the key ID chooses one exact key rather than trial-decrypting. `DestinationRunti
 4. decrypts locally
 5. checks the exact mapped field set and conservative runtime types
 6. performs destination-stage relationship resolution and rechecks its result
-7. invokes the destination connector with a deterministic idempotency key
+7. invokes the destination connector with a deterministic per-record idempotency key
 8. records the durability result
 9. removes successful records from sealed quarantine
+
+When a connector explicitly advertises an atomic batch contract, the runtime may cross the write
+boundary for several already authenticated records together. Each item keeps its own identity and
+idempotency key. The runtime limits both record count and aggregate sealed-wire bytes, requires a
+single all-or-none connector transaction and records one random batch-attempt ID in every involved
+ledger row before the external write. SQLite and PostgreSQL opt in; unsupported connectors stay on
+the scalar path.
 
 A natural key is resolved to an internal foreign key only through database metadata. The caller chooses a previously approved unique match column but cannot select an arbitrary table or return column.
 
@@ -137,6 +151,11 @@ Connector failures may carry a `WriteOutcome`:
 - `UNKNOWN`: the connector cannot prove whether a side effect occurred. Non-idempotent replay is blocked unless explicitly forced by an authorized capability.
 
 Unknown exceptions are classified conservatively as `UNKNOWN`.
+
+An atomic attempt ID survives commit, quarantine and restart. If a batch write may have committed,
+normal scalar replay remains blocked even when the connector has scalar idempotency. A connector
+must separately declare that the same per-item key is honored across its batch and scalar APIs
+before that replay becomes safe. Forced replay still requires the dedicated operator capability.
 
 ## 9. Capabilities and audit
 

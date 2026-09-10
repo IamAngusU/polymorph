@@ -31,6 +31,14 @@ Hard revocation rejects queued records as well as new intake when the relay reva
 The destination independently revalidates immediately before decryption. Records signed by a
 revoked key should be quarantined for manual provenance review, not automatically re-signed.
 
+Within one process, relay enqueue and lease batches keep a `SourceTrustStore` verification session
+open through their SQLite commit. Revocation and registry rotation use the same lock. When
+`revoke` returns, a concurrent intake has therefore either committed before the revocation or will
+observe the revoked state and fail; it cannot remain verified but uncommitted and publish later.
+The session covers the complete bounded batch to avoid one lock acquisition per record. This does
+not distribute revocation between processes. Every relay and destination process still needs an
+authenticated, durable revocation update.
+
 ## Replay identity
 
 Replay identity remains tenant, destination connector, transfer ID and record ID. The encrypted

@@ -9,13 +9,16 @@ from typing import NoReturn
 
 import pytest
 
+import polymorph.connectors.database as database_module
 import polymorph.workflow_benchmark as workflow_benchmark
 from polymorph.audit import AuditEvent, AuditLog
 from polymorph.cli import build_parser
-from polymorph.connectors.base import DeliveryContext
+from polymorph.connectors.base import BatchWriteItem
 from polymorph.connectors.csv_file import CsvConnector
 from polymorph.connectors.database import DatabaseConnector
 from polymorph.content import ContentInspector
+from polymorph.errors import ConnectorWriteError, WriteOutcome
+from polymorph.ledger import DeliveryLedger
 from polymorph.matching.hybrid import HybridMatcher
 from polymorph.models.mapping import MappingDecision
 from polymorph.models.schema import SchemaDescriptor
@@ -25,7 +28,15 @@ from polymorph.workflow_benchmark import run_workflow_benchmark
 def test_workflow_event_capacity_reserves_every_possible_event(tmp_path: Path) -> None:
     records = 5
     batch_size = 2
-    expected_events = records + 3 + len(workflow_benchmark.WORKFLOW_STAGE_COMPONENTS) + 2
+    workflow_batches = 3
+    maximum_atomic_batches = 3
+    expected_events = (
+        records
+        + workflow_batches
+        + maximum_atomic_batches
+        + len(workflow_benchmark.WORKFLOW_STAGE_COMPONENTS)
+        + 2
+    )
     expected_bytes = expected_events * workflow_benchmark.MAX_COMPACT_EVENT_BYTES
 
     assert workflow_benchmark._required_event_stream_bytes(records, batch_size) == expected_bytes
@@ -38,6 +49,22 @@ def test_workflow_event_capacity_reserves_every_possible_event(tmp_path: Path) -
     assert report.success
     assert report.observability["reserved_stream_bytes"] == expected_bytes
     assert int(report.observability["events"]) <= expected_events
+
+
+def test_event_capacity_counts_runtime_chunks_inside_large_workflow_batches() -> None:
+    expected_large_batch_events = (
+        3_000 + 2 + 4 + len(workflow_benchmark.WORKFLOW_STAGE_COMPONENTS) + 2
+    )
+    expected_scalar_events = 3_000 + 3_000 + len(workflow_benchmark.WORKFLOW_STAGE_COMPONENTS) + 2
+
+    assert (
+        workflow_benchmark._required_event_stream_bytes(3_000, 1_500)
+        == expected_large_batch_events * workflow_benchmark.MAX_COMPACT_EVENT_BYTES
+    )
+    assert (
+        workflow_benchmark._required_event_stream_bytes(3_000, 1)
+        == expected_scalar_events * workflow_benchmark.MAX_COMPACT_EVENT_BYTES
+    )
 
 
 def _stage_names(payload: dict[str, object]) -> list[str]:
@@ -151,7 +178,7 @@ def test_real_workflow_benchmark_crosses_every_durable_boundary(tmp_path: Path) 
         ).fetchall()
     finally:
         connection.close()
-    assert rows == [
+    assert set(rows) == {
         (
             "polymorph-canary-order-00000001",
             "polymorph-canary-customer-001@example.test",
@@ -162,7 +189,7 @@ def test_real_workflow_benchmark_crosses_every_durable_boundary(tmp_path: Path) 
         ("ORD-00000002", "customer-002@example.test", "us-east", "packed", "tok-00000002-02"),
         ("ORD-00000003", "customer-003@example.test", "ap-south", "shipped", "tok-00000003-03"),
         ("ORD-00000004", "customer-004@example.test", "eu-central", "created", "tok-00000004-04"),
-    ]
+    }
 
     serialized = json.dumps(payload, sort_keys=True)
     assert "polymorph-canary-customer-001@example.test" not in serialized
@@ -280,21 +307,21 @@ def test_workflow_detects_destination_value_corruption(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original_write = DatabaseConnector.write_records
+    original_write = DatabaseConnector.write_batch
     corrupt_value = "corrupted-value-that-must-not-reach-report@example.test"
 
     def corrupt_write(
         self: DatabaseConnector,
-        records: Iterable[Mapping[str, object]],
-        *,
-        context: DeliveryContext | None = None,
+        items: tuple[BatchWriteItem, ...],
     ) -> int:
-        rows = [dict(record) for record in records]
-        for row in rows:
+        corrupted = []
+        for item in items:
+            row = dict(item.values)
             row["customer_email"] = corrupt_value
-        return original_write(self, rows, context=context)
+            corrupted.append(BatchWriteItem(row, item.context, item.wire_bytes))
+        return original_write(self, tuple(corrupted))
 
-    monkeypatch.setattr(DatabaseConnector, "write_records", corrupt_write)
+    monkeypatch.setattr(DatabaseConnector, "write_batch", corrupt_write)
     report, resources = run_workflow_benchmark(
         records=2,
         batch_size=2,
@@ -312,6 +339,93 @@ def test_workflow_detects_destination_value_corruption(
     assert report.final_state["content_verified"] is False
     assert report.final_state["mismatch_count"] == 2
     assert corrupt_value not in json.dumps(report.as_dict(), sort_keys=True)
+
+
+def test_partial_runtime_chunk_failure_reports_durable_progress_honestly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_write = DatabaseConnector.write_batch
+    batch_calls = 0
+
+    def fail_second_atomic_write(
+        self: DatabaseConnector,
+        items: tuple[BatchWriteItem, ...],
+    ) -> int:
+        nonlocal batch_calls
+        batch_calls += 1
+        if batch_calls == 2:
+            raise ConnectorWriteError(
+                "simulated atomic rollback",
+                outcome=WriteOutcome.NOT_COMMITTED,
+            )
+        return original_write(self, items)
+
+    monkeypatch.setattr(database_module, "DATABASE_ATOMIC_BATCH_MAX_RECORDS", 2)
+    monkeypatch.setattr(DatabaseConnector, "write_batch", fail_second_atomic_write)
+    report, resources = run_workflow_benchmark(
+        records=5,
+        batch_size=5,
+        work_dir=tmp_path / "partial-runtime-chunk",
+    )
+
+    assert not report.success
+    assert report.failure is not None
+    assert report.failure.stage == "destination_delivery"
+    assert report.failure.reason_code == "write_not_committed"
+    assert report.records_delivered == 3
+    assert resources.result_count == 3
+    assert report.final_state["destination_rows"] == 3
+    assert report.final_state["ledger_committed"] == 3
+    assert report.final_state["quarantine_depth"] == 2
+    assert report.observability["event_contract_valid"] is True
+    assert report.observability["workflow_counts_valid"] is True
+    assert report.observability["run_closed"] is True
+    stages = {stage.name: stage for stage in report.stages}
+    assert stages["destination_delivery"].status == "failed"
+    assert stages["destination_delivery"].items_processed == 5
+    assert stages["destination_delivery"].reason_code == "write_not_committed"
+    assert stages["end_to_end_verification"].status == "failed"
+    assert stages["end_to_end_verification"].reason_code == "destination_row_count_mismatch"
+
+
+def test_internal_later_chunk_failure_keeps_completed_delivery_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_start = DeliveryLedger.start_write_many
+    batch_calls = 0
+    secret = "internal-second-chunk-secret"
+
+    def fail_second_batch_boundary(self: DeliveryLedger, items) -> str:
+        nonlocal batch_calls
+        batch_calls += 1
+        if batch_calls == 2:
+            raise RuntimeError(secret)
+        return original_start(self, items)
+
+    monkeypatch.setattr(database_module, "DATABASE_ATOMIC_BATCH_MAX_RECORDS", 2)
+    monkeypatch.setattr(DeliveryLedger, "start_write_many", fail_second_batch_boundary)
+    report, resources = run_workflow_benchmark(
+        records=5,
+        batch_size=5,
+        work_dir=tmp_path / "interrupted-runtime-chunk",
+    )
+
+    assert not report.success
+    assert report.failure is not None
+    assert report.failure.stage == "destination_delivery"
+    assert report.failure.reason_code == "destination_delivery_interrupted"
+    assert report.failure.error_type == "benchmark_assertion"
+    assert report.records_delivered == 2
+    assert resources.result_count == 2
+    assert report.final_state["destination_rows"] == 2
+    assert report.final_state["ledger_committed"] == 2
+    stages = {stage.name: stage for stage in report.stages}
+    assert stages["destination_delivery"].status == "failed"
+    assert stages["destination_delivery"].items_processed == 2
+    assert stages["destination_delivery"].reason_code == "destination_delivery_interrupted"
+    assert secret not in json.dumps(report.as_dict(), sort_keys=True)
 
 
 def test_workflow_sanitizes_a_second_source_read_failure(

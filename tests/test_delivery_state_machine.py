@@ -100,6 +100,12 @@ class _CrashableLedger(DeliveryLedger):
             raise SystemExit("injected crash after destination commit")
         super().mark_committed(record, claim_token)
 
+    def mark_replay_committed(self, record: BlindTransportRecord, claim_token: str) -> None:
+        if self.crash_on_commit:
+            self.crash_on_commit = False
+            raise SystemExit("injected crash after destination commit")
+        super().mark_replay_committed(record, claim_token)
+
 
 class DeliveryPipelineStateMachine(RuleBasedStateMachine):
     """Exercise durable delivery components under reordered work and lost acknowledgements."""
@@ -428,6 +434,7 @@ class DeliveryPipelineStateMachine(RuleBasedStateMachine):
         writes_before: int,
         receipt: DeliveryReceipt | None,
         crashed: bool,
+        replay_attempt: bool = False,
     ) -> bool:
         calls_after = self._connector_call_count()
         assert calls_after in {calls_before, calls_before + 1}
@@ -451,18 +458,29 @@ class DeliveryPipelineStateMachine(RuleBasedStateMachine):
             assert receipt is not None
             assert receipt.status is DeliveryStatus.QUARANTINED
             assert receipt.reason_code == "write_not_committed"
-            assert entry.state is DeliveryState.QUARANTINED
+            expected_state = (
+                DeliveryState.REPLAY_QUARANTINED if replay_attempt else DeliveryState.QUARANTINED
+            )
+            assert entry.state is expected_state
         elif fault in {"unknown_before_write", "unknown_after_write"}:
             assert not crashed
             assert receipt is not None
             assert receipt.status is DeliveryStatus.QUARANTINED
             assert receipt.reason_code == "write_outcome_unknown"
-            assert entry.state is DeliveryState.UNCERTAIN
+            expected_state = (
+                DeliveryState.REPLAY_UNCERTAIN if replay_attempt else DeliveryState.UNCERTAIN
+            )
+            assert entry.state is expected_state
         else:
             assert fault == "crash_after_write"
             assert crashed
             assert receipt is None
-            assert entry.state is DeliveryState.WRITE_STARTED
+            expected_state = (
+                DeliveryState.REPLAY_WRITE_STARTED
+                if replay_attempt
+                else DeliveryState.WRITE_STARTED
+            )
+            assert entry.state is expected_state
         return True
 
     def _relay_contains(self, digest: str) -> bool:
@@ -608,6 +626,10 @@ class DeliveryPipelineStateMachine(RuleBasedStateMachine):
                 DeliveryState.CLAIMED,
                 DeliveryState.WRITE_STARTED,
                 DeliveryState.UNCERTAIN,
+                DeliveryState.REPLAY_CLAIMED,
+                DeliveryState.REPLAY_WRITE_STARTED,
+                DeliveryState.REPLAY_UNCERTAIN,
+                DeliveryState.REPLAY_QUARANTINED,
             }
             assert Counter(self.destination.durable_writes)[digest] == writes_before
         except SystemExit as exc:
@@ -633,6 +655,7 @@ class DeliveryPipelineStateMachine(RuleBasedStateMachine):
             writes_before=writes_before,
             receipt=receipt,
             crashed=crashed,
+            replay_attempt=True,
         )
 
     @rule(index=st.integers(min_value=0, max_value=RECORD_COUNT - 1))

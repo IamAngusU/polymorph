@@ -146,7 +146,12 @@ def test_http_idempotency_requires_an_explicit_endpoint_contract() -> None:
     )
 
     assert not advisory.capabilities.supports_idempotency
+    assert advisory.capabilities.idempotency_contract_id is None
     assert asserted.capabilities.supports_idempotency
+    assert (
+        asserted.capabilities.idempotency_contract_id
+        == "polymorph.http-json.single-record-delivery-key/v1"
+    )
 
 
 @pytest.mark.parametrize("header", ["Bad Header", "Authorization", "Content-Length"])

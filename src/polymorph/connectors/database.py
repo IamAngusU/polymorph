@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from threading import Lock
 
 from sqlalchemy import MetaData, Table, create_engine, inspect, select
-from sqlalchemy.engine import URL, Engine
+from sqlalchemy.engine import URL, CursorResult, Engine
 from sqlalchemy.engine.reflection import Inspector
 from sqlalchemy.sql.sqltypes import (
     JSON,
@@ -29,7 +29,22 @@ from polymorph.models.schema import (
 from polymorph.models.types import DataType, FieldRole, Sensitivity
 from polymorph.secrets import SecretProvider
 
-from .base import ConnectorCapabilities, DeliveryContext
+from .base import (
+    AtomicBatchCapabilities,
+    BatchWriteItem,
+    ConnectorCapabilities,
+    DeliveryContext,
+)
+
+_TRANSACTIONAL_DIALECTS = frozenset({"postgresql", "sqlite"})
+_VERIFIABLE_ATOMIC_BATCH_DRIVERS = frozenset(
+    {
+        ("postgresql", "psycopg"),
+        ("sqlite", "pysqlite"),
+    }
+)
+DATABASE_ATOMIC_BATCH_MAX_RECORDS = 1_000
+DATABASE_ATOMIC_BATCH_MAX_WIRE_BYTES = 64 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,11 +114,27 @@ class DatabaseConnector:
             future=True,
             hide_parameters=True,
         )
+        dialect = self.engine.dialect
+        transactional_write = dialect.name in _TRANSACTIONAL_DIALECTS
+        verifiable_atomic_batch = (
+            dialect.name,
+            dialect.driver,
+        ) in _VERIFIABLE_ATOMIC_BATCH_DRIVERS and (
+            dialect.supports_sane_rowcount and dialect.supports_sane_multi_rowcount
+        )
         self.capabilities = ConnectorCapabilities(
             read_schema=True,
             read_records=True,
             write_records=True,
-            transactional_write=self.engine.dialect.name in {"postgresql", "sqlite"},
+            transactional_write=transactional_write,
+            atomic_batch_write=(
+                AtomicBatchCapabilities(
+                    max_records=DATABASE_ATOMIC_BATCH_MAX_RECORDS,
+                    max_wire_bytes=DATABASE_ATOMIC_BATCH_MAX_WIRE_BYTES,
+                )
+                if verifiable_atomic_batch
+                else None
+            ),
         )
         self.table_name = table
         self.schema_name = schema
@@ -312,6 +343,83 @@ class DatabaseConnector:
         rows = [dict(record) for record in records]
         if not rows:
             return 0
+        return self._write_rows(table, rows)
+
+    def write_batch(self, items: Sequence[BatchWriteItem]) -> int:
+        """Write a bounded batch in exactly one all-or-nothing database transaction.
+
+        Every item retains its own delivery context. The current database connector does not
+        provide destination-native idempotency, but keeping the contexts separate prevents a
+        caller from accidentally collapsing record identities when that support is added.
+        """
+
+        self._ensure_open()
+        capability = self.capabilities.atomic_batch_write
+        if capability is None:
+            raise ConnectorWriteError(
+                "database dialect does not guarantee atomic batch writes",
+                outcome=WriteOutcome.NOT_COMMITTED,
+            )
+        try:
+            item_count = len(items)
+        except TypeError as exc:
+            raise ConnectorWriteError(
+                "database batch must be a bounded sequence",
+                outcome=WriteOutcome.NOT_COMMITTED,
+            ) from exc
+        if item_count == 0:
+            raise ConnectorWriteError(
+                "database batch must contain at least one record",
+                outcome=WriteOutcome.NOT_COMMITTED,
+            )
+        if item_count > capability.max_records:
+            raise ConnectorWriteError(
+                "database batch exceeds the record count limit",
+                outcome=WriteOutcome.NOT_COMMITTED,
+            )
+
+        rows: list[dict[str, object]] = []
+        wire_bytes = 0
+        delivery_identities: set[tuple[str, str]] = set()
+        idempotency_keys: set[str] = set()
+        for item in items:
+            if not isinstance(item, BatchWriteItem):
+                raise ConnectorWriteError(
+                    "database batch contains an invalid item",
+                    outcome=WriteOutcome.NOT_COMMITTED,
+                )
+            wire_bytes += item.wire_bytes
+            if wire_bytes > capability.max_wire_bytes:
+                raise ConnectorWriteError(
+                    "database batch exceeds the wire byte limit",
+                    outcome=WriteOutcome.NOT_COMMITTED,
+                )
+            context = item.context
+            identity = (context.transfer_id, context.record_id)
+            if identity in delivery_identities or context.idempotency_key in idempotency_keys:
+                raise ConnectorWriteError(
+                    "database batch contains a duplicate delivery identity",
+                    outcome=WriteOutcome.NOT_COMMITTED,
+                )
+            delivery_identities.add(identity)
+            idempotency_keys.add(context.idempotency_key)
+            try:
+                rows.append(dict(item.values))
+            except Exception as exc:
+                raise ConnectorWriteError(
+                    "database batch contains an invalid record",
+                    outcome=WriteOutcome.NOT_COMMITTED,
+                ) from exc
+        if len(rows) != item_count:
+            raise ConnectorWriteError(
+                "database batch changed while it was being validated",
+                outcome=WriteOutcome.NOT_COMMITTED,
+            )
+
+        table = self._table()
+        return self._write_rows(table, rows)
+
+    def _write_rows(self, table: Table, rows: list[dict[str, object]]) -> int:
         allowed = set(table.columns.keys())
         for row in rows:
             unknown = set(row) - allowed
@@ -323,9 +431,14 @@ class DatabaseConnector:
 
         connection = self.engine.connect()
         transaction = connection.begin()
+        expected_count = len(rows)
+        is_multirow = expected_count > 1
         try:
             try:
-                connection.execute(table.insert(), rows)
+                result = connection.execute(
+                    table.insert(),
+                    rows if is_multirow else rows[0],
+                )
             except Exception as exc:
                 try:
                     transaction.rollback()
@@ -341,6 +454,26 @@ class DatabaseConnector:
                     "database write failed",
                     outcome=outcome,
                 ) from exc
+            if not self._proves_exact_rowcount(
+                result,
+                expected_count=expected_count,
+                is_multirow=is_multirow,
+            ):
+                try:
+                    transaction.rollback()
+                except Exception as exc:
+                    raise ConnectorWriteError(
+                        "database row count is unproven and rollback outcome is unknown",
+                        outcome=WriteOutcome.UNKNOWN,
+                    ) from exc
+                raise ConnectorWriteError(
+                    "database did not prove the exact affected row count",
+                    outcome=(
+                        WriteOutcome.NOT_COMMITTED
+                        if self.capabilities.transactional_write
+                        else WriteOutcome.UNKNOWN
+                    ),
+                )
             try:
                 transaction.commit()
             except Exception as exc:
@@ -350,7 +483,27 @@ class DatabaseConnector:
                 ) from exc
         finally:
             connection.close()
-        return len(rows)
+        return expected_count
+
+    @staticmethod
+    def _proves_exact_rowcount(
+        result: CursorResult[object],
+        *,
+        expected_count: int,
+        is_multirow: bool,
+    ) -> bool:
+        """Accept a write result only when its dialect promises an exact plain-int count."""
+
+        try:
+            sane = (
+                result.supports_sane_multi_rowcount()
+                if is_multirow
+                else result.supports_sane_rowcount()
+            )
+            rowcount = result.rowcount
+        except Exception:
+            return False
+        return sane is True and type(rowcount) is int and rowcount == expected_count
 
     def resolve_foreign_key(
         self,

@@ -188,8 +188,14 @@ jobs:
           PY
       - name: Measure the real local workflow
         run: >-
-          python -W error -m polymorph benchmark workflow --records 100 --batch-size 25
+          python -W error -m polymorph benchmark workflow --records 1000 --batch-size 100
           --work-dir workflow-run --output workflow-benchmark.json
+      - name: Gate workflow integrity and coarse performance
+        run: >-
+          python scripts/check_workflow_performance.py workflow-benchmark.json
+          --min-throughput 125 --max-wall-seconds 8 --max-peak-rss-mib 200
+          --expected-records 1000 --expected-batch-size 100
+          --output workflow-performance-gate.json
       - name: Prove strict parser-worker OS sandbox
         if: always()
         run: |
@@ -286,6 +292,7 @@ jobs:
           name: workflow-lab-evidence
           path: |
             workflow-benchmark.json
+            workflow-performance-gate.json
             parser-worker-strict-inspection.json
             parser-worker-strict-magika.json
             parser-worker-benchmark.json

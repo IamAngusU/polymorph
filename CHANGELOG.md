@@ -6,6 +6,14 @@ All notable changes to this alpha are documented here.
 
 ### Added
 
+- capability-gated atomic destination writes with explicit count, aggregate sealed-wire and
+  cross-path idempotency contracts
+- durable random batch-attempt IDs in the delivery ledger, receipts and signed audit metadata so
+  an uncertain batch cannot silently fall through scalar replay after restart
+- bounded multi-record operations for source sealing, outbox, relay, ledger, quarantine, audit and
+  operational events
+- regression cases for atomic partial-write rollback, unknown rollback outcomes, post-commit crash
+  replay, duplicate ordering, exact byte limits and 10,001-item generator rejection
 - destination-signed, tenant- and connector-bound recipient-key certificates with strict validity,
   exact predecessor rotation, durable local head checkpoints and concurrent fork rejection
 - authenticated recipient key IDs in encrypted record context plus explicit multi-key destination
@@ -54,6 +62,11 @@ All notable changes to this alpha are documented here.
 
 ### Changed
 
+- the real SQLite workflow uses safe all-or-none destination batches, batched state transactions,
+  audit appends, event appends and acknowledgements without weakening per-record crypto or fences
+- recipient trust-state reads cache only a verified unchanged file snapshot; route, certificate
+  lifetime and on-disk identity are still checked for every newly sealed record
+- sealed queue reads are bounded by aggregate wire bytes as well as row count
 - default bootstrap is model-free; both existing model profiles require explicit research opt-in
   pending commercial training-data provenance review
 - commercial licensing and external contribution boundaries are stated explicitly
@@ -78,6 +91,10 @@ All notable changes to this alpha are documented here.
   and revalidate combined old plus new output before replacement
 
 ### Fixed
+
+- SQLite trigger-based short writes now roll back instead of being reported as a committed batch
+- uncertain batch commits cannot be replayed through a weaker scalar idempotency contract
+- failed workflow batches now report exact durable progress and a valid stage reason code
 
 - the hard input-record budget remains enforced when a smaller diagnostic preflight sample is used
 - strict JSON identification rejects CPython's non-standard `NaN`, `Infinity` and `-Infinity`

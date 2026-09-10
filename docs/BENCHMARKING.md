@@ -28,6 +28,21 @@ CSV export and an actual SQLite destination, then exercises:
 - final counts, all five destination values, empty queues, audit signature verification and five
   plaintext-canary checks across blind SQLite files and sidecars
 
+CI follows the run with a coarse host-specific regression gate:
+
+```bash
+python scripts/check_workflow_performance.py workflow-result.json \
+  --min-throughput 125 --max-wall-seconds 8 --max-peak-rss-mib 200 \
+  --expected-records 1000 --expected-batch-size 100 \
+  --output workflow-performance-gate.json
+```
+
+The gate repeats the report's integrity, progress, signed-audit, event-stream, real batch-shape and
+full-sync durability checks before evaluating timing and sampled RSS. The expected record and batch
+arguments prevent a cheaper accidental workload from satisfying the gate. Its thresholds are a
+gross regression alarm for the pinned CI job, not a portable product performance promise. Release
+evidence should still show the raw report and the host details.
+
 The JSON report contains total wall/CPU/RSS measurements plus wall time, CPU time, call count,
 bounded latency sample count, p50/p95 call latency for repeated stages, throughput, storage bytes,
 runtime versions and SQLite durability settings. Single-call stages report null p50/p95. It
@@ -39,6 +54,12 @@ The signed destination audit is enabled by default. Use `--no-audit` to measure 
 without it. `--work-dir` must point to a new or empty directory and is retained for inspection.
 Without that option, state is created in an automatically cleaned temporary directory. Add
 `--keep-work-dir` to retain an automatically named directory.
+
+For SQLite, `--batch-size` now drives real capability-gated atomic destination writes as well as
+source, outbox, relay and acknowledgement grouping. The destination stage still reports records
+per second, while p50 and p95 are latencies of workflow batch calls. Compare runs only when record
+shape, batch size, audit setting and durability mode match. A connector without an atomic contract
+continues to use the conservative scalar writer.
 
 Like the other benchmark commands, this uses sampled process RSS when `psutil` is installed and
 does not enable `tracemalloc` by default. `--tracemalloc` is available for allocation debugging,

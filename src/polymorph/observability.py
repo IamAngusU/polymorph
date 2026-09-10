@@ -8,12 +8,12 @@ import re
 import secrets
 import stat
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, cast
 
 from .errors import IntegrityError
 from .filesystem import exclusive_path_lock
@@ -24,6 +24,7 @@ MAX_COMPACT_EVENT_BYTES = 1024
 MIN_EVENT_STREAM_BYTES = _MAX_EVENT_BYTES
 DEFAULT_EVENT_STREAM_BYTES = 64 * 1024 * 1024
 MAX_EVENT_STREAM_BYTES = 1024 * 1024 * 1024
+MAX_EVENT_BATCH_EVENTS = 10_000
 _TRACE_ID = re.compile(r"^[0-9a-f]{32}$")
 _MACHINE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,95}$")
 _EVENT_FIELDS = frozenset(
@@ -42,8 +43,10 @@ _EVENT_FIELDS = frozenset(
     }
 )
 _DELIVERY_EVENT_TYPES = frozenset({"delivery", "replay", "force_replay"})
+_DELIVERY_BATCH_EVENT_TYPES = frozenset({"delivery_batch"})
 _DELIVERY_SUCCESS_STATUSES = frozenset({"delivered", "duplicate"})
 _DELIVERY_FAILURE_STATUSES = frozenset({"ambiguous", "quarantined"})
+_DELIVERY_SUCCESS_WARNINGS = frozenset({"sealed_spool_cleanup_failed"})
 WORKFLOW_STAGE_COMPONENTS = (
     "fixture_generation",
     "destination_setup",
@@ -66,6 +69,18 @@ WORKFLOW_STAGE_COMPONENTS = (
     "resource_cleanup",
 )
 _WORKFLOW_STAGE_COMPONENTS = frozenset(WORKFLOW_STAGE_COMPONENTS)
+_EMIT_FIELDS = frozenset(
+    {
+        "component",
+        "event_type",
+        "status",
+        "correlation_id",
+        "reason_code",
+        "duration_ms",
+        "item_count",
+    }
+)
+_REQUIRED_EMIT_FIELDS = frozenset({"component", "event_type", "status"})
 
 
 class EventWriteStatus(StrEnum):
@@ -249,13 +264,30 @@ def _event_contract_valid(event: OperationalEvent) -> bool:
             and event.duration_ms is not None
         )
     if event.event_type in _DELIVERY_EVENT_TYPES:
+        success_reason_valid = event.reason_code is None or (
+            event.status in _DELIVERY_SUCCESS_STATUSES
+            and event.reason_code in _DELIVERY_SUCCESS_WARNINGS
+        )
         return (
             event.component == "destination_runtime"
             and (
-                (event.status in _DELIVERY_SUCCESS_STATUSES and event.reason_code is None)
+                (event.status in _DELIVERY_SUCCESS_STATUSES and success_reason_valid)
                 or (event.status in _DELIVERY_FAILURE_STATUSES and event.reason_code is not None)
             )
             and event.item_count == 1
+        )
+    if event.event_type in _DELIVERY_BATCH_EVENT_TYPES:
+        success_reason_valid = event.reason_code is None or (
+            event.status == "delivered" and event.reason_code in _DELIVERY_SUCCESS_WARNINGS
+        )
+        return (
+            event.component == "destination_runtime"
+            and (
+                (event.status == "delivered" and success_reason_valid)
+                or (event.status in _DELIVERY_FAILURE_STATUSES and event.reason_code is not None)
+            )
+            and event.item_count is not None
+            and event.item_count > 0
         )
     return False
 
@@ -368,9 +400,85 @@ class EventStream:
         self.append(event)
         return event
 
+    def emit_many(
+        self,
+        events: Iterable[Mapping[str, object]],
+    ) -> tuple[OperationalEvent, ...]:
+        """Create and durably append a bounded batch of event field mappings."""
+
+        output: list[OperationalEvent] = []
+        encoded_batch = bytearray()
+        for index, specification in enumerate(events):
+            if index >= MAX_EVENT_BATCH_EVENTS:
+                raise ValueError("operational event batch exceeds the event count limit")
+            if not isinstance(specification, Mapping):
+                raise TypeError("operational event batch items must be mappings")
+            fields: set[str] = set()
+            for field in specification:
+                if not isinstance(field, str) or field not in _EMIT_FIELDS or field in fields:
+                    raise ValueError("operational event emission has an invalid field set")
+                fields.add(field)
+            if not fields >= _REQUIRED_EMIT_FIELDS:
+                raise ValueError("operational event emission has an invalid field set")
+            component = specification["component"]
+            event_type = specification["event_type"]
+            status = specification["status"]
+            correlation_id = specification.get("correlation_id")
+            reason_code = specification.get("reason_code")
+            duration_ms = specification.get("duration_ms")
+            item_count = specification.get("item_count")
+            if not isinstance(component, str):
+                raise TypeError("operational event component must be a string")
+            if not isinstance(event_type, str):
+                raise TypeError("operational event type must be a string")
+            if not isinstance(status, str):
+                raise TypeError("operational event status must be a string")
+            if correlation_id is not None and not isinstance(correlation_id, str):
+                raise TypeError("operational event correlation_id must be a string")
+            if reason_code is not None and not isinstance(reason_code, str):
+                raise TypeError("operational event reason_code must be a string")
+            event = OperationalEvent(
+                event_id=new_trace_id(),
+                run_id=self.run_id,
+                correlation_id=(correlation_id if correlation_id is not None else new_trace_id()),
+                timestamp=self._clock(),
+                component=component,
+                event_type=event_type,
+                status=status,
+                reason_code=reason_code,
+                duration_ms=cast(float | None, duration_ms),
+                item_count=cast(int | None, item_count),
+            )
+            encoded = self._encode_event(event)
+            if len(encoded_batch) + len(encoded) > self._max_stream_bytes:
+                raise ValueError("operational event batch exceeds the configured size limit")
+            encoded_batch.extend(encoded)
+            output.append(event)
+        self._append_encoded_batch(encoded_batch)
+        return tuple(output)
+
     def append(self, event: OperationalEvent) -> None:
-        if event.run_id != self.run_id:
-            raise ValueError("event run_id does not match this stream writer")
+        self.append_many((event,))
+
+    def append_many(self, events: Iterable[OperationalEvent]) -> None:
+        """Append a bounded event batch with one path lock and one successful fsync."""
+
+        encoded_batch = bytearray()
+        for index, event in enumerate(events):
+            if index >= MAX_EVENT_BATCH_EVENTS:
+                raise ValueError("operational event batch exceeds the event count limit")
+            if not isinstance(event, OperationalEvent):
+                raise TypeError("operational event batch items must be OperationalEvent instances")
+            if event.run_id != self.run_id:
+                raise ValueError("event run_id does not match this stream writer")
+            encoded = self._encode_event(event)
+            if len(encoded_batch) + len(encoded) > self._max_stream_bytes:
+                raise ValueError("operational event batch exceeds the configured size limit")
+            encoded_batch.extend(encoded)
+        self._append_encoded_batch(encoded_batch)
+
+    @staticmethod
+    def _encode_event(event: OperationalEvent) -> bytes:
         encoded = (
             json.dumps(
                 event.as_dict(),
@@ -384,20 +492,34 @@ class EventStream:
             raise ValueError("operational event exceeds the compact writer size limit")
         if len(encoded) > _MAX_EVENT_BYTES:
             raise ValueError("operational event exceeds the bounded line size")
+        return encoded
+
+    def _append_encoded_batch(self, encoded_batch: bytearray) -> None:
+        if not encoded_batch:
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with exclusive_path_lock(self.path, timeout_seconds=self._lock_timeout_seconds):
             descriptor = self._open_for_append()
             try:
                 current = os.fstat(descriptor)
-                if current.st_size + len(encoded) > self._max_stream_bytes:
+                original_size = current.st_size
+                if original_size + len(encoded_batch) > self._max_stream_bytes:
                     raise ValueError("operational event stream reached its configured size limit")
-                remaining = memoryview(encoded)
-                while remaining:
-                    written = os.write(descriptor, remaining)
-                    if written <= 0:
-                        raise OSError("operational event append made no progress")
-                    remaining = remaining[written:]
-                os.fsync(descriptor)
+                try:
+                    remaining = memoryview(encoded_batch)
+                    while remaining:
+                        written = os.write(descriptor, remaining)
+                        if written <= 0:
+                            raise OSError("operational event append made no progress")
+                        remaining = remaining[written:]
+                    os.fsync(descriptor)
+                except Exception:
+                    try:
+                        os.ftruncate(descriptor, original_size)
+                        os.fsync(descriptor)
+                    except OSError:
+                        self._validated_state = None
+                    raise
                 current = os.fstat(descriptor)
                 self._validated_state = (
                     current.st_dev,

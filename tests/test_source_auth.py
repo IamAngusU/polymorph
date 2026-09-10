@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -18,7 +19,7 @@ from polymorph.errors import IntegrityError, PolicyViolation, ProtocolError
 from polymorph.models.mapping import MappingPlan, MappingRule
 from polymorph.models.schema import FieldDescriptor, SchemaDescriptor
 from polymorph.relay import RelayPolicy, RouteBinding, SealedRelayQueue
-from polymorph.signing import SigningKeyPair, SourceTrustStore, TrustedSourceKey
+from polymorph.signing import SigningKeyPair, SourceKeyState, SourceTrustStore, TrustedSourceKey
 
 
 def _plan() -> tuple[SchemaDescriptor, SchemaDescriptor, MappingPlan]:
@@ -150,6 +151,80 @@ def test_revoked_source_key_is_rejected_at_relay_and_destination(tmp_path) -> No
             recipient.private_key,
             source_trust_store=trust,
         ).open_record(record)
+
+
+def test_source_trust_verification_session_fences_hard_revocation() -> None:
+    recipient = RecipientKeyPair.generate()
+    signer = SigningKeyPair.generate()
+    record = _record(recipient, signer)
+    trust = _trust(signer)
+    assert record.authentication is not None
+    mutation_started = threading.Event()
+    mutation_finished = threading.Event()
+    mutation_errors: list[BaseException] = []
+
+    def revoke() -> None:
+        mutation_started.set()
+        try:
+            trust.revoke(record.authentication.key_id)
+        except BaseException as exc:
+            mutation_errors.append(exc)
+        finally:
+            mutation_finished.set()
+
+    with trust.verification_session() as verification:
+        verification.verify_record(record)
+        mutation = threading.Thread(target=revoke)
+        mutation.start()
+        assert mutation_started.wait(timeout=2)
+        assert not mutation_finished.wait(timeout=0.2)
+
+    mutation.join(timeout=2)
+    assert not mutation.is_alive()
+    assert mutation_errors == []
+    assert mutation_finished.is_set()
+    with pytest.raises(IntegrityError, match="revoked"):
+        trust.verify_record(record)
+    with pytest.raises(RuntimeError, match="session is closed"):
+        verification.verify_record(record)
+
+
+def test_source_trust_verification_session_fences_rotation_replacement() -> None:
+    recipient = RecipientKeyPair.generate()
+    old_signer = SigningKeyPair.generate()
+    new_signer = SigningKeyPair.generate()
+    old_record = _record(recipient, old_signer)
+    trust = _trust(old_signer)
+    assert old_record.authentication is not None
+    replacement = TrustedSourceKey(new_signer.public_bytes(), "tenant-1", "source-1")
+    mutation_started = threading.Event()
+    mutation_finished = threading.Event()
+    mutation_errors: list[BaseException] = []
+
+    def rotate() -> None:
+        mutation_started.set()
+        try:
+            trust.rotate(old_record.authentication.key_id, replacement)
+        except BaseException as exc:
+            mutation_errors.append(exc)
+        finally:
+            mutation_finished.set()
+
+    with trust.verification_session() as verification:
+        verification.verify_record(old_record)
+        mutation = threading.Thread(target=rotate)
+        mutation.start()
+        assert mutation_started.wait(timeout=2)
+        assert not mutation_finished.wait(timeout=0.2)
+
+    mutation.join(timeout=2)
+    assert not mutation.is_alive()
+    assert mutation_errors == []
+    assert mutation_finished.is_set()
+    old_key = trust.get(old_record.authentication.key_id)
+    assert old_key is not None
+    assert old_key.state is SourceKeyState.VERIFY_ONLY
+    assert trust.get(replacement.key_id) == replacement
 
 
 def test_relay_rechecks_revocation_when_leasing_a_queued_record(tmp_path) -> None:

@@ -95,6 +95,40 @@ class TransferContext:
         if current > _utc(self.expires_at):
             raise TransferExpired("authenticated transfer has expired")
 
+    def validate_new_metadata(self) -> None:
+        """Validate metadata for a newly sealed record.
+
+        Wire decoding deliberately stays more permissive so records issued before these
+        bounds were introduced can still drain after an upgrade. Issuance APIs call this
+        method before creating new ciphertext or signatures.
+        """
+
+        required = (
+            ("tenant", self.tenant, 128),
+            ("source connector", self.source_connector, 128),
+            ("destination connector", self.destination_connector, 128),
+            ("field id", self.field_id, 256),
+            ("schema version", self.schema_version, 128),
+            ("record id", self.record_id, 256),
+            ("transfer id", self.transfer_id, 256),
+        )
+        for label, value, maximum in required:
+            if (
+                not isinstance(value, str)
+                or not value.strip()
+                or len(value) > maximum
+                or not value.isprintable()
+            ):
+                raise ProtocolError(f"new transfer {label} must be bounded printable metadata")
+
+        if self.plan_id and (len(self.plan_id) > 256 or not self.plan_id.isprintable()):
+            raise ProtocolError("new transfer plan id must be bounded printable metadata")
+        if self.plan_digest and (
+            len(self.plan_digest) != 64
+            or any(char not in "0123456789abcdef" for char in self.plan_digest)
+        ):
+            raise ProtocolError("new transfer plan digest must be a lowercase SHA-256 digest")
+
     def to_wire(self) -> dict[str, object]:
         return self.aad_payload()
 
@@ -228,7 +262,7 @@ class OpaqueEnvelope:
         )
 
 
-def _derive_key(shared_secret: bytes, context: TransferContext) -> bytes:
+def _derive_key(shared_secret: bytes, context: TransferContext, aad: bytes) -> bytes:
     if context.protocol_version not in {2, 3}:
         raise ProtocolError("unsupported opaque-envelope protocol version")
     version = str(context.protocol_version).encode("ascii")
@@ -236,7 +270,7 @@ def _derive_key(shared_secret: bytes, context: TransferContext) -> bytes:
         algorithm=hashes.SHA256(),
         length=32,
         salt=None,
-        info=_PROTOCOL_NAMESPACE + b"/v" + version + b"\x00" + context.aad(),
+        info=_PROTOCOL_NAMESPACE + b"/v" + version + b"\x00" + aad,
     ).derive(shared_secret)
 
 
@@ -245,13 +279,23 @@ def seal_for_recipient(
     recipient_public_key: bytes,
     context: TransferContext,
 ) -> OpaqueEnvelope:
+    context.validate_new_metadata()
     context.validate_time()
+    raw_recipient = bytes(recipient_public_key)
+    if len(raw_recipient) != 32:
+        raise ProtocolError("recipient X25519 public key must be 32 bytes")
     ephemeral_private = X25519PrivateKey.generate()
-    recipient_public = validate_recipient_public_key(recipient_public_key)
-    shared = ephemeral_private.exchange(recipient_public)
-    key = _derive_key(shared, context)
+    try:
+        recipient_public = X25519PublicKey.from_public_bytes(raw_recipient)
+        # The real exchange is also the low-order-point check. Running a separate
+        # fixed-key probe here would perform the same X25519 work twice per field.
+        shared = ephemeral_private.exchange(recipient_public)
+    except ValueError as exc:
+        raise ProtocolError("recipient X25519 public key is unusable or low-order") from exc
+    aad = context.aad()
+    key = _derive_key(shared, context, aad)
     nonce = os.urandom(12)
-    ciphertext = ChaCha20Poly1305(key).encrypt(nonce, plaintext, context.aad())
+    ciphertext = ChaCha20Poly1305(key).encrypt(nonce, plaintext, aad)
     ephemeral_public = ephemeral_private.public_key().public_bytes(
         encoding=serialization.Encoding.Raw,
         format=serialization.PublicFormat.Raw,
@@ -268,7 +312,8 @@ def open_envelope(
     try:
         ephemeral_public = X25519PublicKey.from_public_bytes(envelope.ephemeral_public_key)
         shared = recipient_private_key.exchange(ephemeral_public)
-        key = _derive_key(shared, context)
-        return ChaCha20Poly1305(key).decrypt(envelope.nonce, envelope.ciphertext, context.aad())
+        aad = context.aad()
+        key = _derive_key(shared, context, aad)
+        return ChaCha20Poly1305(key).decrypt(envelope.nonce, envelope.ciphertext, aad)
     except (InvalidTag, ValueError, TypeError) as exc:
         raise IntegrityError("opaque envelope authentication failed") from exc

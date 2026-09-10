@@ -9,10 +9,13 @@ batch, stage-summary and destination-runtime outcomes with opaque run and correl
 names, statuses and reasons are bounded machine-readable codes. Arbitrary detail dictionaries and
 exception messages are not accepted.
 
-Lifecycle events must carry a record count, batch completions must carry a positive batch count,
-and every delivery outcome counts exactly one record. Stage summaries require both a count and a
-duration. A passed run is healthy only when requested, completed, successful-delivery and summed
-batch counts agree. Missing counters fail closed instead of quietly weakening the check.
+Lifecycle events must carry a record count, workflow batch completions must carry a positive batch
+count, and every per-record delivery outcome counts exactly one record. Atomic destination writes
+also emit one `delivery_batch` event with the number of involved records and a correlation ID
+derived from the durable batch-attempt ID. It is diagnostic evidence and is deliberately excluded
+from the per-record success total. Stage summaries require both a count and a duration. A passed
+run is healthy only when requested, completed, successful-delivery and summed workflow-batch
+counts agree. Missing counters fail closed instead of quietly weakening the check.
 
 Cooperating thread and process writers use the same path lock. Each complete JSON line is flushed
 to disk before the append returns. A writer validates existing lines on first use and again after a
@@ -45,9 +48,17 @@ statuses. It requires a run ID and streams counters while retaining the stream's
 for exact duplicate detection. Memory for this check therefore grows with the number of events in
 the file. This is a fail-closed local health gate for CI, schedulers and monitoring wrappers. It does
 not send notifications itself.
-Destination receipts expose `operational_event_status` as `disabled`, `recorded` or
+Per-record delivery events from one atomic attempt are encoded and appended under one path lock
+with one successful fsync. A partial operating-system write is truncated back to the previous
+validated stream size before the append reports failure. Destination receipts expose
+`operational_event_status` as `disabled`, `recorded` or
 `append_failed`. A diagnostic write failure never converts a committed destination write into a
 retry.
+
+The JSON field schema remains version 1, but v0.4 adds `delivery_batch` to the allowed contract
+vocabulary. A v0.3 `events check` reader is not forward-compatible with that event type and will
+report a new healthy stream as contract-invalid. During a rolling upgrade, deploy the v0.4 reader
+before enabling batch writers. Current readers continue to parse and validate older v1 streams.
 
 This event file is not signed or hash-chained. It can explain local operation, but it is not
 evidence against an administrator editing or deleting history. Use the delivery audit below when
@@ -56,9 +67,10 @@ tamper evidence matters.
 ## Delivery audit
 
 `AuditLog` is an optional hash-chained stream of final destination receipts. Normal delivery,
-replay and force replay have distinct event types. The event shape is fixed and bounded, but its
-tenant, connector and record identifiers are still sensitive metadata and need retention and file
-access controls.
+replay and force replay have distinct event types. Records from an atomic attempt include its
+random batch-attempt ID and are appended in one SQLite transaction while preserving one signed
+hash-chain link per record. The event shape is fixed and bounded, but its tenant, connector and
+record identifiers are still sensitive metadata and need retention and file access controls.
 
 ```bash
 polymorph audit verify ./audit.sqlite

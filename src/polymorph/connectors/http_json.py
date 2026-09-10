@@ -19,6 +19,10 @@ from .base import ConnectorCapabilities, DeliveryContext
 from .inference import merge_types, runtime_type
 
 _HTTP_TOKEN = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+# Bump this semantic version if the delivery key, request granularity or acknowledgement
+# contract changes. The endpoint's explicit opt-in remains the assertion that its server honors
+# this exact one-record idempotency protocol.
+_HTTP_IDEMPOTENCY_CONTRACT_ID = "polymorph.http-json.single-record-delivery-key/v1"
 _RESERVED_IDEMPOTENCY_HEADERS = frozenset(
     {
         "authorization",
@@ -80,11 +84,15 @@ class HttpJsonConnector:
         self._secret_provider = secret_provider
         self._timeout = timeout
         self._transport = transport
+        supports_idempotency = bool(
+            endpoint.idempotency_header is not None and endpoint.idempotency_contract
+        )
         self.capabilities = ConnectorCapabilities(
             read_schema=True,
             write_records=True,
-            supports_idempotency=(
-                endpoint.idempotency_header is not None and endpoint.idempotency_contract
+            supports_idempotency=supports_idempotency,
+            idempotency_contract_id=(
+                _HTTP_IDEMPOTENCY_CONTRACT_ID if supports_idempotency else None
             ),
         )
         self._url = _validated_url(endpoint.base_url, endpoint.path)

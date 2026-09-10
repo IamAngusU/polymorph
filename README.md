@@ -43,6 +43,9 @@ Stable protocol and persisted-state namespaces are intentionally decoupled from 
   acknowledgement.
 - Ciphertext-only relay queue with fenced leases, durable idempotency ledger, sealed quarantine
   and explicit unknown-write-outcome handling.
+- Capability-gated atomic destination batches keep the same per-record authentication, ledger,
+  audit and replay evidence while collapsing safe SQLite and PostgreSQL writes into one
+  transaction. Count and sealed-wire budgets bound every internal batch.
 - Destination runtime pinned to one exact plan and target contract, with final field, required,
   nullability and type checks before a connector write.
 - CSV exports reject spreadsheet formula-like values by default. HTTP redirects never count as a

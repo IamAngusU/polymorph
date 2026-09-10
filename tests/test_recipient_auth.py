@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+import polymorph.agents as agents_module
 import polymorph.recipient_auth as recipient_auth
 from polymorph.agents import (
     BlindDestinationAgent,
@@ -556,6 +557,349 @@ def test_live_source_switches_only_after_valid_rotation() -> None:
             first_recipient.private_key,
             source_trust_store=source_trust,
         ).open_record(second_record)
+
+
+def test_destination_caches_key_ids_without_hiding_key_configuration_changes(
+    monkeypatch,
+) -> None:
+    identity = SigningKeyPair.generate()
+    first_recipient = RecipientKeyPair.generate()
+    second_recipient = RecipientKeyPair.generate()
+    first = _certificate(identity, first_recipient)
+    store = _store(identity)
+    store.accept(first, now=NOW)
+    source_signer = SigningKeyPair.generate()
+    source, _, source_trust = _secure_agent(store, source_signer)
+    first_record = source.prepare_record({"value": "first"}, record_id="row-1")
+    second = _certificate(
+        identity,
+        second_recipient,
+        generation=2,
+        previous_key_id=first.key_id,
+    )
+    store.accept(second, now=NOW)
+    second_record = source.prepare_record({"value": "second"}, record_id="row-2")
+    destination = BlindDestinationAgent(
+        second_recipient.private_key,
+        additional_private_keys=(first_recipient.private_key,),
+        source_trust_store=source_trust,
+    )
+    real_key_id = agents_module.recipient_key_id
+    key_id_calls = 0
+
+    def tracked_key_id(public_key: bytes) -> str:
+        nonlocal key_id_calls
+        key_id_calls += 1
+        return real_key_id(public_key)
+
+    monkeypatch.setattr(agents_module, "recipient_key_id", tracked_key_id)
+    assert destination.open_record(first_record) == {"value": "first"}
+    assert destination.open_record(second_record) == {"value": "second"}
+    assert destination.open_record(first_record) == {"value": "first"}
+    assert key_id_calls == 2
+
+    destination.private_key = first_recipient.private_key
+    destination.additional_private_keys = (second_recipient.private_key,)
+    assert destination.open_record(second_record) == {"value": "second"}
+    assert key_id_calls == 4
+
+
+def test_destination_cached_key_ids_preserve_duplicate_key_ambiguity() -> None:
+    identity = SigningKeyPair.generate()
+    recipient = RecipientKeyPair.generate()
+    store = _store(identity)
+    store.accept(_certificate(identity, recipient), now=NOW)
+    source, _, source_trust = _secure_agent(store, SigningKeyPair.generate())
+    record = source.prepare_record({"value": "value"}, record_id="row-1")
+    destination = BlindDestinationAgent(
+        recipient.private_key,
+        additional_private_keys=(recipient.private_key,),
+        source_trust_store=source_trust,
+    )
+
+    with pytest.raises(IntegrityError, match="unavailable recipient key"):
+        destination.open_record(record)
+
+
+def test_source_batch_rejects_cross_process_recipient_rotation_without_mixing_keys(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    state = tmp_path / "recipient-trust.json"
+    identity = SigningKeyPair.generate()
+    first_recipient = RecipientKeyPair.generate()
+    second_recipient = RecipientKeyPair.generate()
+    first = _certificate(identity, first_recipient)
+    writer = _store(identity, state_path=state)
+    writer.accept(first, now=NOW)
+    reader = _store(identity, state_path=state)
+    source_signer = SigningKeyPair.generate()
+    agent, _, _ = _secure_agent(reader, source_signer)
+    second = _certificate(
+        identity,
+        second_recipient,
+        generation=2,
+        previous_key_id=first.key_id,
+    )
+    original_prepare = BlindSourceAgent._prepare_authorized_record
+    sealed_key_ids: list[str] = []
+
+    def prepare_then_rotate(source_agent, record, **kwargs):
+        sealed_key_ids.append(kwargs["destination_key_id"])
+        sealed = original_prepare(source_agent, record, **kwargs)
+        if kwargs["record_id"] == "row-1":
+            writer.accept(second, now=NOW)
+        return sealed
+
+    monkeypatch.setattr(BlindSourceAgent, "_prepare_authorized_record", prepare_then_rotate)
+    with pytest.raises(IntegrityError, match="trust head changed during source batch"):
+        agent.prepare_records(
+            ({"value": "first"}, {"value": "second"}),
+            record_ids=("row-1", "row-2"),
+            transfer_id="transfer-1",
+        )
+
+    assert sealed_key_ids == [first.key_id, first.key_id]
+    assert reader.current() == second
+
+
+def test_source_batch_rejects_in_memory_recipient_rotation_without_mixing_keys(
+    monkeypatch,
+) -> None:
+    identity = SigningKeyPair.generate()
+    first_recipient = RecipientKeyPair.generate()
+    first = _certificate(identity, first_recipient)
+    store = _store(identity)
+    store.accept(first, now=NOW)
+    agent, _, _ = _secure_agent(store, SigningKeyPair.generate())
+    second = _certificate(
+        identity,
+        RecipientKeyPair.generate(),
+        generation=2,
+        previous_key_id=first.key_id,
+    )
+    original_prepare = BlindSourceAgent._prepare_authorized_record
+    sealed_key_ids: list[str] = []
+
+    def prepare_then_rotate(source_agent, record, **kwargs):
+        sealed_key_ids.append(kwargs["destination_key_id"])
+        sealed = original_prepare(source_agent, record, **kwargs)
+        if kwargs["record_id"] == "row-1":
+            store.accept(second, now=NOW)
+        return sealed
+
+    monkeypatch.setattr(BlindSourceAgent, "_prepare_authorized_record", prepare_then_rotate)
+    with pytest.raises(IntegrityError, match="trust head changed during source batch"):
+        agent.prepare_records(
+            ({"value": "first"}, {"value": "second"}),
+            record_ids=("row-1", "row-2"),
+            transfer_id="transfer-1",
+        )
+
+    assert sealed_key_ids == [first.key_id, first.key_id]
+    assert store.current(now=NOW) == second
+
+
+def test_source_batch_rejects_rotation_while_consuming_record_generator(
+    monkeypatch,
+) -> None:
+    identity = SigningKeyPair.generate()
+    first = _certificate(identity, RecipientKeyPair.generate())
+    store = _store(identity)
+    store.accept(first, now=NOW)
+    agent, _, _ = _secure_agent(store, SigningKeyPair.generate())
+    second = _certificate(
+        identity,
+        RecipientKeyPair.generate(),
+        generation=2,
+        previous_key_id=first.key_id,
+    )
+    original_prepare = BlindSourceAgent._prepare_authorized_record
+    sealed_key_ids: list[str] = []
+    records_consumed = 0
+
+    def track_prepare(source_agent, record, **kwargs):
+        sealed_key_ids.append(kwargs["destination_key_id"])
+        return original_prepare(source_agent, record, **kwargs)
+
+    def records():
+        nonlocal records_consumed
+        records_consumed += 1
+        yield {"value": "first"}
+        store.accept(second, now=NOW)
+        records_consumed += 1
+        yield {"value": "second"}
+
+    monkeypatch.setattr(BlindSourceAgent, "_prepare_authorized_record", track_prepare)
+    with pytest.raises(IntegrityError, match="trust head changed during source batch"):
+        agent.prepare_records(
+            records(),
+            record_ids=("row-1", "row-2"),
+            transfer_id="transfer-1",
+        )
+
+    assert records_consumed == 2
+    assert sealed_key_ids == [first.key_id, first.key_id]
+
+
+def test_source_batch_rejects_persisted_head_replacement_even_when_content_matches(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    state = tmp_path / "recipient-trust.json"
+    replacement = tmp_path / "replacement.json"
+    identity = SigningKeyPair.generate()
+    certificate = _certificate(identity, RecipientKeyPair.generate())
+    store = _store(identity, state_path=state)
+    store.accept(certificate, now=NOW)
+    agent, _, _ = _secure_agent(store, SigningKeyPair.generate())
+    original_prepare = BlindSourceAgent._prepare_authorized_record
+
+    def prepare_then_replace(source_agent, record, **kwargs):
+        sealed = original_prepare(source_agent, record, **kwargs)
+        if kwargs["record_id"] == "row-1":
+            replacement.write_bytes(state.read_bytes())
+            os.replace(replacement, state)
+        return sealed
+
+    monkeypatch.setattr(BlindSourceAgent, "_prepare_authorized_record", prepare_then_replace)
+    with pytest.raises(IntegrityError, match="trust head changed during source batch"):
+        agent.prepare_records(
+            ({"value": "first"}, {"value": "second"}),
+            record_ids=("row-1", "row-2"),
+        )
+
+
+def test_source_batch_checks_stable_persisted_head_only_at_batch_boundaries(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    state = tmp_path / "recipient-trust.json"
+    identity = SigningKeyPair.generate()
+    store = _store(identity, state_path=state)
+    store.accept(_certificate(identity, RecipientKeyPair.generate()), now=NOW)
+    agent, _, _ = _secure_agent(store, SigningKeyPair.generate())
+    real_lock = recipient_auth.exclusive_path_lock
+    lock_calls = 0
+
+    def tracked_lock(*args, **kwargs):
+        nonlocal lock_calls
+        lock_calls += 1
+        return real_lock(*args, **kwargs)
+
+    monkeypatch.setattr(recipient_auth, "exclusive_path_lock", tracked_lock)
+    records = agent.prepare_records(
+        ({"value": "one"}, {"value": "two"}, {"value": "three"}),
+        record_ids=("row-1", "row-2", "row-3"),
+    )
+
+    assert len(records) == 3
+    assert lock_calls == 2
+
+
+def test_source_batch_checks_recipient_expiry_for_each_record(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    state = tmp_path / "recipient-trust.json"
+    identity = SigningKeyPair.generate()
+    recipient = RecipientKeyPair.generate()
+    first_issuance = datetime.now(UTC)
+    expiry = first_issuance + timedelta(minutes=1)
+    certificate = _certificate(
+        identity,
+        recipient,
+        issued_at=first_issuance - timedelta(minutes=1),
+        not_before=first_issuance - timedelta(minutes=1),
+        not_after=expiry,
+    )
+    store = _store(identity, state_path=state)
+    store.accept(certificate, now=first_issuance)
+    agent, _, _ = _secure_agent(store, SigningKeyPair.generate())
+    moments = iter((first_issuance, expiry + timedelta(microseconds=1)))
+
+    class BatchClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is UTC
+            return next(moments)
+
+    monkeypatch.setattr(agents_module, "datetime", BatchClock)
+    with pytest.raises(IntegrityError, match="expired"):
+        agent.prepare_records(
+            ({"value": "before"}, {"value": "after"}),
+            record_ids=("row-1", "row-2"),
+        )
+
+
+def test_raw_key_batch_assigns_a_fresh_issuance_time_per_record(monkeypatch) -> None:
+    source, target, plan = _route()
+    recipient = RecipientKeyPair.generate()
+    agent = BlindSourceAgent(
+        tenant="tenant-1",
+        source_connector_id=source.id,
+        destination_connector_id="destination-1",
+        source_schema=source,
+        target_schema=target,
+        plan=plan,
+        destination_public_key=recipient.public_bytes(),
+        signing_key=SigningKeyPair.generate(),
+        allow_unauthenticated_recipient_key=True,
+    )
+    moments = tuple(NOW + timedelta(microseconds=index) for index in range(3))
+    remaining = iter(moments)
+
+    class BatchClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is UTC
+            return next(remaining)
+
+    monkeypatch.setattr(agents_module, "datetime", BatchClock)
+    records = agent.prepare_records(
+        tuple({"value": str(index)} for index in range(3)),
+        record_ids=("row-1", "row-2", "row-3"),
+    )
+
+    assert tuple(record.fields[0].context.issued_at for record in records) == moments
+    assert {record.fields[0].context.recipient_key_id for record in records} == {
+        recipient_key_id(recipient.public_bytes())
+    }
+
+
+def test_current_reuses_verified_snapshot_but_still_checks_time(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    state = tmp_path / "recipient-trust.json"
+    identity = SigningKeyPair.generate()
+    certificate = _certificate(identity, RecipientKeyPair.generate())
+    store = _store(identity, state_path=state)
+    store.accept(certificate, now=NOW)
+
+    def unexpected_reload():
+        raise AssertionError("unchanged persisted state was reloaded")
+
+    monkeypatch.setattr(store, "_read_state", unexpected_reload)
+    assert store.current(now=NOW) == certificate
+    with pytest.raises(IntegrityError, match="expired"):
+        store.current(now=certificate.not_after + timedelta(microseconds=1))
+
+
+def test_live_cached_store_reloads_changed_persisted_state(tmp_path) -> None:
+    state = tmp_path / "recipient-trust.json"
+    identity = SigningKeyPair.generate()
+    first = _certificate(identity, RecipientKeyPair.generate())
+    store = _store(identity, state_path=state)
+    store.accept(first, now=NOW)
+    assert store.current(now=NOW) == first
+
+    payload = json.loads(state.read_text(encoding="utf-8"))
+    payload["current_certificate"]["tenant"] = "attacker"
+    state.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(IntegrityError, match="route binding"):
+        store.current(now=NOW)
 
 
 def test_certificate_wire_is_strict_and_key_id_is_derived() -> None:

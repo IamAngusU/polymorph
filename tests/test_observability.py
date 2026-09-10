@@ -10,12 +10,30 @@ from pathlib import Path
 import pytest
 
 from polymorph.errors import IntegrityError
-from polymorph.observability import MAX_COMPACT_EVENT_BYTES, EventStream, OperationalEvent
+from polymorph.observability import (
+    MAX_COMPACT_EVENT_BYTES,
+    MAX_EVENT_BATCH_EVENTS,
+    EventStream,
+    OperationalEvent,
+)
 from polymorph.workflow_benchmark import run_workflow_benchmark
 
 _RUN_A = "01" * 16
 _RUN_B = "02" * 16
 _NOW = datetime(2026, 9, 10, 12, 30, tzinfo=UTC)
+
+
+def _batch_event(event_id: str, *, run_id: str = _RUN_A) -> OperationalEvent:
+    return OperationalEvent(
+        event_id=event_id,
+        run_id=run_id,
+        correlation_id=event_id,
+        timestamp=_NOW,
+        component="worker",
+        event_type="record_observed",
+        status="passed",
+        item_count=1,
+    )
 
 
 def test_event_stream_round_trip_is_bounded_and_payload_free(tmp_path: Path) -> None:
@@ -379,6 +397,19 @@ def test_unknown_workflow_stage_component_invalidates_event_contract(tmp_path: P
     assert stream.summary(run_id=_RUN_A).event_contract_valid is False
 
 
+def test_duplicate_delivery_batch_is_not_a_valid_runtime_event(tmp_path: Path) -> None:
+    stream = EventStream(tmp_path / "events.jsonl", run_id=_RUN_A, clock=lambda: _NOW)
+    stream.emit(
+        component="destination_runtime",
+        event_type="delivery_batch",
+        status="duplicate",
+        correlation_id=stream.correlation_id("delivery-batch:historical"),
+        item_count=2,
+    )
+
+    assert stream.summary(run_id=_RUN_A).event_contract_valid is False
+
+
 def test_workflow_reports_a_delivery_event_gap_without_retrying_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -443,3 +474,189 @@ def test_workflow_detects_silent_destination_event_loss(
     assert report.observability["workflow_counts_valid"] is False
     assert report.observability["run_closed"] is False
     assert resources.result_count == 1
+
+
+def test_event_batch_uses_one_fsync_and_preserves_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "events.jsonl"
+    stream = EventStream(path, run_id=_RUN_A, clock=lambda: _NOW)
+    first = stream.emit(component="worker", event_type="record_observed", status="passed")
+    fsync_calls = 0
+    real_fsync = os.fsync
+
+    def counted_fsync(descriptor: int) -> None:
+        nonlocal fsync_calls
+        fsync_calls += 1
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", counted_fsync)
+    batch = tuple(_batch_event(f"{index:032x}") for index in range(1, 5))
+
+    stream.append_many(batch)
+
+    assert fsync_calls == 1
+    assert stream.read() == (first, *batch)
+
+
+def test_event_batch_validation_is_all_or_none(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    stream = EventStream(path, run_id=_RUN_A, clock=lambda: _NOW)
+    stream.append(_batch_event("10" * 16))
+    committed = path.read_bytes()
+
+    with pytest.raises(ValueError, match="run_id"):
+        stream.append_many(
+            (
+                _batch_event("11" * 16),
+                _batch_event("12" * 16, run_id=_RUN_B),
+                _batch_event("13" * 16),
+            )
+        )
+
+    assert path.read_bytes() == committed
+
+
+def test_event_batch_size_failure_does_not_append_a_prefix(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    stream = EventStream(path, run_id=_RUN_A, max_stream_bytes=4096)
+    stream.append(_batch_event("20" * 16))
+    committed = path.read_bytes()
+
+    with pytest.raises(ValueError, match="configured size limit"):
+        stream.append_many(_batch_event(f"{index + 100:032x}") for index in range(20))
+
+    assert path.read_bytes() == committed
+
+
+def test_event_batch_size_limit_stops_the_input_before_a_suffix(tmp_path: Path) -> None:
+    path = tmp_path / "streaming-events.jsonl"
+    stream = EventStream(path, run_id=_RUN_A, max_stream_bytes=4096)
+    consumed = 0
+
+    def events():
+        nonlocal consumed
+        for index in range(100):
+            consumed += 1
+            yield _batch_event(f"{index + 100:032x}")
+
+    with pytest.raises(ValueError, match="batch exceeds the configured size limit"):
+        stream.append_many(events())
+
+    assert 1 < consumed < 100
+    assert not path.exists()
+
+
+def test_event_stream_accepts_exact_byte_limit_and_rejects_the_next_event(
+    tmp_path: Path,
+) -> None:
+    batch = tuple(_batch_event(f"{index + 1000:032x}") for index in range(13))
+    probe_path = tmp_path / "probe-events.jsonl"
+    EventStream(probe_path, run_id=_RUN_A).append_many(batch)
+    exact_size = probe_path.stat().st_size
+    assert exact_size >= 4096
+
+    path = tmp_path / "events.jsonl"
+    stream = EventStream(path, run_id=_RUN_A, max_stream_bytes=exact_size)
+    stream.append_many(batch)
+    committed = path.read_bytes()
+
+    assert len(committed) == exact_size
+    with pytest.raises(ValueError, match="configured size limit"):
+        stream.append(_batch_event("99" * 16))
+    assert path.read_bytes() == committed
+
+
+def test_event_batch_write_failure_restores_the_previous_complete_stream(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "events.jsonl"
+    stream = EventStream(path, run_id=_RUN_A)
+    first = _batch_event("30" * 16)
+    stream.append(first)
+    committed = path.read_bytes()
+    real_write = os.write
+    write_calls = 0
+
+    def fail_after_partial_write(descriptor: int, data: bytes | memoryview) -> int:
+        nonlocal write_calls
+        write_calls += 1
+        if write_calls == 1:
+            partial = bytes(data[: max(1, len(data) // 2)])
+            return real_write(descriptor, partial)
+        raise OSError("simulated batch write failure")
+
+    monkeypatch.setattr(os, "write", fail_after_partial_write)
+
+    with pytest.raises(OSError, match="simulated batch write failure"):
+        stream.append_many((_batch_event("31" * 16), _batch_event("32" * 16)))
+
+    assert path.read_bytes() == committed
+    assert stream.read() == (first,)
+
+
+def test_emit_many_builds_one_ordered_batch(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    stream = EventStream(path, run_id=_RUN_A, clock=lambda: _NOW)
+    correlations = ("41" * 16, "42" * 16, "43" * 16)
+
+    emitted = stream.emit_many(
+        {
+            "component": "worker",
+            "event_type": "record_observed",
+            "status": "passed",
+            "correlation_id": correlation_id,
+            "item_count": 1,
+        }
+        for correlation_id in correlations
+    )
+
+    assert tuple(event.correlation_id for event in emitted) == correlations
+    assert tuple(event.timestamp for event in emitted) == (_NOW, _NOW, _NOW)
+    assert stream.read() == emitted
+
+
+def test_emit_many_size_limit_stops_specifications_before_a_suffix(tmp_path: Path) -> None:
+    path = tmp_path / "streaming-emitted-events.jsonl"
+    stream = EventStream(path, run_id=_RUN_A, clock=lambda: _NOW, max_stream_bytes=4096)
+    consumed = 0
+
+    def specifications():
+        nonlocal consumed
+        for index in range(100):
+            consumed += 1
+            yield {
+                "component": "worker",
+                "event_type": "record_observed",
+                "status": "passed",
+                "correlation_id": f"{index + 200:032x}",
+                "item_count": 1,
+            }
+
+    with pytest.raises(ValueError, match="batch exceeds the configured size limit"):
+        stream.emit_many(specifications())
+
+    assert 1 < consumed < 100
+    assert not path.exists()
+
+
+def test_event_batch_count_is_bounded_before_file_creation(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    stream = EventStream(path, run_id=_RUN_A)
+    event = _batch_event("50" * 16)
+
+    with pytest.raises(ValueError, match="event count limit"):
+        stream.append_many(event for _ in range(MAX_EVENT_BATCH_EVENTS + 1))
+
+    assert not path.exists()
+
+
+def test_empty_event_batches_are_noops(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    stream = EventStream(path, run_id=_RUN_A)
+
+    assert stream.emit_many(()) == ()
+    stream.append_many(())
+    assert not path.exists()

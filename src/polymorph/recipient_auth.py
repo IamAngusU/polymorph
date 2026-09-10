@@ -7,7 +7,7 @@ import json
 import os
 import stat
 import threading
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -25,6 +25,7 @@ _MAX_BINDING_BYTES = 256
 _MAX_GENERATION = (1 << 63) - 1
 _MAX_USED_KEY_IDS = 512
 _X25519_FIELD_PRIME = (1 << 255) - 19
+_StateFingerprint = tuple[int, int, int, int, int]
 
 
 def _utc(value: datetime, label: str) -> datetime:
@@ -110,6 +111,18 @@ def _is_reparse_point(metadata: os.stat_result) -> bool:
     return bool(int(getattr(metadata, "st_file_attributes", 0)) & flag)
 
 
+def _file_fingerprint(metadata: os.stat_result) -> _StateFingerprint:
+    """Identify one published trust-state file without reading its verified contents again."""
+
+    return (
+        int(metadata.st_dev),
+        int(metadata.st_ino),
+        int(metadata.st_size),
+        int(metadata.st_mtime_ns),
+        int(metadata.st_ctime_ns),
+    )
+
+
 def _reject_linked_path_components(path: Path, *, include_leaf: bool) -> None:
     """Reject lexical symlink/reparse components before resolving a trust-state path."""
 
@@ -163,6 +176,7 @@ class RecipientKeyCertificate:
     identity_key_id: str
     signature: bytes
     algorithm: str = "ed25519"
+    _canonical_key_id: str = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tenant", _binding(self.tenant, "tenant"))
@@ -172,8 +186,9 @@ class RecipientKeyCertificate:
             _binding(self.destination_connector, "destination connector"),
         )
         raw_key = bytes(self.public_key)
-        recipient_key_id(raw_key)
+        canonical_key_id = recipient_key_id(raw_key)
         object.__setattr__(self, "public_key", raw_key)
+        object.__setattr__(self, "_canonical_key_id", canonical_key_id)
         if (
             isinstance(self.generation, bool)
             or not isinstance(self.generation, int)
@@ -210,7 +225,7 @@ class RecipientKeyCertificate:
 
     @property
     def key_id(self) -> str:
-        return recipient_key_id(self.public_key)
+        return self._canonical_key_id
 
     def _unsigned_wire(self) -> dict[str, object]:
         return {
@@ -365,6 +380,23 @@ class RecipientKeyCertificate:
         )
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class RecipientKeyBatchAuthorization:
+    """One immutable recipient trust head used by an all-or-none source batch."""
+
+    certificate: RecipientKeyCertificate
+    _store_token: object = field(repr=False, compare=False)
+    _head_revision: int = field(repr=False, compare=False)
+    _state_fingerprint: _StateFingerprint | None = field(repr=False, compare=False)
+
+    def __repr__(self) -> str:
+        return (
+            "RecipientKeyBatchAuthorization("
+            f"generation={self.certificate.generation}, "
+            f"key_id={self.certificate.key_id!r})"
+        )
+
+
 class RecipientKeyTrustStore:
     """Pinned destination identity plus a monotonic recipient-key rotation checkpoint."""
 
@@ -391,10 +423,18 @@ class RecipientKeyTrustStore:
         self._lock = threading.RLock()
         self._current: RecipientKeyCertificate | None = None
         self._used_key_ids: set[str] = set()
+        self._state_fingerprint: _StateFingerprint | None = None
+        self._head_revision = 0
+        self._batch_authorization_token = object()
         if self.state_path is not None:
             _reject_linked_path_components(self.state_path, include_leaf=True)
             if self.state_path.exists():
-                self._current, self._used_key_ids = self._read_state()
+                (
+                    self._current,
+                    self._used_key_ids,
+                    self._state_fingerprint,
+                ) = self._read_state()
+                self._head_revision += 1
 
     def _verify_certificate(
         self,
@@ -416,11 +456,7 @@ class RecipientKeyTrustStore:
             certificate.signature,
         )
         if require_current_validity:
-            current = _utc(now or datetime.now(UTC), "verification time")
-            if current < certificate.not_before:
-                raise IntegrityError("recipient key certificate is not active yet")
-            if current > certificate.not_after:
-                raise IntegrityError("recipient key certificate has expired")
+            self._verify_current_validity(certificate, now=now)
 
     def _state_wire(self, certificate: RecipientKeyCertificate) -> dict[str, object]:
         return {
@@ -434,7 +470,11 @@ class RecipientKeyTrustStore:
         }
 
     @staticmethod
-    def _read_bounded_regular_file(path: Path, *, artifact: str = "trust state") -> bytes:
+    def _read_bounded_regular_file_snapshot(
+        path: Path,
+        *,
+        artifact: str = "trust state",
+    ) -> tuple[bytes, _StateFingerprint]:
         description = f"recipient key {artifact}"
         _reject_linked_path_components(path, include_leaf=True)
         try:
@@ -464,14 +504,35 @@ class RecipientKeyTrustStore:
                 data = handle.read(_MAX_STATE_BYTES + 1)
             if len(data) > _MAX_STATE_BYTES:
                 raise ProtocolError(f"{description} exceeds its size limit")
-            return data
+            return data, _file_fingerprint(opened)
         finally:
             if descriptor >= 0:
                 os.close(descriptor)
 
-    def _read_state(self) -> tuple[RecipientKeyCertificate, set[str]]:
+    @staticmethod
+    def _read_bounded_regular_file(path: Path, *, artifact: str = "trust state") -> bytes:
+        data, _ = RecipientKeyTrustStore._read_bounded_regular_file_snapshot(
+            path,
+            artifact=artifact,
+        )
+        return data
+
+    def _state_path_fingerprint(self) -> _StateFingerprint:
         assert self.state_path is not None
-        raw = self._read_bounded_regular_file(self.state_path)
+        _reject_linked_path_components(self.state_path, include_leaf=True)
+        try:
+            metadata = self.state_path.lstat()
+        except OSError as exc:
+            raise IntegrityError("recipient key trust state is unavailable") from exc
+        if not stat.S_ISREG(metadata.st_mode) or _is_reparse_point(metadata):
+            raise IntegrityError("recipient key trust state is not a regular file")
+        return _file_fingerprint(metadata)
+
+    def _read_state(
+        self,
+    ) -> tuple[RecipientKeyCertificate, set[str], _StateFingerprint]:
+        assert self.state_path is not None
+        raw, fingerprint = self._read_bounded_regular_file_snapshot(self.state_path)
         try:
             payload = json.loads(
                 raw.decode("utf-8-sig"),
@@ -520,7 +581,28 @@ class RecipientKeyTrustStore:
             used_key_ids.add(value)
         if certificate.key_id not in used_key_ids:
             raise IntegrityError("recipient key trust state omits its current key from history")
-        return certificate, used_key_ids
+        return certificate, used_key_ids, fingerprint
+
+    def _reload_state_if_changed(self) -> None:
+        """Refresh a persisted head while callers hold both process-local and path locks."""
+
+        fingerprint = self._state_path_fingerprint()
+        if fingerprint == self._state_fingerprint:
+            return
+        self._current, self._used_key_ids, self._state_fingerprint = self._read_state()
+        self._head_revision += 1
+
+    @staticmethod
+    def _verify_current_validity(
+        certificate: RecipientKeyCertificate,
+        *,
+        now: datetime | None,
+    ) -> None:
+        current = _utc(now or datetime.now(UTC), "verification time")
+        if current < certificate.not_before:
+            raise IntegrityError("recipient key certificate is not active yet")
+        if current > certificate.not_after:
+            raise IntegrityError("recipient key certificate has expired")
 
     def _accept_transition(
         self,
@@ -564,19 +646,23 @@ class RecipientKeyTrustStore:
 
         with self._lock:
             if self.state_path is None:
-                self._accept_transition(certificate, now=now)
+                if self._accept_transition(certificate, now=now):
+                    self._head_revision += 1
                 return certificate
             _reject_linked_path_components(self.state_path, include_leaf=True)
             with exclusive_path_lock(self.state_path):
                 _reject_linked_path_components(self.state_path, include_leaf=True)
                 if self.state_path.exists():
-                    self._current, self._used_key_ids = self._read_state()
+                    self._reload_state_if_changed()
                 elif self._current is not None:
                     raise IntegrityError("recipient key trust state disappeared")
                 previous_current = self._current
                 previous_used_key_ids = set(self._used_key_ids)
                 changed = self._accept_transition(certificate, now=now)
                 if changed:
+                    # A concurrent source batch must fail closed even if publication later
+                    # becomes ambiguous and the last in-memory head is restored.
+                    self._head_revision += 1
                     try:
                         atomic_write_text(
                             self.state_path,
@@ -595,10 +681,12 @@ class RecipientKeyTrustStore:
                         # operation must reload the persisted head before making a decision.
                         self._current = previous_current
                         self._used_key_ids = previous_used_key_ids
+                        self._state_fingerprint = None
                         raise IntegrityError(
                             "recipient key trust-state update outcome is uncertain; "
                             "inspect the persisted head before retrying"
                         ) from exc
+                    self._state_fingerprint = self._state_path_fingerprint()
                 # This also runs for an idempotent accept. A retry after an earlier directory
                 # fsync error can therefore complete durability without rewriting the head.
                 try:
@@ -625,18 +713,73 @@ class RecipientKeyTrustStore:
         """Return the current route key only after signature, binding and time checks."""
 
         with self._lock:
-            if self.state_path is not None:
-                _reject_linked_path_components(self.state_path, include_leaf=True)
-                with exclusive_path_lock(self.state_path):
-                    _reject_linked_path_components(self.state_path, include_leaf=True)
-                    if not self.state_path.exists():
-                        raise IntegrityError("recipient key trust state is not initialized")
-                    self._current, self._used_key_ids = self._read_state()
-            certificate = self._current
-            if certificate is None:
-                raise IntegrityError("recipient key trust store is not initialized")
-            self._verify_certificate(certificate, now=now, require_current_validity=True)
+            certificate = self._refresh_current_locked()
+            self._verify_current_validity(certificate, now=now)
             return certificate
+
+    def _refresh_current_locked(self) -> RecipientKeyCertificate:
+        """Refresh the head while the caller holds the store's process-local lock."""
+
+        if self.state_path is not None:
+            _reject_linked_path_components(self.state_path, include_leaf=True)
+            with exclusive_path_lock(self.state_path):
+                _reject_linked_path_components(self.state_path, include_leaf=True)
+                if not self.state_path.exists():
+                    raise IntegrityError("recipient key trust state is not initialized")
+                self._reload_state_if_changed()
+        certificate = self._current
+        if certificate is None:
+            raise IntegrityError("recipient key trust store is not initialized")
+        return certificate
+
+    def begin_batch_authorization(
+        self,
+        *,
+        tenant: str,
+        destination_connector: str,
+    ) -> RecipientKeyBatchAuthorization:
+        """Snapshot one verified head before an all-or-none in-memory source batch."""
+
+        if tenant != self.tenant or destination_connector != self.destination_connector:
+            raise IntegrityError("recipient key trust store is bound to a different route")
+        with self._lock:
+            certificate = self._refresh_current_locked()
+            return RecipientKeyBatchAuthorization(
+                certificate=certificate,
+                _store_token=self._batch_authorization_token,
+                _head_revision=self._head_revision,
+                _state_fingerprint=self._state_fingerprint,
+            )
+
+    def authorize_batch_record(
+        self,
+        authorization: RecipientKeyBatchAuthorization,
+        *,
+        now: datetime,
+    ) -> RecipientKeyCertificate:
+        """Check the snapshotted certificate's validity for one record issuance time."""
+
+        if authorization._store_token is not self._batch_authorization_token:
+            raise IntegrityError("recipient batch authorization belongs to another trust store")
+        self._verify_current_validity(authorization.certificate, now=now)
+        return authorization.certificate
+
+    def confirm_batch_authorization(
+        self,
+        authorization: RecipientKeyBatchAuthorization,
+    ) -> None:
+        """Fail if rotation, replacement or tampering happened while a batch was sealed."""
+
+        if authorization._store_token is not self._batch_authorization_token:
+            raise IntegrityError("recipient batch authorization belongs to another trust store")
+        with self._lock:
+            certificate = self._refresh_current_locked()
+            if (
+                self._head_revision != authorization._head_revision
+                or self._state_fingerprint != authorization._state_fingerprint
+                or certificate != authorization.certificate
+            ):
+                raise IntegrityError("recipient key trust head changed during source batch")
 
     def authorize(
         self,

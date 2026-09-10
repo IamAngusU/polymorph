@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import threading
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -114,17 +115,45 @@ class TrustedSourceKey:
             raise ValueError("verification-only source key requires an expiry deadline")
 
 
+class SourceTrustVerificationSession:
+    """Thread-bound verifier yielded only by ``SourceTrustStore.verification_session``."""
+
+    __slots__ = ("_active", "_owner_thread", "_store")
+
+    def __init__(self, store: SourceTrustStore) -> None:
+        self._store = store
+        self._owner_thread = threading.get_ident()
+        self._active = True
+
+    def verify_record(
+        self,
+        record: BlindTransportRecord,
+        *,
+        now: datetime | None = None,
+    ) -> TrustedSourceKey:
+        if not self._active:
+            raise RuntimeError("source trust verification session is closed")
+        if threading.get_ident() != self._owner_thread:
+            raise RuntimeError("source trust verification session belongs to another thread")
+        return self._store._verify_record_locked(record, now=now)
+
+    def _close(self) -> None:
+        self._active = False
+
+
 class SourceTrustStore:
     """Thread-safe registry for source verification keys, rotation and hard revocation."""
 
     def __init__(self, keys: Iterable[TrustedSourceKey] = ()) -> None:
         self._lock = threading.RLock()
         self._keys: dict[str, TrustedSourceKey] = {}
+        self._verification_depth = 0
         for key in keys:
             self.add(key)
 
     def add(self, key: TrustedSourceKey) -> None:
         with self._lock:
+            self._ensure_mutation_allowed()
             current = self._keys.get(key.key_id)
             if current is not None and current != key:
                 raise ValueError("source key id is already registered with different policy")
@@ -144,6 +173,7 @@ class SourceTrustStore:
     ) -> None:
         state = SourceKeyState(state)
         with self._lock:
+            self._ensure_mutation_allowed()
             current = self._keys.get(key_id)
             if current is None:
                 raise KeyError("source verification key is not registered")
@@ -189,6 +219,7 @@ class SourceTrustStore:
         """Cut off one bound key for new issuance and register its active replacement."""
 
         with self._lock:
+            self._ensure_mutation_allowed()
             current = self._keys.get(previous_key_id)
             if current is None:
                 raise KeyError("source verification key is not registered")
@@ -212,7 +243,38 @@ class SourceTrustStore:
             )
             self.add(replacement)
 
+    @contextmanager
+    def verification_session(self) -> Iterator[SourceTrustVerificationSession]:
+        """Fence registry changes across one or more verifications and a caller commit.
+
+        The returned verifier is thread-bound and becomes unusable when the context exits. A
+        caller that publishes work after verification must keep this context open until that
+        publication commits, so hard revocation linearizes before verification or after commit.
+        """
+
+        with self._lock:
+            self._verification_depth += 1
+            session = SourceTrustVerificationSession(self)
+            try:
+                yield session
+            finally:
+                session._close()
+                self._verification_depth -= 1
+
+    def _ensure_mutation_allowed(self) -> None:
+        if self._verification_depth:
+            raise RuntimeError("source trust registry cannot mutate inside a verification session")
+
     def verify_record(
+        self,
+        record: BlindTransportRecord,
+        *,
+        now: datetime | None = None,
+    ) -> TrustedSourceKey:
+        with self.verification_session() as session:
+            return session.verify_record(record, now=now)
+
+    def _verify_record_locked(
         self,
         record: BlindTransportRecord,
         *,
@@ -223,8 +285,7 @@ class SourceTrustStore:
             raise IntegrityError("transport record has no source authentication")
         if authentication.algorithm != "ed25519":
             raise IntegrityError("transport record uses an unsupported source signature")
-        with self._lock:
-            key = self._keys.get(authentication.key_id)
+        key = self._keys.get(authentication.key_id)
         if key is None:
             raise IntegrityError("transport record source key is not trusted")
         if key.state is SourceKeyState.REVOKED:

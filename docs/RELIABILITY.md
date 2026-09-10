@@ -115,6 +115,34 @@ The default claim lease is five minutes and the supported maximum is one hour. A
 expires during destination-side validation causes that worker to stop before the connector call.
 Legacy `CLAIMED` rows without fencing metadata fail closed and require explicit recovery.
 
+Connectors may additionally advertise a bounded atomic batch writer. This is an opt-in correctness
+contract, not a generic speed flag. Before one batch call, the runtime authenticates and decrypts
+each record, validates the final destination contract, assigns every writable row the same random
+batch-attempt ID and atomically moves those ledger entries to `BATCH_WRITE_STARTED`. The connector
+must then commit every row in one transaction or report a proven `NOT_COMMITTED` result. A short
+write, an unprovable row count or an unknown exception is never accepted as partial success.
+
+The batch-attempt ID stays in the ledger and signed audit metadata across restart. This prevents a
+possibly committed batch from silently falling through the scalar replay path. Scalar replay is
+automatic only if the connector explicitly guarantees that each item's idempotency key has the
+same meaning across both APIs and its current versioned idempotency-contract ID exactly matches
+the non-null ID stored at the original write boundary. Enabling idempotency later, changing its
+contract ID or opening a legacy null-ID row cannot authorize an automatic retry. An unknown
+outcome is retained as `BATCH_UNCERTAIN`. Both batch
+states are intentionally unknown to older runtimes, so downgrades fail closed instead of weakening
+the replay gate. The built-in database connector makes no cross-path idempotency claim.
+
+Once an ambiguous row is explicitly retried, dedicated `REPLAY_*` states preserve that provenance
+across validation failures, proven rollback, unknown outcome and process death. An expired
+`REPLAY_CLAIMED` lease is never picked up by normal delivery. The replay API must acquire a new
+fence and repeat the current connector-capability check. Legacy ledgers are migrated once and
+conservatively because old `CLAIMED` and `QUARANTINED` rows do not reveal whether they came from an
+earlier ambiguous replay.
+
+The database migration is forward-only. Unknown batch and replay states protect those individual
+rows from an older reader, but they are not a database-wide mixed-version writer lock. Do not run a
+pre-v0.4 destination runtime against a ledger after v0.4 has opened it.
+
 ## Source outbox
 
 The source must stage the already sealed and signed wire record in `SourceOutbox` before its

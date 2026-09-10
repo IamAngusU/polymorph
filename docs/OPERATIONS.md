@@ -15,21 +15,33 @@ Polymorph does not assume that an arbitrary API supports idempotency merely beca
 
 ## Unknown outcomes
 
-A timeout or lost acknowledgement can occur after a destination has committed. Blindly retrying would risk duplicates. Such records move to `UNCERTAIN`, remain stored as ciphertext in the sealed quarantine and are blocked from normal replay when the destination is not idempotent.
+A timeout or lost acknowledgement can occur after a destination has committed. Blindly retrying would risk duplicates. Scalar records move to `UNCERTAIN`; atomic groups move to `BATCH_UNCERTAIN`. They remain stored as ciphertext in the sealed quarantine and are blocked from normal replay unless the relevant idempotency contract makes that exact replay path safe.
 
 A connector may return the stronger `NOT_COMMITTED` result only when it can prove the write rolled back or never replaced the destination. Those records are quarantined but marked retry-safe.
 
 ## Destination claim recovery
 
-The delivery ledger separates `CLAIMED` from `WRITE_STARTED`. Claims carry a random fencing token
+The delivery ledger separates `CLAIMED` from scalar `WRITE_STARTED` and
+`BATCH_WRITE_STARTED`. Claims carry a random fencing token
 and expire after five minutes by default. A worker that finds an expired `CLAIMED` row replaces the
 token atomically and can continue. The stale worker's token can no longer open the write boundary.
 
-`WRITE_STARTED` is deliberately not recovered by elapsed time. A crash after that transition may
-have happened before, during or after the connector side effect, and those cases cannot be told
-apart locally. Normal replay is allowed only for a destination with a real idempotency contract.
-Otherwise an operator must reconcile the destination and use the authorized force-replay path.
-Claims created by older Polymorph versions have no fence token and also fail closed.
+Write-started states are deliberately not recovered by elapsed time. A crash after that transition
+may have happened before, during or after the connector side effect, and those cases cannot be
+told apart locally. Normal scalar replay is allowed only for a destination with a real idempotency
+contract. A prior batch additionally requires an explicit guarantee that the same per-item key is
+honored across batch and scalar APIs. Otherwise an operator must reconcile the destination and use
+the authorized force-replay path. Distinct batch state names make older runtimes fail closed during
+a downgrade. Claims created by older Polymorph versions have no fence token and also fail closed.
+
+Manual retries of ambiguous rows use separate `REPLAY_*` states. They retain any original batch
+attempt ID and cannot expire back into ordinary delivery. A replay that fails before its new write,
+proves rollback, loses its acknowledgement or crashes still requires the current idempotency
+contract or a newly authorized force replay on the next attempt.
+
+Ledger schema upgrades are forward-only. The unknown state names fence affected rows, not every
+future write from an old process. Never point a pre-v0.4 runtime at a ledger after v0.4 has opened
+it, and do not mix destination runtime versions on the same ledger.
 
 ## Force replay
 
@@ -50,6 +62,18 @@ dead-letter table under fixed reason codes. The relay never decrypts these recor
 exception text. It continues scanning for deliverable work, but processes at most the requested
 lease count plus 1,000 dead letters per transaction. A dead-lettered delivery identity cannot be
 enqueued again implicitly; recovery requires an explicit operator workflow.
+
+Relay enqueue and lease transactions acquire their shared in-process source-trust fence before the
+SQLite transaction and release it only after commit or rollback. `SourceTrustStore.revoke` and
+registry rotation wait for an older verified transaction to finish. Once revocation returns, new
+intake cannot publish a record under that key; queued records that have not already acquired a
+lease move to dead letter on the next lease scan. A lease committed before revocation remains
+subject to the destination's independent source-key verification.
+
+This ordering is process-local. Separate relay processes must receive the authenticated revocation
+independently and must not be treated as one linearizable trust domain merely because they share a
+SQLite file. Use one shared `SourceTrustStore` instance per process for queues that require this
+fence.
 
 ## Local SQLite durability
 

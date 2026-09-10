@@ -5,7 +5,7 @@ import re
 import sqlite3
 import tempfile
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -16,7 +16,7 @@ from .agents import BlindDestinationAgent, BlindSourceAgent, BlindTransportRecor
 from .audit import AuditLog
 from .benchmark import BenchmarkResult, benchmark_call
 from .connectors.csv_file import CsvConnector
-from .connectors.database import DatabaseConnector
+from .connectors.database import DATABASE_ATOMIC_BATCH_MAX_RECORDS, DatabaseConnector
 from .content import ContentInspector, ContentKind, FileInspection
 from .crypto import RecipientKeyPair
 from .ledger import DeliveryLedger
@@ -37,7 +37,13 @@ from .planning import build_plan
 from .preflight import PreflightReport, PreflightRunner
 from .recipient_auth import RecipientKeyCertificate, RecipientKeyTrustStore
 from .relay import LeasedRecord, RelayPolicy, RouteBinding, SealedRelayQueue
-from .runtime import AuditWriteStatus, DeliveryReceipt, DeliveryStatus, DestinationRuntime
+from .runtime import (
+    AuditWriteStatus,
+    DeliveryBatchInterrupted,
+    DeliveryReceipt,
+    DeliveryStatus,
+    DestinationRuntime,
+)
 from .signing import SigningKeyPair, SourceTrustStore, TrustedSourceKey, signing_key_id
 from .spool import SealedSpool
 
@@ -69,7 +75,21 @@ _STAGE_ORDER = WORKFLOW_STAGE_COMPONENTS
 
 def _required_event_stream_bytes(records: int, batch_size: int) -> int:
     maximum_batches = (records + batch_size - 1) // batch_size
-    maximum_events = records + maximum_batches + len(WORKFLOW_STAGE_COMPONENTS) + 2
+    full_outer_batches, remainder = divmod(records, batch_size)
+    atomic_batches_per_full_outer = (
+        batch_size + DATABASE_ATOMIC_BATCH_MAX_RECORDS - 1
+    ) // DATABASE_ATOMIC_BATCH_MAX_RECORDS
+    remainder_atomic_batches = (
+        remainder + DATABASE_ATOMIC_BATCH_MAX_RECORDS - 1
+    ) // DATABASE_ATOMIC_BATCH_MAX_RECORDS
+    maximum_atomic_batches = (
+        0
+        if batch_size == 1
+        else full_outer_batches * atomic_batches_per_full_outer + remainder_atomic_batches
+    )
+    maximum_events = (
+        records + maximum_batches + maximum_atomic_batches + len(WORKFLOW_STAGE_COMPONENTS) + 2
+    )
     return maximum_events * MAX_COMPACT_EVENT_BYTES
 
 
@@ -117,6 +137,7 @@ class WorkflowStageResult:
     latency_sample_count: int
     call_latency_p50_ms: float | None
     call_latency_p95_ms: float | None
+    reason_code: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -131,6 +152,7 @@ class WorkflowStageResult:
             "latency_sample_count": self.latency_sample_count,
             "call_latency_p50_ms": self.call_latency_p50_ms,
             "call_latency_p95_ms": self.call_latency_p95_ms,
+            "reason_code": self.reason_code,
         }
 
 
@@ -214,6 +236,7 @@ class _StageAccumulator:
     items_processed: int = 0
     latencies_ms: list[float] = field(default_factory=list)
     failed: bool = False
+    failure_reason_code: str | None = None
 
     def observe_latency(self, wall_ms: float) -> None:
         """Keep a bounded deterministic reservoir so measurement does not scale with input."""
@@ -243,13 +266,15 @@ class _StageAccumulator:
             latency_sample_count=len(self.latencies_ms),
             call_latency_p50_ms=(_percentile(self.latencies_ms, 0.50) if self.calls >= 2 else None),
             call_latency_p95_ms=(_percentile(self.latencies_ms, 0.95) if self.calls >= 2 else None),
+            reason_code=self.failure_reason_code,
         )
 
 
 class _BenchmarkCheckFailed(Exception):
-    def __init__(self, reason_code: str) -> None:
+    def __init__(self, reason_code: str, *, items_processed: int = 0) -> None:
         super().__init__(reason_code)
         self.reason_code = reason_code
+        self.items_processed = items_processed
 
 
 class _WorkflowStopped(Exception):
@@ -293,6 +318,7 @@ class _StageBook:
             stage.observe_latency(wall_ms)
             stage.failed = True
             if isinstance(exc, _BenchmarkCheckFailed):
+                stage.items_processed += exc.items_processed
                 failure = self.mark_failed(
                     name,
                     item_unit,
@@ -328,6 +354,7 @@ class _StageBook:
         if stage.item_unit != item_unit:
             raise RuntimeError("workflow benchmark stage unit changed")
         stage.failed = True
+        stage.failure_reason_code = reason_code
         return WorkflowFailure(name, reason_code, error_type)
 
     def stop(
@@ -590,22 +617,24 @@ def _make_transport_runtime(
     )
 
 
-def _seal_and_stage(
+def _seal_and_stage_batch(
     transport: _TransportRuntime,
-    record: dict[str, object],
+    records: Sequence[dict[str, object]],
     *,
-    record_number: int,
+    first_record_number: int,
     transfer_id: str,
-) -> BlindTransportRecord:
-    sealed = transport.source_agent.prepare_record(
-        record,
-        record_id=f"row-{record_number}",
+) -> tuple[BlindTransportRecord, ...]:
+    sealed_records = transport.source_agent.prepare_records(
+        records,
+        record_ids=tuple(f"row-{first_record_number + offset}" for offset in range(len(records))),
         transfer_id=transfer_id,
     )
-    if sealed.authentication is None:
+    if any(sealed.authentication is None for sealed in sealed_records):
         raise _BenchmarkCheckFailed("source_record_not_signed")
-    transport.outbox.stage(sealed)
-    return sealed
+    receipts = transport.outbox.stage_many(sealed_records)
+    if len(receipts) != len(sealed_records):
+        raise _BenchmarkCheckFailed("source_outbox_stage_count_mismatch")
+    return tuple(sealed_records)
 
 
 def _reload_and_enqueue(
@@ -617,10 +646,11 @@ def _reload_and_enqueue(
     if len(pending) != expected:
         raise _BenchmarkCheckFailed("outbox_pending_count_mismatch")
     records: list[BlindTransportRecord] = []
-    for item in pending:
-        transport.relay.enqueue(item.record)
-        records.append(item.record)
-        progress.records_relayed += 1
+    records.extend(item.record for item in pending)
+    receipts = transport.relay.enqueue_many(records)
+    if len(receipts) != expected:
+        raise _BenchmarkCheckFailed("relay_enqueue_count_mismatch")
+    progress.records_relayed += len(receipts)
     return tuple(records)
 
 
@@ -641,11 +671,34 @@ def _lease_batch(
     return leased
 
 
-def _deliver_one(transport: _TransportRuntime, record: BlindTransportRecord) -> DeliveryReceipt:
-    receipt = transport.runtime.deliver(record)
-    if receipt.status is not DeliveryStatus.DELIVERED:
-        raise _BenchmarkCheckFailed(receipt.reason_code or "destination_delivery_not_delivered")
-    return receipt
+def _deliver_batch(
+    transport: _TransportRuntime,
+    records: Sequence[BlindTransportRecord],
+    progress: _Progress,
+) -> tuple[DeliveryReceipt, ...]:
+    try:
+        receipts = transport.runtime.deliver_many(records)
+    except DeliveryBatchInterrupted as exc:
+        completed = exc.completed_receipts
+        progress.records_delivered += sum(
+            receipt.status is DeliveryStatus.DELIVERED for receipt in completed
+        )
+        raise _BenchmarkCheckFailed(
+            "destination_delivery_interrupted",
+            items_processed=len(completed),
+        ) from exc
+    if len(receipts) != len(records):
+        raise _BenchmarkCheckFailed("destination_delivery_count_mismatch")
+    progress.records_delivered += sum(
+        receipt.status is DeliveryStatus.DELIVERED for receipt in receipts
+    )
+    for receipt in receipts:
+        if receipt.status is not DeliveryStatus.DELIVERED:
+            raise _BenchmarkCheckFailed(
+                receipt.reason_code or "destination_delivery_not_delivered",
+                items_processed=len(receipts),
+            )
+    return receipts
 
 
 def _check_audit_outcome(
@@ -666,13 +719,31 @@ def _check_operational_event_outcome(receipt: DeliveryReceipt) -> None:
         raise _BenchmarkCheckFailed("destination_operational_event_context_missing")
 
 
-def _ack_one(transport: _TransportRuntime, leased: LeasedRecord, lease_owner: str) -> None:
-    record = leased.record
-    lease_id = leased.lease_id
-    digest = record.digest()
-    transport.relay.ack(digest, lease_owner=lease_owner, lease_id=lease_id)
-    if not transport.outbox.ack(digest):
+def _ack_batch(
+    transport: _TransportRuntime,
+    leased: Sequence[LeasedRecord],
+    lease_owner: str,
+) -> None:
+    acknowledgements = tuple((item.record.digest(), item.lease_id) for item in leased)
+    transport.relay.ack_many(acknowledgements, lease_owner=lease_owner)
+    removed = transport.outbox.ack_many(digest for digest, _ in acknowledgements)
+    if len(removed) != len(acknowledgements) or not all(removed):
         raise _BenchmarkCheckFailed("source_outbox_ack_missing")
+
+
+def _check_audit_outcomes(
+    transport: _TransportRuntime,
+    receipts: Sequence[DeliveryReceipt],
+) -> None:
+    for receipt in receipts:
+        _check_audit_outcome(transport, receipt)
+
+
+def _check_operational_event_outcomes(
+    receipts: Sequence[DeliveryReceipt],
+) -> None:
+    for receipt in receipts:
+        _check_operational_event_outcome(receipt)
 
 
 def _read_source_record(
@@ -959,11 +1030,7 @@ def _finalize_observability(
                 event_type="stage_summary",
                 status=stage.status,
                 correlation_id=events.correlation_id(f"stage:{stage.name}"),
-                reason_code=(
-                    failure.reason_code
-                    if failure is not None and failure.stage == stage.name
-                    else None
-                ),
+                reason_code=stage.reason_code,
                 duration_ms=stage.wall_ms,
                 item_count=stage.items_processed,
             )
@@ -1181,22 +1248,21 @@ def _execute_workflow(
                 break
             batch_number += 1
             transfer_id = f"workflow-batch-{batch_number}"
-            for raw_record in batch:
-                record_number += 1
-                stages.measure(
-                    "source_seal_and_outbox_stage",
-                    "records",
-                    partial(
-                        _seal_and_stage,
-                        transport,
-                        raw_record,
-                        record_number=record_number,
-                        transfer_id=transfer_id,
-                    ),
-                )
-                progress.records_staged += 1
-
             current_batch_size = len(batch)
+            sealed = stages.measure(
+                "source_seal_and_outbox_stage",
+                "records",
+                partial(
+                    _seal_and_stage_batch,
+                    transport,
+                    batch,
+                    first_record_number=record_number + 1,
+                    transfer_id=transfer_id,
+                ),
+                items=current_batch_size,
+            )
+            record_number += current_batch_size
+            progress.records_staged += len(sealed)
             stages.measure(
                 "outbox_reload_and_relay_enqueue",
                 "records",
@@ -1210,30 +1276,36 @@ def _execute_workflow(
                 partial(_lease_batch, transport, current_batch_size, batch_number, progress),
                 items=current_batch_size,
             )
-            for item in leased:
-                receipt = stages.measure(
-                    "destination_delivery",
-                    "records",
-                    partial(_deliver_one, transport, item.record),
-                )
-                progress.records_delivered += 1
-                stages.measure(
-                    "acknowledgements",
-                    "records",
-                    partial(_ack_one, transport, item, lease_owner),
-                )
-                progress.records_acknowledged += 1
-                stages.measure(
-                    "destination_audit_outcome_check",
-                    "events",
-                    partial(_check_audit_outcome, transport, receipt),
-                    items=1 if transport.audit is not None else 0,
-                )
-                stages.measure(
-                    "destination_operational_event_check",
-                    "events",
-                    partial(_check_operational_event_outcome, receipt),
-                )
+            receipts = stages.measure(
+                "destination_delivery",
+                "records",
+                partial(
+                    _deliver_batch,
+                    transport,
+                    tuple(item.record for item in leased),
+                    progress,
+                ),
+                items=current_batch_size,
+            )
+            stages.measure(
+                "acknowledgements",
+                "records",
+                partial(_ack_batch, transport, leased, lease_owner),
+                items=current_batch_size,
+            )
+            progress.records_acknowledged += current_batch_size
+            stages.measure(
+                "destination_audit_outcome_check",
+                "events",
+                partial(_check_audit_outcomes, transport, receipts),
+                items=current_batch_size if transport.audit is not None else 0,
+            )
+            stages.measure(
+                "destination_operational_event_check",
+                "events",
+                partial(_check_operational_event_outcomes, receipts),
+                items=current_batch_size,
+            )
             progress.batches_completed += 1
             _emit_required_event(
                 events,
@@ -1449,6 +1521,7 @@ def run_workflow_benchmark(
                 latency_sample_count=1,
                 call_latency_p50_ms=None,
                 call_latency_p95_ms=None,
+                reason_code="workflow_stage_failed",
             )
             report = replace(
                 report,

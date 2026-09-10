@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -90,3 +91,48 @@ def test_inverted_transfer_validity_is_rejected() -> None:
 
     with pytest.raises(ProtocolError, match="inverted"):
         context(issued_at=now, expires_at=now - timedelta(seconds=1))
+
+
+@pytest.mark.parametrize("record_id", ("r" * 257, "legacy\nrecord"))
+def test_existing_v3_wire_with_pre_boundary_metadata_remains_decodable(record_id: str) -> None:
+    wire = context().to_wire()
+    wire["record_id"] = record_id
+
+    decoded = TransferContext.from_wire(wire)
+
+    assert decoded.record_id == record_id
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("tenant", "t" * 129),
+        ("source_connector", "source\nconnector"),
+        ("destination_connector", "   "),
+        ("field_id", "f" * 257),
+        ("schema_version", "v" * 129),
+        ("record_id", "r" * 257),
+        ("transfer_id", "transfer\n1"),
+        ("plan_id", "p" * 257),
+    ),
+)
+def test_new_seals_reject_unbounded_context_metadata(field: str, value: str) -> None:
+    recipient = RecipientKeyPair.generate()
+
+    with pytest.raises(ProtocolError, match="bounded printable metadata"):
+        seal_for_recipient(
+            b"secret",
+            recipient.public_bytes(),
+            replace(context(), **{field: value}),
+        )
+
+
+def test_new_seals_reject_invalid_plan_digest() -> None:
+    recipient = RecipientKeyPair.generate()
+
+    with pytest.raises(ProtocolError, match="lowercase SHA-256"):
+        seal_for_recipient(
+            b"secret",
+            recipient.public_bytes(),
+            replace(context(), plan_digest="A" * 64),
+        )

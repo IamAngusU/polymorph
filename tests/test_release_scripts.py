@@ -20,6 +20,187 @@ from scripts.check_sdist import (
     mismatched_release_paths,
     missing_release_paths,
 )
+from scripts.check_workflow_performance import (
+    _expected_atomic_batch_events,
+    evaluate_report,
+    load_report,
+)
+
+
+def _passing_workflow_report() -> dict[str, object]:
+    records = 1_000
+    return {
+        "benchmark": "workflow",
+        "version": 1,
+        "measurement": {
+            "mode": "standard",
+            "python_allocation_tracing": False,
+        },
+        "resources": {
+            "throughput_per_second": 350.0,
+            "wall_ms": 2_857.0,
+            "peak_rss_bytes": 100 * 1024 * 1024,
+            "result_count": records,
+            "measurement_mode": "standard",
+            "python_allocation_tracing": False,
+        },
+        "workflow": {
+            "success": True,
+            "failure": None,
+            "configuration": {
+                "records": records,
+                "batch_size": 100,
+                "signed_audit": True,
+            },
+            "progress": {
+                "records_read": records,
+                "records_staged": records,
+                "records_relayed": records,
+                "records_leased": records,
+                "records_delivered": records,
+                "records_acknowledged": records,
+                "batches_completed": 10,
+            },
+            "final_state": {
+                "destination_rows": records,
+                "ledger_committed": records,
+                "outbox_depth": 0,
+                "relay_depth": 0,
+                "quarantine_depth": 0,
+                "mismatch_count": 0,
+                "content_verified": True,
+                "known_plaintext_canaries_absent": True,
+                "audit_signatures_verified": True,
+                "audit_events": records,
+                "sqlite_durability": {
+                    "destination": {"synchronous": 2},
+                    "blind_state_synchronous_levels": [2],
+                },
+            },
+            "observability": {
+                "stream_valid": True,
+                "run_closed": True,
+                "workflow_lifecycle_valid": True,
+                "event_ids_unique": True,
+                "event_contract_valid": True,
+                "workflow_counts_valid": True,
+                "event_types": {"delivery": records, "delivery_batch": 10},
+            },
+            "stages": [
+                {
+                    "name": name,
+                    "status": "passed",
+                    "reason_code": None,
+                    "calls": 10,
+                    "items_processed": records,
+                }
+                for name in (
+                    "source_seal_and_outbox_stage",
+                    "outbox_reload_and_relay_enqueue",
+                    "relay_lease",
+                    "destination_delivery",
+                    "acknowledgements",
+                )
+            ],
+        },
+    }
+
+
+def test_workflow_performance_gate_accepts_complete_report() -> None:
+    result = evaluate_report(
+        _passing_workflow_report(),
+        min_throughput=125,
+        max_wall_seconds=8,
+        max_peak_rss_mib=200,
+        expected_records=1_000,
+        expected_batch_size=100,
+    )
+
+    assert result["passed"] is True
+    assert result["failures"] == []
+    assert result["batch_size"] == 100
+    assert result["batches"] == 10
+    assert result["observed"] == {
+        "throughput_per_second": 350.0,
+        "wall_seconds": 2.857,
+        "peak_rss_mib": 100.0,
+    }
+
+
+def test_workflow_performance_gate_reports_integrity_and_resource_regressions() -> None:
+    report = _passing_workflow_report()
+    resources = report["resources"]
+    workflow = report["workflow"]
+    assert isinstance(resources, dict)
+    assert isinstance(workflow, dict)
+    resources["throughput_per_second"] = 50.0
+    resources["wall_ms"] = 20_000.0
+    resources["peak_rss_bytes"] = 300 * 1024 * 1024
+    workflow["success"] = False
+
+    result = evaluate_report(
+        report,
+        min_throughput=125,
+        max_wall_seconds=8,
+        max_peak_rss_mib=200,
+        expected_records=1_000,
+        expected_batch_size=100,
+    )
+
+    assert result["passed"] is False
+    assert result["failures"] == [
+        "workflow_not_successful",
+        "throughput_below_floor",
+        "wall_time_above_ceiling",
+        "peak_rss_above_ceiling",
+    ]
+
+
+def test_workflow_performance_gate_rejects_wrong_or_fake_batch_shape() -> None:
+    report = _passing_workflow_report()
+    workflow = report["workflow"]
+    assert isinstance(workflow, dict)
+    configuration = workflow["configuration"]
+    observability = workflow["observability"]
+    assert isinstance(configuration, dict)
+    assert isinstance(observability, dict)
+    configuration["batch_size"] = 50
+    observability["event_types"] = {"delivery": 1_000}
+
+    result = evaluate_report(
+        report,
+        min_throughput=125,
+        max_wall_seconds=8,
+        max_peak_rss_mib=200,
+        expected_records=1_000,
+        expected_batch_size=100,
+    )
+
+    assert result["passed"] is False
+    assert "configuration_batch_size_mismatch" in result["failures"]
+    assert "progress_batch_count_mismatch" in result["failures"]
+    assert "observability_delivery_batch_event_count_mismatch" in result["failures"]
+    assert "stage_destination_delivery_call_count_mismatch" in result["failures"]
+
+
+@pytest.mark.parametrize(
+    ("records", "batch_size", "expected"),
+    ((1_000, 100, 10), (5, 2, 2), (3_002, 1_501, 4), (3_000, 1, 0)),
+)
+def test_workflow_performance_gate_counts_real_atomic_batch_events(
+    records: int,
+    batch_size: int,
+    expected: int,
+) -> None:
+    assert _expected_atomic_batch_events(records, batch_size) == expected
+
+
+def test_workflow_performance_gate_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+    report = tmp_path / "workflow.json"
+    report.write_text('{"benchmark":"workflow","benchmark":"fake"}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="duplicate key"):
+        load_report(report)
 
 
 def _write_sdist(path: Path, names: tuple[str, ...]) -> None:

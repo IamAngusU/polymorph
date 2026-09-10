@@ -121,3 +121,43 @@ The protocol hides field payload values from a relay that receives only wire rec
 ## Expiration
 
 A source agent may authenticate `issued_at` and `expires_at`. Destination decryption checks expiry. Relay policy can additionally require an expiry and reject lifetimes above its configured maximum.
+
+## Atomic destination batches
+
+Batching does not change the wire record or delivery identity. A capable destination receives a
+bounded sequence of plaintext values only after every corresponding v3 record has passed source,
+route, recipient-key, plan and destination-contract verification. Each item carries its own
+transfer ID, record ID, record digest and deterministic idempotency key. The connector advertises
+hard record and aggregate sealed-wire limits and must commit every item in one transaction or
+commit none.
+
+Immediately before the connector call, the destination ledger atomically moves every writable
+item to `BATCH_WRITE_STARTED` and stores the same random 128-bit batch-attempt ID on each row. An
+explicit, versioned idempotency-contract ID is stored at that same boundary only when the
+connector advertises both scalar idempotency and cross-path per-item idempotency. An unknown
+outcome moves the group to `BATCH_UNCERTAIN`; known rollback and commit retain the attempt
+ID with their terminal state. The ID is also copied into receipts and signed audit events. It
+identifies one external write attempt, not a new payload or idempotency identity.
+
+If the connector cannot prove that a failed attempt was not committed, every involved item remains
+ambiguous. Scalar replay is not inferred to be safe merely because scalar calls support
+idempotency. The connector must explicitly guarantee per-item idempotency across both batch and
+scalar APIs, otherwise normal replay is blocked and operator-authorized recovery is required.
+The distinct batch state names are also a downgrade gate: a pre-batching runtime rejects them as
+unknown instead of silently treating a possibly committed batch as an ordinary scalar retry.
+
+An authorized scalar retry of any ambiguous state moves through `REPLAY_CLAIMED`,
+`REPLAY_WRITE_STARTED`, `REPLAY_UNCERTAIN` and `REPLAY_QUARANTINED`. Those states retain the
+original batch-attempt ID, if any. A crash before or after the replay write boundary therefore
+cannot turn the next run into an ordinary `CLAIMED` or `QUARANTINED` retry. Every later replay
+requires the original ledger row to contain the same non-null idempotency-contract ID advertised
+by the current connector, plus the current cross-path guarantee for a batched attempt. Legacy
+null IDs, newly enabled idempotency and changed IDs remain force-only. A first-attempt
+`QUARANTINED` result backed by a proven `NOT_COMMITTED` outcome remains on the ordinary safe retry
+path.
+
+Connector capabilities are immutable per-operation snapshots. A trusted connector may replace
+the snapshot between calls, but changing it during a call is unsupported. A change detected
+before the write boundary stops the operation; outcomes after the boundary use only the snapshot
+captured before that boundary. A connector must version its contract ID whenever the meaning or
+scope of its idempotency key changes.
