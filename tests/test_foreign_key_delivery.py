@@ -13,7 +13,15 @@ from polymorph.signing import SigningKeyPair, SourceTrustStore, TrustedSourceKey
 from polymorph.spool import SealedSpool
 
 
-def _setup(tmp_path, *, create_customer: bool):
+def _setup(
+    tmp_path,
+    *,
+    create_customer: bool,
+    source_value="00042",
+    source_nullable: bool = False,
+    target_nullable: bool = False,
+    business_key_nullable: bool = False,
+):
     path = tmp_path / "fk.sqlite"
     url = f"sqlite:///{path}"
     engine = create_engine(url)
@@ -22,13 +30,18 @@ def _setup(tmp_path, *, create_customer: bool):
         "customers",
         metadata,
         Column("id", Integer, primary_key=True),
-        Column("external_customer_number", String, nullable=False, unique=True),
+        Column(
+            "external_customer_number",
+            String,
+            nullable=business_key_nullable,
+            unique=True,
+        ),
     )
     orders = Table(
         "orders",
         metadata,
         Column("id", Integer, primary_key=True),
-        Column("customer_id", Integer, ForeignKey("customers.id"), nullable=False),
+        Column("customer_id", Integer, ForeignKey("customers.id"), nullable=target_nullable),
     )
     metadata.create_all(engine)
     if create_customer:
@@ -44,6 +57,7 @@ def _setup(tmp_path, *, create_customer: bool):
                 "c1",
                 "Debitor Nr",
                 DataType.STRING,
+                nullable=source_nullable,
                 role=FieldRole.NATURAL_KEY,
             ),
         ),
@@ -71,7 +85,7 @@ def _setup(tmp_path, *, create_customer: bool):
         plan=plan,
         destination_public_key=keys.public_bytes(),
         signing_key=signer,
-    ).prepare_record({"c1": "00042"}, record_id="row-1", transfer_id="tx-1")
+    ).prepare_record({"c1": source_value}, record_id="row-1", transfer_id="tx-1")
 
     runtime = DestinationRuntime(
         connector_id="orders-db",
@@ -133,3 +147,63 @@ def test_fk_resolution_result_is_contract_checked_before_write(tmp_path):
     assert receipt.reason_code == "destination_contract_failed"
     with engine.connect() as connection:
         assert connection.execute(select(orders.c.customer_id)).all() == []
+
+
+def test_wrong_typed_business_key_is_not_coerced_by_database_lookup(tmp_path):
+    engine, _, orders, transport, runtime = _setup(
+        tmp_path,
+        create_customer=True,
+        source_value=42,
+    )
+
+    receipt = runtime.deliver(transport)
+
+    assert receipt.status is DeliveryStatus.QUARANTINED
+    assert receipt.reason_code == "destination_resolution_failed"
+    with engine.connect() as connection:
+        assert connection.execute(select(orders.c.customer_id)).all() == []
+
+
+def test_non_null_business_key_cannot_silently_resolve_to_nullable_fk(tmp_path):
+    engine, _, orders, transport, runtime = _setup(
+        tmp_path,
+        create_customer=False,
+        target_nullable=True,
+    )
+
+    receipt = runtime.deliver(transport)
+
+    assert receipt.status is DeliveryStatus.QUARANTINED
+    assert receipt.reason_code == "destination_resolution_failed"
+    with engine.connect() as connection:
+        assert connection.execute(select(orders.c.customer_id)).all() == []
+
+
+def test_nullable_fk_value_remains_null_without_business_key_lookup(tmp_path):
+    engine, customers, orders, transport, runtime = _setup(
+        tmp_path,
+        create_customer=False,
+        source_value=None,
+        source_nullable=True,
+        target_nullable=True,
+        business_key_nullable=True,
+    )
+    with engine.begin() as connection:
+        connection.execute(
+            customers.insert(),
+            [
+                {"id": 7, "external_customer_number": None},
+                {"id": 8, "external_customer_number": None},
+            ],
+        )
+
+    def must_not_resolve_null(*, target_field_id, match_column, value):
+        raise AssertionError("nullable SQL NULL must not enter a business-key lookup")
+
+    runtime.connector.resolve_foreign_key = must_not_resolve_null
+
+    receipt = runtime.deliver(transport)
+
+    assert receipt.status is DeliveryStatus.DELIVERED
+    with engine.connect() as connection:
+        assert connection.execute(select(orders.c.customer_id)).all() == [(None,)]

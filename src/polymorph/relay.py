@@ -190,7 +190,12 @@ class SealedRelayQueue:
         return connection
 
     def _initialize(self) -> None:
-        with closing(self._connect()) as connection, connection:
+        connection = self._connect()
+        try:
+            # Schema inspection and migration must be one serialized operation. Without
+            # the write lock, parallel workers opening a legacy database can both observe
+            # a missing column and race to add it.
+            connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS sealed_relay_queue (
@@ -241,6 +246,13 @@ class SealedRelayQueue:
                 )
                 """
             )
+            connection.execute("COMMIT")
+        except Exception:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
+        finally:
+            connection.close()
 
     def enqueue(self, record: BlindTransportRecord) -> RelayReceipt:
         self.policy.validate(record)

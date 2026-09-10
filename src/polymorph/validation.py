@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from .errors import PolicyViolation
-from .matching.deterministic import type_compatibility
 from .models.mapping import MappingPlan
 from .models.schema import SchemaDescriptor
+from .models.types import DataType, FieldRole, automatic_copy_type_safe, runtime_type_satisfies
 from .policy import PolicyEngine
 from .transforms import is_known_transform
 
@@ -163,17 +163,100 @@ class PlanValidator:
                 )
                 continue
 
-            compatibility = type_compatibility(source.data_type, target.data_type)
-            if rule.transform == "copy" and compatibility == 0.0:
+            if source.nullable and not target.nullable:
                 findings.append(
                     ValidationFinding(
                         ValidationSeverity.REVIEW,
-                        "type_mismatch",
-                        "copy transform crosses incompatible declared data types",
+                        "nullable_source_to_required_target",
+                        "source schema permits null but the destination field is required",
                         source.id,
                         target.id,
                     )
                 )
+
+            if rule.transform in {"copy", "opaque_forward"}:
+                if source.data_type is DataType.UNKNOWN:
+                    findings.append(
+                        ValidationFinding(
+                            ValidationSeverity.REVIEW,
+                            "source_type_unknown",
+                            "non-coercing transform lacks a declared source type",
+                            source.id,
+                            target.id,
+                        )
+                    )
+                elif not runtime_type_satisfies(source.data_type, target.data_type):
+                    findings.append(
+                        ValidationFinding(
+                            ValidationSeverity.BLOCKING,
+                            "type_mismatch",
+                            (
+                                "non-coercing transform cannot satisfy the destination runtime "
+                                "type contract"
+                            ),
+                            source.id,
+                            target.id,
+                        )
+                    )
+            elif rule.transform == "lookup_foreign_key":
+                relation = target_schema.relation_for_source_field(target.id)
+                match_column = rule.parameters.get("match_column")
+                lookup_key = (
+                    relation.lookup_key(match_column)
+                    if relation is not None and isinstance(match_column, str)
+                    else None
+                )
+                lookup_contract_valid = (
+                    set(rule.parameters) == {"match_column"}
+                    and relation is not None
+                    and lookup_key is not None
+                    and source.role is FieldRole.NATURAL_KEY
+                    and target.role is FieldRole.FOREIGN_KEY
+                )
+                if not lookup_contract_valid:
+                    findings.append(
+                        ValidationFinding(
+                            ValidationSeverity.BLOCKING,
+                            "foreign_key_lookup_contract_invalid",
+                            (
+                                "foreign-key lookup lacks an exact single-column relation and "
+                                "declared unique lookup key"
+                            ),
+                            source.id,
+                            target.id,
+                        )
+                    )
+                elif lookup_key is not None and DataType.UNKNOWN in {
+                    source.data_type,
+                    lookup_key.data_type,
+                }:
+                    findings.append(
+                        ValidationFinding(
+                            ValidationSeverity.REVIEW,
+                            "foreign_key_lookup_type_unknown",
+                            (
+                                "foreign-key lookup requires review because its type contract "
+                                "is incomplete"
+                            ),
+                            source.id,
+                            target.id,
+                        )
+                    )
+                elif lookup_key is not None and not automatic_copy_type_safe(
+                    source.data_type, lookup_key.data_type
+                ):
+                    findings.append(
+                        ValidationFinding(
+                            ValidationSeverity.BLOCKING,
+                            "foreign_key_lookup_type_mismatch",
+                            (
+                                "source type cannot satisfy the selected foreign-key lookup "
+                                "column contract"
+                            ),
+                            source.id,
+                            target.id,
+                        )
+                    )
 
         for field in target_schema.fields:
             if field.id in targeted or field.nullable or field.destination_generated:

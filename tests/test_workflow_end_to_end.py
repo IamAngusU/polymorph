@@ -16,7 +16,7 @@ from polymorph.ledger import DeliveryLedger
 from polymorph.matching.hybrid import HybridMatcher
 from polymorph.models.mapping import MappingStatus
 from polymorph.models.schema import FieldDescriptor, SchemaDescriptor
-from polymorph.models.types import DataType, Sensitivity
+from polymorph.models.types import DataType, FieldRole, Sensitivity
 from polymorph.outbox import SourceOutbox
 from polymorph.planning import build_plan
 from polymorph.preflight import PreflightRunner
@@ -49,6 +49,7 @@ def test_csv_to_json_blind_delivery_workflow_survives_every_boundary(tmp_path: P
                 DataType.STRING,
                 nullable=False,
                 sensitivity=Sensitivity.SECRET,
+                role=FieldRole.CREDENTIAL,
             ),
         ),
     )

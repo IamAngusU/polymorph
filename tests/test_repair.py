@@ -1,6 +1,11 @@
 from polymorph.matching.hybrid import HybridMatcher
 from polymorph.models.mapping import MappingPlan, MappingRule
-from polymorph.models.schema import FieldDescriptor, RelationDescriptor, SchemaDescriptor
+from polymorph.models.schema import (
+    FieldDescriptor,
+    LookupKeyDescriptor,
+    RelationDescriptor,
+    SchemaDescriptor,
+)
 from polymorph.models.types import DataType, FieldRole, Sensitivity
 from polymorph.repair import RepairSeverity, assess_plan_drift, propose_plan_repair
 
@@ -112,23 +117,38 @@ def test_sensitivity_change_blocks_repair():
 def test_removed_fk_lookup_key_blocks_repair():
     source = SchemaDescriptor(
         "s",
-        (FieldDescriptor("customer", "Customer Number", role=FieldRole.NATURAL_KEY),),
+        (
+            FieldDescriptor(
+                "customer",
+                "Customer Number",
+                DataType.STRING,
+                role=FieldRole.NATURAL_KEY,
+            ),
+        ),
     )
     old_target = SchemaDescriptor(
         "t",
-        (FieldDescriptor("customer_id", "customer id", role=FieldRole.FOREIGN_KEY),),
+        (
+            FieldDescriptor(
+                "customer_id", "customer id", DataType.INTEGER, role=FieldRole.FOREIGN_KEY
+            ),
+        ),
         (
             RelationDescriptor(
                 "customer_id",
                 "customers",
                 "id",
-                lookup_keys=("external_customer_number",),
+                lookup_keys=(LookupKeyDescriptor("external_customer_number", DataType.STRING),),
             ),
         ),
     )
     new_target = SchemaDescriptor(
         "t",
-        (FieldDescriptor("customer_id", "customer id", role=FieldRole.FOREIGN_KEY),),
+        (
+            FieldDescriptor(
+                "customer_id", "customer id", DataType.INTEGER, role=FieldRole.FOREIGN_KEY
+            ),
+        ),
         (RelationDescriptor("customer_id", "customers", "id", lookup_keys=()),),
     )
     plan = MappingPlan(

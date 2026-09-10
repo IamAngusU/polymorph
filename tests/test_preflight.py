@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from polymorph.models.mapping import MappingPlan, MappingRule
-from polymorph.models.schema import FieldDescriptor, RelationDescriptor, SchemaDescriptor
+from polymorph.models.schema import (
+    FieldDescriptor,
+    LookupKeyDescriptor,
+    RelationDescriptor,
+    SchemaDescriptor,
+)
 from polymorph.models.types import DataType, FieldRole
 from polymorph.preflight import PreflightRunner
 
@@ -69,10 +74,28 @@ def test_preflight_reports_transform_failure_without_exposing_value() -> None:
     assert any(item.code == "source_transform_failed" for item in report.findings)
 
 
+def test_preflight_blocks_transform_that_produces_null_for_required_target() -> None:
+    source, target, plan = _basic()
+
+    report = PreflightRunner().run([{"c1": ""}], source, target, plan)
+
+    assert not report.valid
+    assert not report.promotable
+    assert {item.code for item in report.findings} == {"required_target_null"}
+
+
 def test_foreign_key_preflight_uses_read_only_resolver() -> None:
     source = SchemaDescriptor(
         "source",
-        (FieldDescriptor("c1", "Customer Number", DataType.STRING, role=FieldRole.NATURAL_KEY),),
+        (
+            FieldDescriptor(
+                "c1",
+                "Customer Number",
+                DataType.STRING,
+                nullable=False,
+                role=FieldRole.NATURAL_KEY,
+            ),
+        ),
     )
     target = SchemaDescriptor(
         "target",
@@ -81,7 +104,7 @@ def test_foreign_key_preflight_uses_read_only_resolver() -> None:
                 "customer_id",
                 "Customer ID",
                 DataType.INTEGER,
-                nullable=False,
+                nullable=True,
                 role=FieldRole.FOREIGN_KEY,
             ),
         ),
@@ -90,7 +113,7 @@ def test_foreign_key_preflight_uses_read_only_resolver() -> None:
                 source_field_id="customer_id",
                 target_container="customers",
                 target_field="id",
-                lookup_keys=("customer_number",),
+                lookup_keys=(LookupKeyDescriptor("customer_number", DataType.STRING),),
             ),
         ),
     )
@@ -118,6 +141,49 @@ def test_foreign_key_preflight_uses_read_only_resolver() -> None:
     )
     assert report.promotable
     assert report.destination_lookups_checked == 1
+
+    class MustNotCoerceResolver:
+        def resolve_foreign_key(self, *, target_field_id, match_column, value):
+            raise AssertionError("wrong-typed lookup input must not reach the resolver")
+
+    wrong_input = PreflightRunner().run(
+        [{"c1": 42}],
+        source,
+        target,
+        plan,
+        foreign_key_resolver=MustNotCoerceResolver(),
+    )
+    assert not wrong_input.valid
+    assert wrong_input.destination_lookups_checked == 0
+    assert {item.code for item in wrong_input.findings} == {
+        "foreign_key_lookup_input_type_mismatch"
+    }
+
+    class WrongTypeResolver:
+        def resolve_foreign_key(self, *, target_field_id, match_column, value):
+            return "42"
+
+    wrong_type = PreflightRunner().run(
+        [{"c1": "C-42"}], source, target, plan, foreign_key_resolver=WrongTypeResolver()
+    )
+    assert not wrong_type.valid
+    assert wrong_type.destination_lookups_checked == 1
+    assert {item.code for item in wrong_type.findings} == {"foreign_key_resolved_type_mismatch"}
+
+    class MissingResolver:
+        def resolve_foreign_key(self, *, target_field_id, match_column, value):
+            return None
+
+    unresolved = PreflightRunner().run(
+        [{"c1": "C-missing"}],
+        source,
+        target,
+        plan,
+        foreign_key_resolver=MissingResolver(),
+    )
+    assert not unresolved.valid
+    assert unresolved.destination_lookups_checked == 1
+    assert {item.code for item in unresolved.findings} == {"foreign_key_resolved_null"}
 
 
 def test_preflight_does_not_auto_promote_unproven_formula_cache() -> None:

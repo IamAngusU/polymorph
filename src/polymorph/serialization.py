@@ -9,7 +9,12 @@ from typing import Never, cast
 
 from .filesystem import atomic_write_text
 from .models.mapping import MappingPlan, MappingRule
-from .models.schema import FieldDescriptor, RelationDescriptor, SchemaDescriptor
+from .models.schema import (
+    FieldDescriptor,
+    LookupKeyDescriptor,
+    RelationDescriptor,
+    SchemaDescriptor,
+)
 from .models.types import DataType, FieldRole, Sensitivity
 
 MAX_DESCRIPTOR_BYTES = 16 * 1024 * 1024
@@ -75,6 +80,30 @@ def _text_tuple(value: object, label: str) -> tuple[str, ...]:
     return tuple(_text(item, label) for item in _object_list(value, label))
 
 
+def _lookup_key_tuple(value: object) -> tuple[LookupKeyDescriptor, ...]:
+    keys: list[LookupKeyDescriptor] = []
+    for item in _object_list(value, "relation lookup keys"):
+        if isinstance(item, str):
+            # Legacy descriptor. UNKNOWN is intentional so it cannot authorize AUTO.
+            keys.append(LookupKeyDescriptor(_text(item, "relation lookup key")))
+            continue
+        key = _object_mapping(item, "relation lookup key")
+        unknown = set(key) - {"name", "data_type"}
+        if unknown:
+            raise ValueError(
+                "relation lookup key contains unknown fields: " + ", ".join(sorted(unknown))
+            )
+        keys.append(
+            LookupKeyDescriptor(
+                name=_text(key.get("name"), "relation lookup key name"),
+                data_type=DataType(
+                    _text(key.get("data_type", "unknown"), "relation lookup key data type")
+                ),
+            )
+        )
+    return tuple(keys)
+
+
 def schema_to_dict(schema: SchemaDescriptor) -> dict[str, object]:
     return {
         "id": schema.id,
@@ -88,7 +117,7 @@ def schema_to_dict(schema: SchemaDescriptor) -> dict[str, object]:
             }
             for field in schema.fields
         ],
-        "relations": [asdict(relation) for relation in schema.relations],
+        "relations": [relation.canonical_dict() for relation in schema.relations],
         "metadata": schema.metadata,
     }
 
@@ -124,7 +153,7 @@ def schema_from_dict(payload: Mapping[str, object]) -> SchemaDescriptor:
             target_field=_text(relation.get("target_field"), "relation target field"),
             name=_optional_text(relation.get("name"), "relation name"),
             target_schema=_optional_text(relation.get("target_schema"), "relation target schema"),
-            lookup_keys=_text_tuple(relation.get("lookup_keys", []), "relation lookup keys"),
+            lookup_keys=_lookup_key_tuple(relation.get("lookup_keys", [])),
         )
         for item in raw_relations
         for relation in (_object_mapping(item, "schema relation"),)

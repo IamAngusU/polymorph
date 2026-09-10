@@ -20,7 +20,12 @@ from sqlalchemy.sql.sqltypes import (
 
 from polymorph.classification import classify_field_name, infer_role
 from polymorph.errors import ConnectorError, ConnectorWriteError, WriteOutcome
-from polymorph.models.schema import FieldDescriptor, RelationDescriptor, SchemaDescriptor
+from polymorph.models.schema import (
+    FieldDescriptor,
+    LookupKeyDescriptor,
+    RelationDescriptor,
+    SchemaDescriptor,
+)
 from polymorph.models.types import DataType, FieldRole, Sensitivity
 from polymorph.secrets import SecretProvider
 
@@ -151,21 +156,48 @@ class DatabaseConnector:
         table: str,
         schema: str | None,
     ) -> tuple[str, ...]:
-        unique = {
-            column
-            for column in (
-                inspector.get_pk_constraint(table, schema=schema).get("constrained_columns") or []
-            )
-            if column is not None
-        }
+        primary_columns = inspector.get_pk_constraint(table, schema=schema).get(
+            "constrained_columns"
+        )
+        unique = (
+            {primary_columns[0]}
+            if isinstance(primary_columns, (list, tuple))
+            and len(primary_columns) == 1
+            and isinstance(primary_columns[0], str)
+            and primary_columns[0]
+            else set()
+        )
         for constraint in inspector.get_unique_constraints(table, schema=schema):
-            columns = [column for column in (constraint.get("column_names") or []) if column]
-            if len(columns) == 1:
-                unique.add(columns[0])
+            constraint_columns = constraint.get("column_names")
+            if (
+                isinstance(constraint_columns, (list, tuple))
+                and len(constraint_columns) == 1
+                and isinstance(constraint_columns[0], str)
+                and constraint_columns[0]
+            ):
+                unique.add(constraint_columns[0])
         for index in inspector.get_indexes(table, schema=schema):
-            columns = [column for column in (index.get("column_names") or []) if column]
-            if index.get("unique") and len(columns) == 1:
-                unique.add(columns[0])
+            if not index.get("unique") or "expressions" in index:
+                continue
+            dialect_options = index.get("dialect_options")
+            if dialect_options is not None and (
+                not isinstance(dialect_options, Mapping)
+                or any(
+                    not isinstance(option, str) or option.endswith("_where")
+                    for option in dialect_options
+                )
+            ):
+                # Partial/filtered indexes only prove uniqueness for rows matching
+                # their predicate, not for the complete lookup domain.
+                continue
+            index_columns = index.get("column_names")
+            if (
+                isinstance(index_columns, (list, tuple))
+                and len(index_columns) == 1
+                and isinstance(index_columns[0], str)
+                and index_columns[0]
+            ):
+                unique.add(index_columns[0])
         return tuple(sorted(unique))
 
     def inspect_schema(self) -> SchemaDescriptor:
@@ -195,29 +227,42 @@ class DatabaseConnector:
         relations: list[RelationDescriptor] = []
         aliases_by_field: dict[str, set[str]] = {}
         for fk in foreign_keys:
+            constrained_columns = fk.get("constrained_columns") or []
             referred_columns = fk.get("referred_columns", [])
             referred_table = fk.get("referred_table")
             referred_schema = fk.get("referred_schema") or self.schema_name
-            if not referred_table:
+            # The runtime resolver deliberately supports only single-column foreign keys.
+            # Do not advertise parts of a composite relation as independently executable.
+            if not referred_table or len(constrained_columns) != 1 or len(referred_columns) != 1:
                 continue
             lookup_keys = self._unique_columns(inspector, str(referred_table), referred_schema)
-            for source, target in zip(
-                fk.get("constrained_columns", []), referred_columns, strict=False
-            ):
-                alternatives = tuple(item for item in lookup_keys if item != target)
-                relations.append(
-                    RelationDescriptor(
-                        source_field_id=source,
-                        target_container=str(referred_table),
-                        target_field=target,
-                        name=fk.get("name"),
-                        target_schema=referred_schema,
-                        lookup_keys=alternatives,
-                    )
+            lookup_types = {
+                column["name"]: _sql_type(column.get("type"))
+                for column in inspector.get_columns(str(referred_table), schema=referred_schema)
+                if isinstance(column.get("name"), str)
+            }
+            source = constrained_columns[0]
+            target = referred_columns[0]
+            alternatives = tuple(item for item in lookup_keys if item != target)
+            relations.append(
+                RelationDescriptor(
+                    source_field_id=source,
+                    target_container=str(referred_table),
+                    target_field=target,
+                    name=fk.get("name"),
+                    target_schema=referred_schema,
+                    lookup_keys=tuple(
+                        LookupKeyDescriptor(
+                            name=item,
+                            data_type=lookup_types.get(item, DataType.UNKNOWN),
+                        )
+                        for item in alternatives
+                    ),
                 )
-                aliases = aliases_by_field.setdefault(source, set())
-                aliases.update(alternatives)
-                aliases.add(f"{referred_table} {target}")
+            )
+            aliases = aliases_by_field.setdefault(source, set())
+            aliases.update(alternatives)
+            aliases.add(f"{referred_table} {target}")
 
         fields = []
         for column in columns:

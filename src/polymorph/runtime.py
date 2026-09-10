@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 import hashlib
-import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from enum import StrEnum
 
 from .agents import BlindDestinationAgent, BlindTransportRecord
 from .audit import AuditEvent, AuditLog
 from .capabilities import CapabilityAuthorizer, CapabilityOperation
 from .connectors.base import DeliveryContext, DestinationConnector
-from .connectors.inference import runtime_type
+from .connectors.inference import value_satisfies_type
 from .errors import (
     ConnectorWriteError,
     IntegrityError,
@@ -28,6 +26,7 @@ from .ledger import (
 from .models.mapping import MappingPlan
 from .models.schema import FieldDescriptor, SchemaDescriptor
 from .models.types import DataType
+from .observability import EventStream, EventWriteStatus
 from .spool import SealedSpool
 from .transforms import TransformStage, transform_stage
 
@@ -59,6 +58,10 @@ class DeliveryReceipt:
     retry_safe: bool = False
     audit_recorded: bool = False
     audit_status: AuditWriteStatus = AuditWriteStatus.DISABLED
+    operational_event_recorded: bool = False
+    operational_event_status: EventWriteStatus = EventWriteStatus.DISABLED
+    run_id: str | None = None
+    correlation_id: str | None = None
 
 
 def _idempotency_key(record: BlindTransportRecord) -> str:
@@ -86,6 +89,7 @@ class DestinationRuntime:
     target_schema: SchemaDescriptor
     authorizer: CapabilityAuthorizer | None = None
     audit: AuditLog | None = None
+    events: EventStream | None = None
     actor_id: str = "destination-runtime"
     claim_lease: timedelta = DEFAULT_CLAIM_DURATION
     _plan_digest: str = field(init=False, repr=False)
@@ -182,6 +186,29 @@ class DestinationRuntime:
                 # make a caller retry an already committed non-idempotent write.
                 audit_recorded = False
                 audit_status = AuditWriteStatus.APPEND_FAILED
+        operational_event_recorded = False
+        operational_event_status = EventWriteStatus.DISABLED
+        run_id = None
+        correlation_id = None
+        if self.events is not None:
+            run_id = self.events.run_id
+            try:
+                correlation_id = self.events.correlation_id(f"record:{record.digest()}")
+                self.events.emit(
+                    component="destination_runtime",
+                    event_type=event_type,
+                    status=status.value,
+                    correlation_id=correlation_id,
+                    reason_code=reason_code,
+                    item_count=1,
+                )
+                operational_event_recorded = True
+                operational_event_status = EventWriteStatus.RECORDED
+            except Exception:
+                # The ledger still owns delivery truth. A broken diagnostic sink must be visible
+                # to the caller, but it must not turn a committed write into a retry.
+                operational_event_recorded = False
+                operational_event_status = EventWriteStatus.APPEND_FAILED
         return DeliveryReceipt(
             status=status,
             tenant=record.tenant,
@@ -199,6 +226,10 @@ class DestinationRuntime:
             ),
             audit_recorded=audit_recorded,
             audit_status=audit_status,
+            operational_event_recorded=operational_event_recorded,
+            operational_event_status=operational_event_status,
+            run_id=run_id,
+            correlation_id=correlation_id,
         )
 
     def deliver(self, record: BlindTransportRecord) -> DeliveryReceipt:
@@ -244,14 +275,30 @@ class DestinationRuntime:
             if resolver is None:
                 raise PolicyViolation("destination connector cannot resolve foreign keys")
             match_column = rule.parameters.get("match_column")
-            if not match_column:
+            relation = self.target_schema.relation_for_source_field(rule.target_field_id)
+            lookup_key = (
+                relation.lookup_key(match_column)
+                if relation is not None and isinstance(match_column, str)
+                else None
+            )
+            if lookup_key is None:
                 raise IntegrityError("foreign-key mapping is missing match_column")
             value = plaintext_record.get(rule.target_field_id)
-            plaintext_record[rule.target_field_id] = resolver(
+            if value is None:
+                # SQL NULL is not a business-key lookup value. Preserve it for nullable targets;
+                # the target contract below rejects it for required targets.
+                continue
+            if not value_satisfies_type(value, lookup_key.data_type):
+                raise PolicyViolation("foreign-key input violates lookup-column type")
+            assert isinstance(match_column, str)
+            resolved = resolver(
                 target_field_id=rule.target_field_id,
                 match_column=match_column,
                 value=value,
             )
+            if resolved is None:
+                raise PolicyViolation("non-null foreign-key lookup input did not resolve")
+            plaintext_record[rule.target_field_id] = resolved
         return plaintext_record
 
     def _record_uses_runtime_plan(self, record: BlindTransportRecord) -> bool:
@@ -259,16 +306,7 @@ class DestinationRuntime:
 
     @staticmethod
     def _value_satisfies_type(value: object, target_type: DataType) -> bool:
-        if isinstance(value, float) and not math.isfinite(value):
-            return False
-        if isinstance(value, Decimal) and not value.is_finite():
-            return False
-        if target_type is DataType.UNKNOWN:
-            return True
-        actual_type = runtime_type(value)
-        if actual_type is target_type:
-            return True
-        return actual_type is DataType.INTEGER and target_type is DataType.DECIMAL
+        return value_satisfies_type(value, target_type)
 
     def _payload_satisfies_target_contract(self, record: dict[str, object]) -> bool:
         if not self._payload_has_exact_mapped_fields(record):

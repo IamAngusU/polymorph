@@ -73,10 +73,11 @@ jobs:
         run: python -W error -m compileall -q src
       - name: Tests, warnings are errors
         run: python -W error -m pytest --strict-config --strict-markers
-      - name: Mapping safety smoke
+      - name: Mapping safety regression
         run: >-
-          python -W error -m polymorph benchmark mapping benchmarks/safety-smoke.json
-          --require-auto-precision 1.0 --max-unsafe-auto 0
+          python -W error -m polymorph benchmark mapping benchmarks/safety-regression.json
+          --require-auto-precision 1.0 --require-automation-coverage 0.70
+          --max-unsafe-auto 0
       - name: Dependency consistency
         run: python -m pip check
 
@@ -99,19 +100,29 @@ jobs:
       - name: Measure the real local workflow
         run: >-
           python -W error -m polymorph benchmark workflow --records 100 --batch-size 25
-          --output workflow-benchmark.json
-      - name: Exercise failure boundaries
+          --work-dir workflow-run --output workflow-benchmark.json
+      - name: Validate operational event health
+        if: always()
+        run: |
+          run_id="$(python -c 'import json, pathlib; print(json.loads(pathlib.Path("workflow-benchmark.json").read_text(encoding="utf-8"))["workflow"]["observability"]["run_id"])')"
+          python -W error -m polymorph events check workflow-run/operational-events.jsonl \
+            --run-id "$run_id" --output operational-health.json
+      - name: Exercise failure and recovery boundaries
         if: always()
         run: >-
-          python -W error -m pytest tests/test_workflow_failure_lab.py --strict-config
-          --strict-markers --durations=0 --junitxml=workflow-failure-lab.xml
+          python -W error -m pytest tests/test_workflow_failure_lab.py
+          tests/test_recovery_stress.py tests/test_recovery_processes.py
+          --strict-config --strict-markers
+          --durations=0 --junitxml=workflow-failure-and-recovery-lab.xml
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: workflow-lab-evidence
           path: |
             workflow-benchmark.json
-            workflow-failure-lab.xml
+            operational-health.json
+            workflow-run/operational-events.jsonl
+            workflow-failure-and-recovery-lab.xml
           if-no-files-found: warn
           retention-days: 14
 
@@ -170,6 +181,8 @@ jobs:
           "$RUNNER_TEMP/wheel-smoke/bin/python" -c "from importlib.metadata import version; import polymorph; assert polymorph.__version__ == version('polymorph-bridge')"
           "$RUNNER_TEMP/wheel-smoke/bin/polymorph" --help
           "$RUNNER_TEMP/wheel-smoke/bin/polymorph" doctor
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -c "from polymorph.observability import EventStream; s=EventStream('$RUNNER_TEMP/wheel-events.jsonl', run_id='11'*16); c=s.correlation_id('workflow'); s.emit(component='workflow_benchmark', event_type='workflow_started', status='started', correlation_id=c, item_count=0); s.emit(component='workflow_benchmark', event_type='workflow_completed', status='passed', correlation_id=c, item_count=0)"
+          "$RUNNER_TEMP/wheel-smoke/bin/polymorph" events check "$RUNNER_TEMP/wheel-events.jsonl" --run-id 11111111111111111111111111111111
       - name: Install source distribution in a clean environment
         run: |
           python -m venv "$RUNNER_TEMP/sdist-smoke"
@@ -178,6 +191,8 @@ jobs:
           "$RUNNER_TEMP/sdist-smoke/bin/python" -c "from importlib.metadata import version; import polymorph; assert polymorph.__version__ == version('polymorph-bridge')"
           "$RUNNER_TEMP/sdist-smoke/bin/polymorph" --help
           "$RUNNER_TEMP/sdist-smoke/bin/polymorph" doctor
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -c "from polymorph.observability import EventStream; s=EventStream('$RUNNER_TEMP/sdist-events.jsonl', run_id='22'*16); c=s.correlation_id('workflow'); s.emit(component='workflow_benchmark', event_type='workflow_started', status='started', correlation_id=c, item_count=0); s.emit(component='workflow_benchmark', event_type='workflow_completed', status='passed', correlation_id=c, item_count=0)"
+          "$RUNNER_TEMP/sdist-smoke/bin/polymorph" events check "$RUNNER_TEMP/sdist-events.jsonl" --run-id 22222222222222222222222222222222
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: polymorph-distributions
@@ -200,10 +215,12 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Bootstrap with pinned model profiles
         run: python scripts/bootstrap.py --skip-checks
-      - name: Model-assisted mapping safety smoke
+      - name: Model-assisted mapping safety regression
         run: >-
-          python scripts/dev.py benchmark mapping benchmarks/safety-smoke.json --models
-          --require-auto-precision 1.0 --max-unsafe-auto 0 --output model-safety.json
+          python scripts/dev.py benchmark mapping benchmarks/safety-regression.json --models
+          --require-auto-precision 1.0 --require-automation-coverage 0.70
+          --require-suggestion-accuracy 0.60 --max-unsafe-auto 0
+          --output model-safety.json
       - name: Record model installation status
         run: python scripts/dev.py doctor > model-doctor.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

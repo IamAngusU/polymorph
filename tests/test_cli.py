@@ -5,7 +5,7 @@ import json
 import pytest
 
 from polymorph.cli import _auto_source, build_parser
-from polymorph.errors import ConnectorError, PolymorphError
+from polymorph.errors import ConnectorError, IntegrityError, PolymorphError
 
 
 def test_cli_excel_header_detection_defaults_to_auto() -> None:
@@ -37,6 +37,10 @@ def test_cli_supports_content_auto_preflight_and_recipes() -> None:
     assert find.rejection_threshold == 3
     audit_summary = parser.parse_args(["audit", "summary", "audit.sqlite"])
     assert audit_summary.path == "audit.sqlite"
+    event_check = parser.parse_args(
+        ["events", "check", "operational-events.jsonl", "--run-id", "11" * 16]
+    )
+    assert event_check.path == "operational-events.jsonl"
     explain = parser.parse_args(["explain", "write_outcome_unknown"])
     assert explain.reason_code == "write_outcome_unknown"
 
@@ -66,6 +70,8 @@ def test_cli_mapping_benchmark_defaults_to_zero_unsafe_auto() -> None:
         ["benchmark", "mapping", "corpus.json", "--require-auto-precision", "1.0"]
     )
     assert args.require_auto_precision == 1.0
+    assert args.require_automation_coverage is None
+    assert args.require_suggestion_accuracy is None
     assert args.max_unsafe_auto == 0
     assert args.tracemalloc is False
 
@@ -82,6 +88,7 @@ def test_inspect_benchmark_output_labels_observer_mode(tmp_path, capsys) -> None
     standard_payload = json.loads(capsys.readouterr().out)
 
     assert standard_payload["measurement"]["mode"] == "standard"
+    assert all("pid" not in item for item in standard_payload["metrics"])
     assert all(item["peak_python_bytes"] is None for item in standard_payload["metrics"])
 
     traced = build_parser().parse_args(
@@ -93,6 +100,169 @@ def test_inspect_benchmark_output_labels_observer_mode(tmp_path, capsys) -> None
     assert traced_payload["measurement"]["mode"] == "python_allocation_trace"
     assert all(item["python_allocation_tracing"] for item in traced_payload["metrics"])
     assert all(item["peak_python_bytes"] is not None for item in traced_payload["metrics"])
+
+
+def test_mapping_benchmark_rejects_incomplete_or_dangling_labels(tmp_path) -> None:
+    base = {
+        "version": 1,
+        "cases": [
+            {
+                "id": "case-one",
+                "source_schema": {
+                    "id": "source",
+                    "fields": [
+                        {"id": "one", "name": "one"},
+                        {"id": "two", "name": "two"},
+                    ],
+                },
+                "target_schema": {
+                    "id": "target",
+                    "fields": [{"id": "target_one", "name": "one"}],
+                },
+                "expected": {"one": "target_one"},
+            }
+        ],
+    }
+    manifest = tmp_path / "corpus.json"
+    manifest.write_text(json.dumps(base), encoding="utf-8")
+    args = build_parser().parse_args(["benchmark", "mapping", str(manifest)])
+
+    with pytest.raises(PolymorphError, match="label every source field"):
+        args.func(args)
+
+    base["cases"][0]["expected"] = {"one": "missing", "two": None}
+    manifest.write_text(json.dumps(base), encoding="utf-8")
+    with pytest.raises(PolymorphError, match="unknown target field"):
+        args.func(args)
+
+
+def test_mapping_benchmark_rejects_duplicate_case_ids(tmp_path) -> None:
+    case = {
+        "id": "duplicate",
+        "source_schema": {"id": "source", "fields": [{"id": "one", "name": "one"}]},
+        "target_schema": {"id": "target", "fields": [{"id": "one", "name": "one"}]},
+        "expected": {"one": "one"},
+    }
+    manifest = tmp_path / "corpus.json"
+    manifest.write_text(
+        json.dumps({"version": 1, "cases": [case, case]}),
+        encoding="utf-8",
+    )
+    args = build_parser().parse_args(["benchmark", "mapping", str(manifest)])
+
+    with pytest.raises(PolymorphError, match="case ids must be unique"):
+        args.func(args)
+
+
+def test_mapping_benchmark_rejects_duplicate_or_unknown_safety_labels(tmp_path) -> None:
+    manifest = tmp_path / "corpus.json"
+    manifest.write_text(
+        '{"version":1,"cases":[{"id":"case","source_schema":{"id":"s",'
+        '"fields":[{"id":"one","name":"one"}]},"target_schema":{"id":"t",'
+        '"fields":[{"id":"one","name":"one"}]},"expected":{"one":"one",'
+        '"one":null}}]}',
+        encoding="utf-8",
+    )
+    args = build_parser().parse_args(["benchmark", "mapping", str(manifest)])
+
+    with pytest.raises(PolymorphError, match="duplicate JSON key"):
+        args.func(args)
+
+    payload = {
+        "version": 1,
+        "cases": [
+            {
+                "id": "case",
+                "source_schema": {"id": "s", "fields": [{"id": "one", "name": "one"}]},
+                "target_schema": {"id": "t", "fields": [{"id": "one", "name": "one"}]},
+                "expected": {"one": "one"},
+                "review_onyl": ["one"],
+            }
+        ],
+    }
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(PolymorphError, match="unknown fields: review_onyl"):
+        args.func(args)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda payload: payload.update(version=True), "version 1"),
+        (lambda payload: payload["cases"][0].update(id=7), "invalid id"),
+        (lambda payload: payload.update(provenance={"contains_customer_data": "no"}), "boolean"),
+        (lambda payload: payload.update(provenance={"source": "made up"}), "unknown fields"),
+    ],
+)
+def test_mapping_benchmark_rejects_ambiguous_manifest_metadata(tmp_path, mutation, message) -> None:
+    payload = {
+        "version": 1,
+        "cases": [
+            {
+                "id": "case",
+                "source_schema": {"id": "s", "fields": [{"id": "one", "name": "one"}]},
+                "target_schema": {"id": "t", "fields": [{"id": "one", "name": "one"}]},
+                "expected": {"one": "one"},
+            }
+        ],
+    }
+    mutation(payload)
+    manifest = tmp_path / "corpus.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    args = build_parser().parse_args(["benchmark", "mapping", str(manifest)])
+
+    with pytest.raises(PolymorphError, match=message):
+        args.func(args)
+
+
+def test_mapping_benchmark_rejects_unknown_lookup_key_fields(tmp_path) -> None:
+    payload = {
+        "version": 1,
+        "cases": [
+            {
+                "id": "typed-relation",
+                "source_schema": {"id": "s", "fields": [{"id": "one", "name": "one"}]},
+                "target_schema": {
+                    "id": "t",
+                    "fields": [{"id": "one", "name": "one"}],
+                    "relations": [
+                        {
+                            "source_field_id": "one",
+                            "target_container": "parent",
+                            "target_field": "id",
+                            "lookup_keys": [
+                                {"name": "business_key", "data_type": "string", "typo": True}
+                            ],
+                        }
+                    ],
+                },
+                "expected": {"one": "one"},
+            }
+        ],
+    }
+    manifest = tmp_path / "corpus.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    args = build_parser().parse_args(["benchmark", "mapping", str(manifest)])
+
+    with pytest.raises(PolymorphError, match="unknown fields: typo"):
+        args.func(args)
+
+
+@pytest.mark.parametrize(
+    "extra_args, message",
+    [
+        (["--require-auto-precision", "1.01"], "between zero and one"),
+        (["--require-automation-coverage", "-0.01"], "between zero and one"),
+        (["--require-suggestion-accuracy", "1.01"], "between zero and one"),
+        (["--max-unsafe-auto", "-1"], "must not be negative"),
+    ],
+)
+def test_mapping_benchmark_validates_gate_ranges(extra_args, message) -> None:
+    args = build_parser().parse_args(["benchmark", "mapping", "missing.json", *extra_args])
+
+    with pytest.raises(ValueError, match=message):
+        args.func(args)
 
 
 def test_prepare_runs_safe_one_command_workflow_and_remembers_recipe(tmp_path, capsys) -> None:
@@ -318,6 +488,336 @@ def test_audit_verify_does_not_initialize_an_existing_empty_file(tmp_path) -> No
         args.func(args)
 
     assert audit.read_bytes() == b""
+
+
+def test_event_summary_and_health_gate_are_machine_usable(tmp_path, capsys) -> None:
+    from polymorph.observability import EventStream
+
+    path = tmp_path / "operational-events.jsonl"
+    run_id = "11" * 16
+    stream = EventStream(path, run_id=run_id)
+    correlation_id = stream.correlation_id("workflow")
+    stream.emit(
+        component="workflow_benchmark",
+        event_type="workflow_started",
+        status="started",
+        correlation_id=correlation_id,
+        item_count=0,
+    )
+    stream.emit(
+        component="workflow_benchmark",
+        event_type="workflow_completed",
+        status="passed",
+        correlation_id=correlation_id,
+        item_count=0,
+    )
+
+    summary_args = build_parser().parse_args(["events", "summary", str(path), "--run-id", run_id])
+    summary_args.func(summary_args)
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["valid"] is True
+    assert summary["events"] == 2
+    assert summary["verification"] == "structural"
+
+    check_args = build_parser().parse_args(["events", "check", str(path), "--run-id", run_id])
+    check_args.func(check_args)
+    healthy = json.loads(capsys.readouterr().out)
+    assert healthy["healthy"] is True
+    assert healthy["health_reasons"] == []
+    assert healthy["health_diagnostics"] == []
+    assert healthy["workflow_counts_valid"] is True
+
+    stream.emit(
+        component="destination_runtime",
+        event_type="delivery",
+        status="quarantined",
+        correlation_id=stream.correlation_id("record"),
+        reason_code="write_outcome_unknown",
+        item_count=1,
+    )
+    with pytest.raises(SystemExit, match="10"):
+        check_args.func(check_args)
+    unhealthy = json.loads(capsys.readouterr().out)
+    assert unhealthy["healthy"] is False
+    assert unhealthy["unhealthy_statuses"] == {"quarantined": 1}
+    assert unhealthy["health_reasons"] == [
+        "operational_failure_status_present",
+        "operational_run_not_closed",
+    ]
+    assert unhealthy["health_diagnostics"][0]["category"] == "observability"
+
+
+def test_event_commands_reject_a_missing_stream(tmp_path) -> None:
+    path = tmp_path / "missing-events.jsonl"
+    args = build_parser().parse_args(["events", "summary", str(path)])
+
+    with pytest.raises(PolymorphError, match="does not exist"):
+        args.func(args)
+
+    assert not path.exists()
+
+
+def test_event_commands_do_not_follow_stream_symlinks(tmp_path) -> None:
+    from polymorph.observability import EventStream
+
+    target = tmp_path / "target.jsonl"
+    EventStream(target, run_id="44" * 16).emit(
+        component="runtime",
+        event_type="workflow_started",
+        status="started",
+    )
+    link = tmp_path / "link.jsonl"
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+    args = build_parser().parse_args(["events", "summary", str(link)])
+
+    with pytest.raises(IntegrityError, match="not a regular file"):
+        args.func(args)
+
+
+def test_event_health_gate_rejects_duplicate_lifecycle_events(tmp_path, capsys) -> None:
+    from polymorph.observability import EventStream
+
+    path = tmp_path / "operational-events.jsonl"
+    run_id = "22" * 16
+    stream = EventStream(path, run_id=run_id)
+    correlation_id = stream.correlation_id("workflow")
+    for event_type, status in (
+        ("workflow_started", "started"),
+        ("workflow_started", "started"),
+        ("workflow_completed", "passed"),
+        ("workflow_completed", "passed"),
+    ):
+        stream.emit(
+            component="workflow_benchmark",
+            event_type=event_type,
+            status=status,
+            correlation_id=correlation_id,
+            item_count=0,
+        )
+
+    args = build_parser().parse_args(["events", "check", str(path), "--run-id", run_id])
+    with pytest.raises(SystemExit, match="10"):
+        args.func(args)
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["healthy"] is False
+    assert payload["unclosed_run_count"] == 1
+    assert payload["health_reasons"] == ["operational_run_not_closed"]
+
+
+@pytest.mark.parametrize(
+    "variant", ["out_of_order", "wrong_component", "wrong_correlation", "wrong_status"]
+)
+def test_event_health_gate_validates_lifecycle_semantics(tmp_path, capsys, variant: str) -> None:
+    from polymorph.observability import EventStream
+
+    path = tmp_path / f"{variant}.jsonl"
+    run_id = "55" * 16
+    stream = EventStream(path, run_id=run_id)
+    first_id = "66" * 16
+    second_id = "77" * 16 if variant == "wrong_correlation" else first_id
+    events = [
+        ("workflow_started", "started", first_id),
+        (
+            "workflow_completed",
+            "started" if variant == "wrong_status" else "passed",
+            second_id,
+        ),
+    ]
+    if variant == "out_of_order":
+        events.reverse()
+    for event_type, status, correlation_id in events:
+        stream.emit(
+            component=(
+                "destination_runtime"
+                if variant == "wrong_component" and event_type == "workflow_started"
+                else "workflow_benchmark"
+            ),
+            event_type=event_type,
+            status=status,
+            correlation_id=correlation_id,
+            item_count=0,
+        )
+
+    args = build_parser().parse_args(["events", "check", str(path), "--run-id", run_id])
+    with pytest.raises(SystemExit, match="10"):
+        args.func(args)
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["healthy"] is False
+    assert payload["workflow_lifecycle_valid"] is False
+    expected_reasons = ["operational_run_not_closed"]
+    if variant in {"wrong_component", "wrong_status"}:
+        expected_reasons.append("operational_event_contract_invalid")
+    assert payload["health_reasons"] == expected_reasons
+
+
+def test_event_health_gate_rejects_ambiguous_delivery(tmp_path, capsys) -> None:
+    from polymorph.observability import EventStream
+
+    path = tmp_path / "operational-events.jsonl"
+    run_id = "33" * 16
+    stream = EventStream(path, run_id=run_id)
+    workflow_id = stream.correlation_id("workflow")
+    stream.emit(
+        component="workflow_benchmark",
+        event_type="workflow_started",
+        status="started",
+        correlation_id=workflow_id,
+        item_count=0,
+    )
+    stream.emit(
+        component="destination_runtime",
+        event_type="delivery",
+        status="ambiguous",
+        correlation_id=stream.correlation_id("record"),
+        reason_code="write_outcome_unknown",
+        item_count=1,
+    )
+    stream.emit(
+        component="workflow_benchmark",
+        event_type="workflow_completed",
+        status="passed",
+        correlation_id=workflow_id,
+        item_count=0,
+    )
+
+    args = build_parser().parse_args(["events", "check", str(path), "--run-id", run_id])
+    with pytest.raises(SystemExit, match="10"):
+        args.func(args)
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["healthy"] is False
+    assert payload["unhealthy_statuses"] == {"ambiguous": 1}
+    assert payload["reason_counts"] == {"write_outcome_unknown": 1}
+    assert payload["health_reasons"] == ["operational_failure_status_present"]
+
+
+def test_event_health_gate_rejects_invalid_intermediate_event_contract(tmp_path, capsys) -> None:
+    from polymorph.observability import EventStream
+
+    path = tmp_path / "invalid-event-contract.jsonl"
+    run_id = "88" * 16
+    stream = EventStream(path, run_id=run_id)
+    workflow_id = stream.correlation_id("workflow")
+    stream.emit(
+        component="workflow_benchmark",
+        event_type="workflow_started",
+        status="started",
+        correlation_id=workflow_id,
+        item_count=0,
+    )
+    stream.emit(
+        component="destination_runtime",
+        event_type="delivery",
+        status="started",
+        correlation_id=stream.correlation_id("record"),
+        item_count=1,
+    )
+    stream.emit(
+        component="workflow_benchmark",
+        event_type="workflow_completed",
+        status="passed",
+        correlation_id=workflow_id,
+        item_count=0,
+    )
+
+    args = build_parser().parse_args(["events", "check", str(path), "--run-id", run_id])
+    with pytest.raises(SystemExit, match="10"):
+        args.func(args)
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["workflow_lifecycle_valid"] is True
+    assert payload["event_contract_valid"] is False
+    assert payload["health_reasons"] == ["operational_event_contract_invalid"]
+
+
+def test_event_health_gate_rejects_duplicate_event_ids(tmp_path, capsys) -> None:
+    from polymorph.observability import EventStream
+
+    path = tmp_path / "duplicate-event-id.jsonl"
+    run_id = "99" * 16
+    stream = EventStream(path, run_id=run_id)
+    workflow_id = stream.correlation_id("workflow")
+    stream.emit(
+        component="workflow_benchmark",
+        event_type="workflow_started",
+        status="started",
+        correlation_id=workflow_id,
+        item_count=1,
+    )
+    delivery = stream.emit(
+        component="destination_runtime",
+        event_type="delivery",
+        status="delivered",
+        correlation_id=stream.correlation_id("record"),
+        item_count=1,
+    )
+    stream.emit(
+        component="workflow_benchmark",
+        event_type="batch_completed",
+        status="passed",
+        correlation_id=stream.correlation_id("batch:1"),
+        item_count=1,
+    )
+    stream.append(delivery)
+    stream.emit(
+        component="workflow_benchmark",
+        event_type="workflow_completed",
+        status="passed",
+        correlation_id=workflow_id,
+        item_count=1,
+    )
+
+    args = build_parser().parse_args(["events", "check", str(path), "--run-id", run_id])
+    with pytest.raises(SystemExit, match="10"):
+        args.func(args)
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["workflow_lifecycle_valid"] is True
+    assert payload["event_ids_unique"] is False
+    assert payload["duplicate_event_ids"] == 1
+    assert payload["health_reasons"] == [
+        "operational_event_contract_invalid",
+        "operational_workflow_count_mismatch",
+    ]
+
+
+def test_event_health_gate_rejects_missing_required_item_counts(tmp_path, capsys) -> None:
+    from polymorph.observability import EventStream
+
+    path = tmp_path / "missing-event-counts.jsonl"
+    run_id = "aa" * 16
+    stream = EventStream(path, run_id=run_id)
+    workflow_id = stream.correlation_id("workflow")
+    stream.emit(
+        component="workflow_benchmark",
+        event_type="workflow_started",
+        status="started",
+        correlation_id=workflow_id,
+    )
+    stream.emit(
+        component="workflow_benchmark",
+        event_type="workflow_completed",
+        status="passed",
+        correlation_id=workflow_id,
+    )
+
+    args = build_parser().parse_args(["events", "check", str(path), "--run-id", run_id])
+    with pytest.raises(SystemExit, match="10"):
+        args.func(args)
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["workflow_lifecycle_valid"] is True
+    assert payload["event_contract_valid"] is False
+    assert payload["workflow_counts_valid"] is False
+    assert payload["health_reasons"] == [
+        "operational_event_contract_invalid",
+        "operational_workflow_count_mismatch",
+    ]
 
 
 def test_explain_returns_safe_operator_guidance(capsys) -> None:

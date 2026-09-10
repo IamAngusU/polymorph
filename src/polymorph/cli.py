@@ -18,7 +18,12 @@ from sqlalchemy.exc import ArgumentError
 
 from . import __version__
 from .audit import AuditLog
-from .benchmark import MappingBenchmarkCase, benchmark_call, benchmark_mapping_cases
+from .benchmark import (
+    BenchmarkResult,
+    MappingBenchmarkCase,
+    benchmark_call,
+    benchmark_mapping_cases,
+)
 from .connectors.base import SourceConnector
 from .connectors.csv_file import CsvConnector
 from .connectors.database import DatabaseConnector
@@ -39,6 +44,7 @@ from .matching.semantic import (
 )
 from .models.mapping import MappingDecision
 from .models.schema import SchemaDescriptor
+from .observability import EventStream
 from .paths import model_home, recipe_store_path
 from .planning import build_plan
 from .preflight import PreflightReport, PreflightRunner
@@ -425,6 +431,80 @@ def _audit_export(args: argparse.Namespace) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(text, encoding="utf-8")
     _emit({"events_file": str(output)})
+
+
+def _event_stream_path(value: str) -> Path:
+    # Preserve the lexical path so EventStream can reject symlinks instead of following one.
+    path = Path(os.path.abspath(Path(value).expanduser()))
+    if not path.is_file():
+        raise PolymorphError(f"operational event stream does not exist: {path}")
+    return path
+
+
+def _events_summary(args: argparse.Namespace) -> None:
+    _protect_write_path(args.output, args.path)
+    stream = EventStream(_event_stream_path(args.path))
+    summary = stream.summary(run_id=args.run_id)
+    payload = summary.as_dict()
+    payload["valid"] = True
+    payload["verification"] = "structural"
+    payload["reason_diagnostics"] = [
+        {"count": count, **_diagnostic_payload(code)} for code, count in summary.reasons.items()
+    ]
+    _emit(payload, output=args.output)
+
+
+def _events_check(args: argparse.Namespace) -> None:
+    _protect_write_path(args.output, args.path)
+    stream = EventStream(_event_stream_path(args.path))
+    summary = stream.summary(run_id=args.run_id)
+    healthy_statuses = {"delivered", "duplicate", "passed", "started"}
+    status_counts = {
+        status: count
+        for status, count in summary.statuses.items()
+        if status not in healthy_statuses
+    }
+    unclosed_run_count = int(summary.events > 0 and summary.workflow_lifecycle_valid is not True)
+    health_reasons: list[str] = []
+    if not summary.events:
+        health_reasons.append("operational_run_not_found")
+    if status_counts or summary.reasons:
+        health_reasons.append("operational_failure_status_present")
+    if unclosed_run_count:
+        health_reasons.append("operational_run_not_closed")
+    if not summary.event_contract_valid:
+        health_reasons.append("operational_event_contract_invalid")
+    if summary.workflow_lifecycle_valid is True and summary.workflow_counts_valid is not True:
+        health_reasons.append("operational_workflow_count_mismatch")
+    healthy = not health_reasons
+    _emit(
+        {
+            "healthy": healthy,
+            "valid": True,
+            "verification": "structural",
+            "run_id": args.run_id,
+            "events": summary.events,
+            "first_event_type": summary.first_event_type,
+            "last_event_type": summary.last_event_type,
+            "workflow_lifecycle_valid": summary.workflow_lifecycle_valid,
+            "event_ids_unique": summary.event_ids_unique,
+            "duplicate_event_ids": summary.duplicate_event_ids,
+            "event_contract_valid": summary.event_contract_valid,
+            "workflow_counts_valid": summary.workflow_counts_valid,
+            "unhealthy_statuses": status_counts,
+            "unclosed_run_count": unclosed_run_count,
+            "health_reasons": health_reasons,
+            "health_diagnostics": [_diagnostic_payload(code) for code in health_reasons],
+            "reason_counts": summary.reasons,
+            "reason_diagnostics": [
+                {"count": count, **_diagnostic_payload(code)}
+                for code, count in summary.reasons.items()
+            ],
+        },
+        output=args.output,
+    )
+    if not healthy:
+        raise SystemExit(10)
 
 
 def _quarantine_list(args: argparse.Namespace) -> None:
@@ -991,6 +1071,9 @@ def _doctor(args: argparse.Namespace) -> None:
                 "recipe_outcomes_recorded_by_prepare": True,
                 "recipe_rejection_threshold": DEFAULT_RECIPE_REJECTION_THRESHOLD,
                 "adaptive_recipe_guard": True,
+                "local_operational_event_stream": True,
+                "operational_run_and_correlation_ids": True,
+                "operational_health_gate": True,
                 "complete_event_stream": False,
                 "alerting_service": False,
             },
@@ -1018,7 +1101,7 @@ def _benchmark_inspect(args: argparse.Namespace) -> None:
         lambda: _inspector(args.magika).inspect(args.path),
         trace_python_allocations=args.tracemalloc,
     )
-    metric_payloads = [content_metrics.as_dict()]
+    metric_payloads = [_benchmark_resource_payload(content_metrics)]
     payload: dict[str, object] = {
         "content": report.as_dict(),
         "measurement": _benchmark_measurement_payload(args.tracemalloc),
@@ -1033,7 +1116,7 @@ def _benchmark_inspect(args: argparse.Namespace) -> None:
                 trace_python_allocations=args.tracemalloc,
             )
             payload["schema"] = schema_to_dict(schema)
-            metric_payloads.append(schema_metrics.as_dict())
+            metric_payloads.append(_benchmark_resource_payload(schema_metrics))
             if args.records > 0:
 
                 def read_records() -> list[Mapping[str, object]]:
@@ -1050,24 +1133,158 @@ def _benchmark_inspect(args: argparse.Namespace) -> None:
                     result_count=len,
                     trace_python_allocations=args.tracemalloc,
                 )
-                metric_payloads.append(records_metrics.as_dict())
+                metric_payloads.append(_benchmark_resource_payload(records_metrics))
     _emit(payload, output=args.output)
+
+
+def _benchmark_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise PolymorphError("mapping benchmark manifest contains a duplicate JSON key")
+        payload[key] = value
+    return payload
+
+
+def _reject_benchmark_json_constant(value: str) -> object:
+    raise PolymorphError(f"mapping benchmark manifest contains non-finite JSON: {value}")
+
+
+def _reject_unknown_keys(
+    payload: Mapping[str, object], allowed: frozenset[str], label: str
+) -> None:
+    unknown = set(payload) - allowed
+    if unknown:
+        raise PolymorphError(f"{label} contains unknown fields: {', '.join(sorted(unknown))}")
+
+
+def _validate_benchmark_schema_shape(payload: Mapping[str, object], label: str) -> None:
+    _reject_unknown_keys(payload, frozenset({"id", "fields", "relations", "metadata"}), label)
+    fields = payload.get("fields")
+    if isinstance(fields, list):
+        allowed_field_keys = frozenset(
+            {
+                "id",
+                "name",
+                "data_type",
+                "nullable",
+                "destination_generated",
+                "sensitivity",
+                "role",
+                "description",
+                "aliases",
+                "container",
+            }
+        )
+        for field_index, field in enumerate(fields, start=1):
+            if isinstance(field, dict):
+                _reject_unknown_keys(field, allowed_field_keys, f"{label} field {field_index}")
+    relations = payload.get("relations", [])
+    if isinstance(relations, list):
+        allowed_relation_keys = frozenset(
+            {
+                "source_field_id",
+                "target_container",
+                "target_field",
+                "name",
+                "target_schema",
+                "lookup_keys",
+            }
+        )
+        for relation_index, relation in enumerate(relations, start=1):
+            if isinstance(relation, dict):
+                _reject_unknown_keys(
+                    relation,
+                    allowed_relation_keys,
+                    f"{label} relation {relation_index}",
+                )
+                lookup_keys = relation.get("lookup_keys", [])
+                if isinstance(lookup_keys, list):
+                    for key_index, key in enumerate(lookup_keys, start=1):
+                        if isinstance(key, dict):
+                            _reject_unknown_keys(
+                                key,
+                                frozenset({"name", "data_type"}),
+                                (f"{label} relation {relation_index} lookup key {key_index}"),
+                            )
 
 
 def _benchmark_mapping(args: argparse.Namespace) -> None:
     _protect_write_path(args.output, args.manifest)
+    if args.require_auto_precision is not None and not 0.0 <= args.require_auto_precision <= 1.0:
+        raise ValueError("required auto precision must be between zero and one")
+    if (
+        args.require_automation_coverage is not None
+        and not 0.0 <= args.require_automation_coverage <= 1.0
+    ):
+        raise ValueError("required automation coverage must be between zero and one")
+    if (
+        args.require_suggestion_accuracy is not None
+        and not 0.0 <= args.require_suggestion_accuracy <= 1.0
+    ):
+        raise ValueError("required suggestion accuracy must be between zero and one")
+    if args.max_unsafe_auto < 0:
+        raise ValueError("maximum unsafe automatic decisions must not be negative")
     manifest_path = Path(args.manifest).expanduser().resolve()
-    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or payload.get("version") != 1:
+    try:
+        payload = json.loads(
+            manifest_path.read_text(encoding="utf-8"),
+            object_pairs_hook=_benchmark_json_object,
+            parse_constant=_reject_benchmark_json_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PolymorphError("mapping benchmark manifest is not valid UTF-8 JSON") from exc
+    if (
+        not isinstance(payload, dict)
+        or isinstance(payload.get("version"), bool)
+        or payload.get("version") != 1
+    ):
         raise PolymorphError("mapping benchmark manifest must be an object with version 1")
+    _reject_unknown_keys(
+        payload,
+        frozenset({"version", "description", "provenance", "cases"}),
+        "mapping benchmark manifest",
+    )
+    description = payload.get("description")
+    if description is not None and (
+        not isinstance(description, str) or not description.strip() or len(description) > 4096
+    ):
+        raise PolymorphError("mapping benchmark manifest description is invalid")
+    provenance = payload.get("provenance")
+    if provenance is not None:
+        if not isinstance(provenance, dict):
+            raise PolymorphError("mapping benchmark manifest provenance must be an object")
+        _reject_unknown_keys(
+            provenance,
+            frozenset(
+                {
+                    "kind",
+                    "contains_customer_data",
+                    "suitable_for_accuracy_marketing",
+                }
+            ),
+            "mapping benchmark provenance",
+        )
+        kind = provenance.get("kind")
+        if kind is not None and (not isinstance(kind, str) or not kind.strip() or len(kind) > 512):
+            raise PolymorphError("mapping benchmark provenance kind is invalid")
+        for flag in ("contains_customer_data", "suitable_for_accuracy_marketing"):
+            if flag in provenance and not isinstance(provenance[flag], bool):
+                raise PolymorphError(f"mapping benchmark provenance {flag} must be boolean")
     raw_cases = payload.get("cases")
     if not isinstance(raw_cases, list) or not raw_cases:
         raise PolymorphError("mapping benchmark manifest must contain at least one case")
 
     cases: list[MappingBenchmarkCase] = []
+    case_ids: set[str] = set()
     for index, raw in enumerate(raw_cases, start=1):
         if not isinstance(raw, dict):
             raise PolymorphError(f"benchmark case {index} must be an object")
+        _reject_unknown_keys(
+            raw,
+            frozenset({"id", "source_schema", "target_schema", "expected", "review_only"}),
+            f"benchmark case {index}",
+        )
         source_payload = raw.get("source_schema")
         target_payload = raw.get("target_schema")
         expected_payload = raw.get("expected")
@@ -1075,6 +1292,8 @@ def _benchmark_mapping(args: argparse.Namespace) -> None:
             raise PolymorphError(
                 f"benchmark case {index} must contain inline source/target schemas"
             )
+        _validate_benchmark_schema_shape(source_payload, f"benchmark case {index} source schema")
+        _validate_benchmark_schema_shape(target_payload, f"benchmark case {index} target schema")
         if not isinstance(expected_payload, dict) or not expected_payload:
             raise PolymorphError(f"benchmark case {index} must contain expected mappings")
         expected: dict[str, str | None] = {}
@@ -1082,12 +1301,51 @@ def _benchmark_mapping(args: argparse.Namespace) -> None:
             if target_id is not None and not isinstance(target_id, str):
                 raise PolymorphError(f"benchmark case {index} has an invalid expected target")
             expected[str(source_id)] = target_id
+        case_id_value = raw.get("id")
+        if (
+            not isinstance(case_id_value, str)
+            or not case_id_value.strip()
+            or "\x00" in case_id_value
+            or len(case_id_value) > 256
+        ):
+            raise PolymorphError(f"benchmark case {index} has an invalid id")
+        case_id = case_id_value
+        if case_id in case_ids:
+            raise PolymorphError("mapping benchmark case ids must be unique")
+        case_ids.add(case_id)
+        source_schema = schema_from_dict(source_payload)
+        target_schema = schema_from_dict(target_payload)
+        source_ids = {field.id for field in source_schema.fields}
+        if set(expected) != source_ids:
+            raise PolymorphError(
+                f"benchmark case {index} must label every source field exactly once"
+            )
+        target_ids = {field.id for field in target_schema.fields}
+        if any(
+            target_id is not None and target_id not in target_ids for target_id in expected.values()
+        ):
+            raise PolymorphError(f"benchmark case {index} references an unknown target field")
+        review_only_payload = raw.get("review_only", [])
+        if (
+            not isinstance(review_only_payload, list)
+            or any(not isinstance(item, str) for item in review_only_payload)
+            or len(set(review_only_payload)) != len(review_only_payload)
+        ):
+            raise PolymorphError(f"benchmark case {index} has invalid review-only labels")
+        review_only = frozenset(review_only_payload)
+        if not review_only <= source_ids:
+            raise PolymorphError(f"benchmark case {index} reviews an unknown source field")
+        if any(expected[source_id] is None for source_id in review_only):
+            raise PolymorphError(
+                f"benchmark case {index} review-only fields must have an expected target"
+            )
         cases.append(
             MappingBenchmarkCase(
-                id=str(raw.get("id") or f"case-{index}"),
-                source_schema=schema_from_dict(source_payload),
-                target_schema=schema_from_dict(target_payload),
+                id=case_id,
+                source_schema=source_schema,
+                target_schema=target_schema,
                 expected=expected,
+                review_only=review_only,
             )
         )
 
@@ -1101,7 +1359,7 @@ def _benchmark_mapping(args: argparse.Namespace) -> None:
     result = {
         "mapping": report.as_dict(),
         "measurement": _benchmark_measurement_payload(args.tracemalloc),
-        "resources": metrics.as_dict(),
+        "resources": _benchmark_resource_payload(metrics),
     }
     _emit(result, output=args.output)
 
@@ -1109,8 +1367,18 @@ def _benchmark_mapping(args: argparse.Namespace) -> None:
         precision = report.auto_precision
         if precision is None or precision < args.require_auto_precision:
             raise SystemExit(5)
-    if report.unsafe_auto_on_unmappable > args.max_unsafe_auto:
+    if report.decision_contract_failures or report.auto_incorrect > args.max_unsafe_auto:
         raise SystemExit(6)
+    if (
+        args.require_automation_coverage is not None
+        and report.automation_coverage < args.require_automation_coverage
+    ):
+        raise SystemExit(8)
+    if (
+        args.require_suggestion_accuracy is not None
+        and report.suggestion_accuracy < args.require_suggestion_accuracy
+    ):
+        raise SystemExit(9)
 
 
 def _benchmark_workflow(args: argparse.Namespace) -> None:
@@ -1122,8 +1390,7 @@ def _benchmark_workflow(args: argparse.Namespace) -> None:
         signed_audit=args.audit,
         trace_python_allocations=args.tracemalloc,
     )
-    resource_payload = resources.as_dict()
-    resource_payload.pop("pid", None)
+    resource_payload = _benchmark_resource_payload(resources)
     _emit(
         {
             "benchmark": "workflow",
@@ -1169,6 +1436,14 @@ def _benchmark_measurement_payload(trace_python_allocations: bool) -> dict[str, 
             else "wall time, CPU time and optional sampled process RSS only"
         ),
     }
+
+
+def _benchmark_resource_payload(metrics: BenchmarkResult) -> dict[str, object]:
+    payload = metrics.as_dict()
+    # A process id is neither a performance metric nor stable report data. Keep it available on
+    # the in-process result for debugging, but do not write it to portable CLI artifacts.
+    payload.pop("pid", None)
+    return payload
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1368,6 +1643,8 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_mapping.add_argument("manifest")
     _add_model_options(benchmark_mapping)
     benchmark_mapping.add_argument("--require-auto-precision", type=float)
+    benchmark_mapping.add_argument("--require-automation-coverage", type=float)
+    benchmark_mapping.add_argument("--require-suggestion-accuracy", type=float)
     benchmark_mapping.add_argument("--max-unsafe-auto", type=int, default=0)
     benchmark_mapping.add_argument(
         "--tracemalloc",
@@ -1431,6 +1708,23 @@ def build_parser() -> argparse.ArgumentParser:
     audit_summary.add_argument("path")
     audit_summary.add_argument("--public-key-hex")
     audit_summary.set_defaults(func=_audit_summary)
+
+    events = sub.add_parser(
+        "events", help="validate and summarize a local payload-free operational event stream"
+    )
+    events_sub = events.add_subparsers(dest="events_command", required=True)
+    events_summary = events_sub.add_parser("summary")
+    events_summary.add_argument("path")
+    events_summary.add_argument("--run-id")
+    _add_output(events_summary)
+    events_summary.set_defaults(func=_events_summary)
+    events_check = events_sub.add_parser(
+        "check", help="exit non-zero for failed statuses, missing runs or unclosed workflows"
+    )
+    events_check.add_argument("path")
+    events_check.add_argument("--run-id", required=True)
+    _add_output(events_check)
+    events_check.set_defaults(func=_events_check)
 
     quarantine = sub.add_parser("quarantine", help="inspect sealed quarantine metadata")
     quarantine_sub = quarantine.add_subparsers(dest="quarantine_command", required=True)

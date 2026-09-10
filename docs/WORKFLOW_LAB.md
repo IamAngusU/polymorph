@@ -1,8 +1,8 @@
 # Workflow lab
 
-The workflow lab has two jobs. The workflow benchmark measures one complete successful local data
-path. The failure suite checks that uncertainty stops or reduces automation at the intended
-boundary. Neither command is a production load test.
+The workflow lab measures one complete successful local data path, checks injected failure
+boundaries, stresses local restart and concurrency recovery, and validates the resulting
+operational event stream. None of these commands is a production load test.
 
 ## Reproduce the successful workflow
 
@@ -27,19 +27,25 @@ relay acknowledgement and source acknowledgement.
 The final verification requires all requested destination rows and committed ledger entries,
 exact values for all five fixture fields independent of relay order, empty outbox and relay queues,
 empty sealed quarantine, a valid signed audit event for every delivery and absence of five known
-plaintext canaries from every blind SQLite file and sidecar.
+plaintext canaries from every blind SQLite file, sidecar and operational event file. It also
+requires a structurally valid event stream with one correlated destination event per receipt and a
+clean workflow completion.
 
 ## Reproduce the failure suite
 
 ```bash
-python -W error -m pytest tests/test_workflow_failure_lab.py --strict-config --strict-markers \
-  --durations=0 --junitxml=./.polymorph/workflow-failure-lab.xml
+python -W error -m pytest tests/test_workflow_failure_lab.py tests/test_recovery_stress.py \
+  tests/test_recovery_processes.py --strict-config --strict-markers --durations=0 \
+  --junitxml=./.polymorph/workflow-failure-and-recovery-lab.xml
 ```
 
 The executable cases and expected outcomes are also listed in
 [`benchmarks/workflow-failure-manifest.json`](../benchmarks/workflow-failure-manifest.json). The
 manifest describes expectations. The pytest assertions are the authority for whether the current
 implementation still meets them.
+
+The concurrency and restart cases are listed separately in
+[`benchmarks/recovery-manifest.json`](../benchmarks/recovery-manifest.json).
 
 ## Failure scenarios
 
@@ -60,6 +66,22 @@ decision is mocked.
 
 The file-extension case tests an explicitly selected wrong connector. Automatic CLI inspection
 would select the CSV connector from the content instead of trusting the `.xlsx` suffix.
+
+## Recovery stress scenarios
+
+The recovery suite exercises these local boundaries with real SQLite state, independent clients,
+real worker threads and separate Python processes:
+
+- twelve simultaneous retries of one source outbox item converge safely
+- six relay workers lease 24 records without overlapping ownership
+- stale lease tokens cannot acknowledge or mutate a newer lease
+- concurrent duplicate delivery produces one destination write
+- a lease may expire while an already-authorized destination write is still running
+- restart after a committed destination result but before transport acknowledgement stays duplicate
+- an unknown outcome remains `uncertain` and fail-closed across restart
+- parallel startup migrates legacy Relay and Ledger schemas without racing
+- twelve separate processes contend on each legacy Relay and Ledger startup migration without
+  duplicate schema changes or row loss
 
 ## Measured result
 
@@ -98,6 +120,19 @@ The retained successful reports are `.polymorph/workflow-lab-final-1000-1.json`,
 `.polymorph/workflow-lab-final-1000-4.json`. Retained database files are diagnostic artifacts and
 are not part of the reports.
 
+A final instrumented 1,000-record run completed in 17.870 seconds at 55.96 records per second with
+92.39 MiB sampled peak RSS. Its local stream contained 1,029 structurally valid events. Event IDs
+were unique, event semantics and workflow counters agreed, and the lifecycle closed cleanly. One
+hundred isolated durable event appends took 69.9 ms in total, with 0.67 ms p50 and 0.86 ms p95
+latency. These figures are one warmed-host sample, not a cross-platform claim.
+
+The combined ten-case recovery suite passed in 1.950 seconds. Ten repetitions of the eight threaded
+cases passed 80 of 80 in 19.067 seconds. Ten repetitions of the two 12-process migration cases
+passed 20 of 20 in 8.462 seconds across 240 child-process starts. Before the serialized migration
+fix, the parallel legacy Relay
+setup failed in 98 of 100 stress cycles with a duplicate-column error. After the fix, Relay and
+Ledger migration use exclusive SQLite initialization transactions and preserve legacy rows.
+
 ## Report safety boundaries
 
 The workflow JSON is deliberately value-free. It contains configuration, progress counts, mapping
@@ -114,6 +149,9 @@ That does not make every adjacent artifact safe to publish:
 - OS release, machine architecture and logical CPU count are reproducibility metadata, but can
   still contribute to machine fingerprinting.
 - A third-party connector can still log data outside this report. The lab cannot prove otherwise.
+- The operational event stream is payload-free but includes opaque identifiers, timestamps,
+  component names, statuses and bounded reason codes. It is local operational metadata, not an
+  anonymous artifact.
 - Sampled RSS can miss a short peak. A missing `psutil` installation produces unavailable RSS
   fields, not a zero-memory result.
 - `--tracemalloc` measures CPython allocations, omits some native allocations and materially changes
@@ -159,5 +197,6 @@ It does not guarantee a single write across every possible failure boundary. A c
 acknowledgement between an external write and the durable ledger transition creates an ambiguous
 or `uncertain` outcome. Polymorph then quarantines the sealed record and refuses an ordinary
 non-idempotent replay. Safe recovery requires destination idempotency or an explicit
-operator-authorized decision. Networked connectors, database failover and concurrent multi-process
-recovery need their own integration and fault-injection evidence.
+operator-authorized decision. Networked connectors, process crashes and database failover beyond
+the tested local SQLite concurrency cases still need their own integration and fault-injection
+evidence.

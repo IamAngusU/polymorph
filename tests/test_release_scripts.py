@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import io
+import json
 import tarfile
 from pathlib import Path
 
@@ -56,6 +58,36 @@ def test_sdist_gate_normalizes_one_release_root(tmp_path) -> None:
         "pyproject.toml",
         "src/polymorph/new_module.py",
     }
+
+
+def test_recovery_manifest_matches_every_executable_recovery_test() -> None:
+    root = Path(__file__).resolve().parent.parent
+    manifest = json.loads(
+        (root / "benchmarks" / "recovery-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["schema_version"] == 1
+    assert manifest["suite"] == "recovery-stress"
+    scenarios = manifest["scenarios"]
+    assert isinstance(scenarios, list) and scenarios
+    assert all(
+        isinstance(item, dict) and {"id", "test", "boundary", "expected"} <= set(item)
+        for item in scenarios
+    )
+    scenario_ids = [item["id"] for item in scenarios]
+    declared_tests = [item["test"] for item in scenarios]
+    assert len(scenario_ids) == len(set(scenario_ids))
+    assert len(declared_tests) == len(set(declared_tests))
+
+    executable_tests = set()
+    for test_file in ("test_recovery_stress.py", "test_recovery_processes.py"):
+        tree = ast.parse((root / "tests" / test_file).read_text(encoding="utf-8"))
+        executable_tests.update(
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name.startswith("test_")
+        )
+    assert set(declared_tests) == executable_tests
 
 
 @pytest.mark.parametrize(

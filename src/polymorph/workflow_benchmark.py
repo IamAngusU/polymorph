@@ -22,6 +22,7 @@ from .ledger import DeliveryLedger
 from .matching.hybrid import HybridMatcher
 from .models.mapping import MappingDecision, MappingPlan, MappingStatus
 from .models.schema import SchemaDescriptor
+from .observability import WORKFLOW_STAGE_COMPONENTS, EventStream, EventWriteStatus
 from .outbox import SourceOutbox
 from .planning import build_plan
 from .preflight import PreflightReport, PreflightRunner
@@ -53,26 +54,7 @@ _BLIND_STATE_DATABASES = (
 _SQLITE_FILE_SUFFIXES = ("", "-wal", "-journal", "-shm")
 _SCAN_CHUNK_BYTES = 64 * 1024
 _MAX_LATENCY_SAMPLES = 10_000
-_STAGE_ORDER = (
-    "fixture_generation",
-    "destination_setup",
-    "content_inspection",
-    "source_schema_inspection",
-    "target_schema_inspection",
-    "mapping_and_plan",
-    "full_preflight",
-    "security_and_state_setup",
-    "source_record_read",
-    "source_seal_and_outbox_stage",
-    "outbox_reload_and_relay_enqueue",
-    "relay_lease",
-    "destination_delivery",
-    "acknowledgements",
-    "destination_audit_outcome_check",
-    "end_to_end_verification",
-    "workflow_internal",
-    "resource_cleanup",
-)
+_STAGE_ORDER = WORKFLOW_STAGE_COMPONENTS
 
 
 def _percentile(values: list[float], percentile: float) -> float:
@@ -150,6 +132,7 @@ class WorkflowBenchmarkReport:
     mapping: dict[str, int]
     preflight: dict[str, object]
     final_state: dict[str, object]
+    observability: dict[str, object]
     stages: tuple[WorkflowStageResult, ...]
     failure: WorkflowFailure | None = None
 
@@ -179,6 +162,7 @@ class WorkflowBenchmarkReport:
             "mapping": self.mapping,
             "preflight": self.preflight,
             "final_state": self.final_state,
+            "observability": self.observability,
             "stages": [stage.as_dict() for stage in self.stages],
             "failure": self.failure.as_dict() if self.failure is not None else None,
         }
@@ -236,6 +220,12 @@ class _WorkflowStopped(Exception):
     def __init__(self, failure: WorkflowFailure) -> None:
         super().__init__(failure.reason_code)
         self.failure = failure
+
+
+class _OperationalEventAppendFailed(Exception):
+    def __init__(self, error_type: str) -> None:
+        super().__init__("observability_append_failed")
+        self.error_type = error_type
 
 
 class _StageBook:
@@ -460,6 +450,7 @@ def _make_transport_runtime(
     target_schema: SchemaDescriptor,
     plan: MappingPlan,
     destination: DatabaseConnector,
+    events: EventStream,
     *,
     signed_audit: bool,
 ) -> _TransportRuntime:
@@ -514,6 +505,7 @@ def _make_transport_runtime(
         plan=plan,
         target_schema=target_schema,
         audit=audit,
+        events=events,
         actor_id="workflow-benchmark-destination",
     )
     return _TransportRuntime(
@@ -595,6 +587,13 @@ def _check_audit_outcome(
     )
     if receipt.audit_status is not expected_audit:
         raise _BenchmarkCheckFailed("destination_audit_status_unexpected")
+
+
+def _check_operational_event_outcome(receipt: DeliveryReceipt) -> None:
+    if receipt.operational_event_status is not EventWriteStatus.RECORDED:
+        raise _BenchmarkCheckFailed("destination_operational_event_status_unexpected")
+    if not receipt.run_id or not receipt.correlation_id:
+        raise _BenchmarkCheckFailed("destination_operational_event_context_missing")
 
 
 def _ack_one(transport: _TransportRuntime, leased: LeasedRecord, lease_owner: str) -> None:
@@ -687,7 +686,8 @@ def _known_plaintext_canaries_absent(root: Path) -> bool:
         for state_path in _sqlite_family_paths(root, database_name):
             if _file_contains_any(state_path, canaries):
                 return False
-    return True
+    event_path = root / "operational-events.jsonl"
+    return not (event_path.is_file() and _file_contains_any(event_path, canaries))
 
 
 def _artifact_storage_bytes(root: Path) -> dict[str, int]:
@@ -699,6 +699,7 @@ def _artifact_storage_bytes(root: Path) -> dict[str, int]:
         "delivery_ledger": _sqlite_family_paths(root, "delivery-ledger.sqlite"),
         "sealed_spool": _sqlite_family_paths(root, "sealed-spool.sqlite"),
         "audit": _sqlite_family_paths(root, "audit.sqlite"),
+        "operational_events": (root / "operational-events.jsonl",),
     }
     storage = {
         name: sum(path.stat().st_size for path in paths if path.is_file())
@@ -831,6 +832,152 @@ def _preflight_payload(report: PreflightReport | None) -> dict[str, object]:
     }
 
 
+def _emit_required_event(
+    events: EventStream,
+    *,
+    component: str,
+    event_type: str,
+    status: str,
+    correlation_id: str,
+    reason_code: str | None = None,
+    item_count: int | None = None,
+) -> None:
+    try:
+        events.emit(
+            component=component,
+            event_type=event_type,
+            status=status,
+            correlation_id=correlation_id,
+            reason_code=reason_code,
+            item_count=item_count,
+        )
+    except Exception as exc:
+        raise _OperationalEventAppendFailed(_safe_error_type(exc)) from exc
+
+
+def _finalize_observability(
+    events: EventStream,
+    stages: _StageBook,
+    workflow_correlation_id: str,
+    progress: _Progress,
+    failure: WorkflowFailure | None,
+) -> tuple[WorkflowFailure | None, dict[str, object]]:
+    append_complete = True
+    stream_valid = False
+    observability_failure = (
+        failure.reason_code
+        if failure is not None
+        and failure.reason_code
+        in {
+            "destination_operational_event_status_unexpected",
+            "observability_append_failed",
+            "observability_event_contract_invalid",
+            "observability_event_count_mismatch",
+            "observability_lifecycle_invalid",
+            "observability_stream_invalid",
+        }
+        else None
+    )
+    try:
+        for stage in stages.results():
+            events.emit(
+                component=stage.name,
+                event_type="stage_summary",
+                status=stage.status,
+                correlation_id=events.correlation_id(f"stage:{stage.name}"),
+                reason_code=(
+                    failure.reason_code
+                    if failure is not None and failure.stage == stage.name
+                    else None
+                ),
+                duration_ms=stage.wall_ms,
+                item_count=stage.items_processed,
+            )
+        events.emit(
+            component="workflow_benchmark",
+            event_type="workflow_completed",
+            status="passed" if failure is None else "failed",
+            correlation_id=workflow_correlation_id,
+            reason_code=failure.reason_code if failure is not None else None,
+            item_count=progress.records_delivered,
+        )
+    except Exception as exc:
+        append_complete = False
+        observability_failure = "observability_append_failed"
+        if failure is None:
+            failure = stages.mark_failed(
+                "workflow_internal",
+                "operations",
+                observability_failure,
+                error_type=_safe_error_type(exc),
+            )
+
+    try:
+        summary = events.summary(run_id=events.run_id).as_dict()
+        stream_valid = bool(summary["event_contract_valid"])
+        if summary["event_contract_valid"] is not True:
+            observability_failure = observability_failure or "observability_event_contract_invalid"
+            if failure is None:
+                failure = stages.mark_failed(
+                    "workflow_internal",
+                    "operations",
+                    observability_failure,
+                )
+        elif summary["workflow_lifecycle_valid"] is not True:
+            observability_failure = observability_failure or "observability_lifecycle_invalid"
+            if failure is None:
+                failure = stages.mark_failed(
+                    "workflow_internal",
+                    "operations",
+                    observability_failure,
+                )
+        elif summary["workflow_counts_valid"] is not True:
+            observability_failure = observability_failure or "observability_event_count_mismatch"
+            if failure is None:
+                failure = stages.mark_failed(
+                    "workflow_internal",
+                    "operations",
+                    observability_failure,
+                )
+    except Exception as exc:
+        summary = {
+            "run_id": events.run_id,
+            "events": None,
+            "components": {},
+            "event_types": {},
+            "statuses": {},
+            "reasons": {},
+            "first_timestamp": None,
+            "last_timestamp": None,
+            "first_event_type": None,
+            "last_event_type": None,
+            "workflow_lifecycle_valid": False,
+            "event_ids_unique": False,
+            "duplicate_event_ids": None,
+            "event_contract_valid": False,
+            "workflow_counts_valid": None,
+        }
+        observability_failure = observability_failure or "observability_stream_invalid"
+        if failure is None:
+            failure = stages.mark_failed(
+                "workflow_internal",
+                "operations",
+                observability_failure,
+                error_type=_safe_error_type(exc),
+            )
+    summary.update(
+        {
+            "format": "jsonl",
+            "schema_version": 1,
+            "durable_appends": True,
+            "stream_valid": stream_valid,
+            "run_closed": append_complete and stream_valid and observability_failure is None,
+            "failure_reason_code": observability_failure,
+        }
+    )
+    return failure, summary
+
+
 def _execute_workflow(
     root: Path,
     *,
@@ -841,6 +988,8 @@ def _execute_workflow(
 ) -> WorkflowBenchmarkReport:
     stages = _StageBook()
     progress = _Progress()
+    events = EventStream(root / "operational-events.jsonl")
+    workflow_correlation_id = events.correlation_id("workflow")
     mapping_summary = {
         "source_fields": 0,
         "target_fields": 0,
@@ -858,6 +1007,14 @@ def _execute_workflow(
     destination_path = root / "destination.sqlite"
 
     try:
+        _emit_required_event(
+            events,
+            component="workflow_benchmark",
+            event_type="workflow_started",
+            status="started",
+            correlation_id=workflow_correlation_id,
+            item_count=records,
+        )
         stages.measure(
             "fixture_generation",
             "records",
@@ -917,6 +1074,7 @@ def _execute_workflow(
                 target_schema,
                 plan,
                 destination,
+                events,
                 signed_audit=signed_audit,
             ),
             items=6 if signed_audit else 5,
@@ -992,7 +1150,20 @@ def _execute_workflow(
                     partial(_check_audit_outcome, transport, receipt),
                     items=1 if transport.audit is not None else 0,
                 )
+                stages.measure(
+                    "destination_operational_event_check",
+                    "events",
+                    partial(_check_operational_event_outcome, receipt),
+                )
             progress.batches_completed += 1
+            _emit_required_event(
+                events,
+                component="workflow_benchmark",
+                event_type="batch_completed",
+                status="passed",
+                correlation_id=events.correlation_id(f"batch:{batch_number}"),
+                item_count=current_batch_size,
+            )
 
         if not source_exhausted and progress.records_read == records:
             extra_record = stages.measure(
@@ -1013,6 +1184,13 @@ def _execute_workflow(
             )
     except _WorkflowStopped as exc:
         failure = exc.failure
+    except _OperationalEventAppendFailed as exc:
+        failure = stages.mark_failed(
+            "workflow_internal",
+            "operations",
+            "observability_append_failed",
+            error_type=exc.error_type,
+        )
     except Exception as exc:
         failure = stages.mark_failed(
             "workflow_internal",
@@ -1071,6 +1249,16 @@ def _execute_workflow(
             if failure is None:
                 failure = cleanup_failure
 
+    failure, observability = _finalize_observability(
+        events,
+        stages,
+        workflow_correlation_id,
+        progress,
+        failure,
+    )
+    if final_state:
+        final_state["storage_bytes"] = _artifact_storage_bytes(root)
+
     return WorkflowBenchmarkReport(
         success=failure is None,
         records_requested=records,
@@ -1088,6 +1276,7 @@ def _execute_workflow(
         mapping=mapping_summary,
         preflight=_preflight_payload(preflight),
         final_state=final_state,
+        observability=observability,
         stages=stages.results(),
         failure=failure,
     )

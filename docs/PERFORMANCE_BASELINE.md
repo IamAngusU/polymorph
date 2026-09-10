@@ -1,6 +1,6 @@
 # Performance baseline
 
-Measured on 2026-09-09 on the current Windows development machine:
+Measured on 2026-09-09 and 2026-09-10 on the current Windows development machine:
 
 - Python 3.11.9 on AMD64
 - Windows build 26200
@@ -35,26 +35,32 @@ polymorph benchmark inspect ./input-file --records 10000 --magika
 
 ## Mapping models
 
-The bundled seven-case safety smoke was run with both pinned model profiles installed and a fresh
-process:
+The expanded synthetic regression corpus was run with both pinned model profiles in a fresh
+process on 2026-09-10:
 
 ```bash
-polymorph benchmark mapping benchmarks/safety-smoke.json --models \
-  --require-auto-precision 1.0 --max-unsafe-auto 0
+python scripts/dev.py benchmark mapping benchmarks/safety-regression.json --models \
+  --require-auto-precision 1.0 --require-automation-coverage 0.70 \
+  --require-suggestion-accuracy 0.60 --max-unsafe-auto 0
 ```
 
 | Metric | Result |
 | --- | ---: |
-| Wall time | 1.455 s |
-| Throughput | 4.81 cases/s |
-| Peak RSS | 437.8 MiB |
-| Automatic precision | 100% (4 of 4 automatic decisions) |
+| Cases and labelled fields | 42 / 45 |
+| Wall time | 2.389 s |
+| CPU time | 36.109 s |
+| Throughput | 18.84 fields/s |
+| Peak RSS | 441.03 MiB |
+| Automatic precision | 100% (17 of 17 automatic decisions) |
+| Eligible automation coverage | 89.47% (17 of 19 eligible fields) |
+| Overall automation rate | 62.96% (17 of 27 mappable fields) |
 | Unsafe automatic decisions | 0 |
-| Suggestion accuracy | 71.4% (5 of 7 fields) |
+| Suggestion accuracy | 68.89% (31 of 45 fields) |
 
-One ambiguous case paid model cold-start cost, which produces a case-latency p95 of 1.011 s. The
-corpus is deliberately tiny and adversarial. It verifies fail-closed behavior and model packaging,
-not real-world mapping quality.
+The deterministic profile produced the same decisions in 4.52 ms at 78.16 MiB peak RSS. On this
+corpus, the models add ranking evidence but no measurable decision-quality gain. Keeping them
+optional is therefore the correct default until a source-separated holdout shows a benefit. This
+corpus verifies regression behavior and model packaging, not real-world mapping quality.
 
 ## Full secure transport
 

@@ -80,12 +80,29 @@ not a memory benchmark.
 ```bash
 polymorph benchmark mapping ./my-mapping-corpus.json \
   --require-auto-precision 1.0 \
+  --require-automation-coverage 0.70 \
   --max-unsafe-auto 0
 ```
 
-Mapping benchmarks accept the same `--tracemalloc` option and observer-mode labels.
+Mapping benchmarks accept the same `--tracemalloc` option and observer-mode labels. Optional
+`--require-suggestion-accuracy` and `--require-automation-coverage` gates stop a run that remains
+safe only by becoming useless. Every case id must be unique, every source field must have exactly
+one label, and every non-null expected target must exist. The manifest is rejected before scoring
+when those invariants are broken. Duplicate JSON keys, non-finite numbers and unknown manifest
+fields are also rejected so a misspelled safety label cannot silently disappear.
 
-The repository includes `benchmarks/safety-smoke.json` as a tiny CI/release smoke suite. It checks the benchmark mechanism and several fail-closed cases only. It is explicitly not a real-world accuracy corpus and must not be used for product accuracy claims.
+The repository keeps two corpora:
+
+- `benchmarks/safety-smoke.json` is a tiny machinery smoke suite.
+- `benchmarks/safety-regression.json` contains 42 synthetic safety cases and 45 labelled fields.
+  CI requires automatic precision 1.0, zero unsafe automatic decisions and at least 70 percent
+  automation coverage among explicitly automation-eligible mappings.
+
+The report separates unsafe automatic failures from lower-risk suggestion mismatches. A review
+candidate can therefore be visibly wrong without being misreported as an automatic write. Both
+repository corpora are regression fixtures, not real-world accuracy evidence. It also validates
+the matcher's output contract: exactly one decision per source, known targets, status and target
+consistency, plus finite scores and margins in the unit interval.
 
 A version-1 corpus uses inline schema descriptors and explicit expected mappings:
 
@@ -109,13 +126,18 @@ A version-1 corpus uses inline schema descriptors and explicit expected mappings
       },
       "expected": {
         "c1": "customer_number"
-      }
+      },
+      "review_only": ["c1"]
     }
   ]
 }
 ```
 
-Use `null` as the expected target for a field that must not be automatically mapped.
+Use `null` as the expected target for a field that must not be mapped. Use `review_only` for a
+known correspondence that is useful as a suggestion but unsafe for automatic execution. Automation
+coverage uses only non-null labels outside `review_only` as its denominator. The report also emits
+`overall_automation_rate` across every non-null correspondence so the narrower safety denominator
+cannot hide total review load.
 
 ## Dataset discipline
 
@@ -138,3 +160,19 @@ Recommended suites include:
 - schema drift after recipe approval
 
 The safety gate should be tuned against false automatic approvals first. Coverage can be optimized only after that constraint holds.
+
+## External corpus candidates
+
+[Valentine](https://github.com/delftdata/valentine) is an Apache-2.0 schema-matching experiment
+suite, and its separate
+[data fabricator](https://github.com/delftdata/valentine-data-fabricator) can generate mappings,
+schemas and perturbed table pairs. It is useful for repeatable name and structure perturbations.
+
+The [WDC Schema Matching Benchmark](https://webdatacommons.org/structureddata/smb/) provides fixed
+training, validation and test splits with positive and negative correspondences. Its tasks use
+instance values and Web-table semantics, while the current Polymorph safety corpus primarily
+evaluates schema metadata. An adapter is useful, but quoting WDC scores as if they measured the
+whole Polymorph workflow would be wrong.
+
+Do not silently train on either benchmark and then report its test score. Keep external test splits
+read-only, record the exact upstream version and license, and retain the conversion manifest.

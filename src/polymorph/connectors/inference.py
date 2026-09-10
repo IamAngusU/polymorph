@@ -6,7 +6,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
-from polymorph.models.types import DataType, FieldRole
+from polymorph.models.types import DataType, FieldRole, runtime_type_satisfies
 
 _INTEGER = re.compile(r"^[+-]?(?:0|[1-9][0-9]*)$")
 _DECIMAL = re.compile(
@@ -34,6 +34,16 @@ def runtime_type(value: object) -> DataType:
     if isinstance(value, str):
         return DataType.STRING
     return DataType.UNKNOWN
+
+
+def value_satisfies_type(value: object, target: DataType) -> bool:
+    """Apply the shared non-coercing runtime value contract."""
+
+    if isinstance(value, float) and not math.isfinite(value):
+        return False
+    if isinstance(value, Decimal) and not value.is_finite():
+        return False
+    return runtime_type_satisfies(runtime_type(value), target)
 
 
 def merge_types(types: list[DataType]) -> DataType:

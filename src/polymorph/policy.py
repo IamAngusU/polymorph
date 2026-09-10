@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from .errors import PolicyViolation
 from .models.schema import FieldDescriptor
-from .models.types import FieldPolicy, Sensitivity
+from .models.types import FieldPolicy, Sensitivity, sensitivity_route_safe
 
 
 @dataclass(frozen=True, slots=True)
@@ -12,7 +12,7 @@ class PolicyEngine:
     """Central information-flow checks.
 
     Policies are intentionally conservative. A destination may be more restrictive than
-    a source, but a route may not silently downgrade secret or opaque data.
+    a source, but a route may not silently downgrade any declared sensitivity class.
     """
 
     def field_policy(self, field: FieldDescriptor) -> FieldPolicy:
@@ -24,11 +24,14 @@ class PolicyEngine:
         source_policy = self.field_policy(source)
         target_policy = self.field_policy(target)
 
-        if source.sensitivity in {Sensitivity.SECRET, Sensitivity.OPAQUE}:
-            if target.sensitivity not in {Sensitivity.SECRET, Sensitivity.OPAQUE}:
-                raise PolicyViolation("sensitive route would downgrade destination sensitivity")
-            if transform not in {"copy", "opaque_forward"}:
-                raise PolicyViolation("secret or opaque fields cannot be transformed")
+        if not sensitivity_route_safe(source.sensitivity, target.sensitivity):
+            raise PolicyViolation("route would downgrade destination sensitivity")
+
+        if source.sensitivity in {Sensitivity.SECRET, Sensitivity.OPAQUE} and transform not in {
+            "copy",
+            "opaque_forward",
+        }:
+            raise PolicyViolation("secret or opaque fields cannot be transformed")
 
         if transform not in {"copy", "opaque_forward"} and not source_policy.transformable:
             raise PolicyViolation("source policy forbids transformation")

@@ -15,7 +15,8 @@ Automation coverage is measured separately. A route that needs review is not cou
 The benchmark gate reports at least:
 
 - automatic-decision precision
-- automatic coverage over mappable fields
+- automatic coverage over explicitly automation-eligible fields
+- overall automatic rate over every mappable field
 - suggestion accuracy
 - incorrect automatic decisions on explicitly unmappable fields
 - p50 and p95 case latency
@@ -34,7 +35,7 @@ Evidence is deliberately asymmetric. Stronger evidence can promote a route; weak
 5. Local embedding similarity.
 6. Local reranker score.
 
-The final two items are advisory. The matcher requires independently strong deterministic evidence before an `AUTO` decision is allowed. If a reranker changes the winner away from the deterministic winner, the result is review-required.
+The final two items are advisory. The matcher requires independently strong deterministic evidence before an `AUTO` decision is allowed. Automatic copy also requires directional runtime type compatibility, no nullable-to-required gap, equal sensitivity labels and compatible field roles. Foreign-key automation additionally requires a typed, single-column unique lookup contract. If a reranker changes the winner away from the deterministic winner, the result is review-required.
 
 ## Preflight before promotion
 
@@ -51,6 +52,9 @@ The preflight checks:
 - completeness of the scan
 
 Secret and opaque values are not inspected. Preflight checks only their presence/nullability where required.
+For a non-null business key, a resolver result of null or of the wrong target type is blocking even
+when the final foreign-key column is nullable. A null source value skips lookup and is preserved only
+when the final target permits null.
 
 A bounded sample can be useful for diagnosis but cannot automatically promote or remember a recipe. Automatic recipe promotion requires a complete scan.
 

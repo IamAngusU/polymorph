@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
+from typing import cast
 
 from .types import DataType, FieldRole, Sensitivity
 
@@ -72,23 +73,53 @@ class FieldDescriptor:
 
 
 @dataclass(frozen=True, slots=True)
+class LookupKeyDescriptor:
+    name: str
+    data_type: DataType = DataType.UNKNOWN
+
+    def __post_init__(self) -> None:
+        _required_text(self.name, "relation lookup key")
+        if not isinstance(self.data_type, DataType):
+            raise ValueError("relation lookup key data type must be a DataType")
+
+    def canonical_dict(self) -> dict[str, str]:
+        return {"name": self.name, "data_type": self.data_type.value}
+
+
+@dataclass(frozen=True, slots=True)
 class RelationDescriptor:
     source_field_id: str
     target_container: str
     target_field: str
     name: str | None = None
     target_schema: str | None = None
-    lookup_keys: tuple[str, ...] = ()
+    lookup_keys: tuple[LookupKeyDescriptor, ...] = ()
 
     def __post_init__(self) -> None:
         _required_text(self.source_field_id, "relation source field id")
         _required_text(self.target_container, "relation target container")
         _required_text(self.target_field, "relation target field")
-        object.__setattr__(self, "lookup_keys", tuple(self.lookup_keys))
-        if len(set(self.lookup_keys)) != len(self.lookup_keys):
+        # Runtime compatibility for descriptors serialized before lookup-key typing.
+        # Legacy strings become UNKNOWN, which stays reviewable but can never justify AUTO.
+        normalized: list[LookupKeyDescriptor] = []
+        for item in cast(tuple[object, ...], tuple(self.lookup_keys)):
+            if isinstance(item, str):
+                normalized.append(LookupKeyDescriptor(item))
+            elif isinstance(item, LookupKeyDescriptor):
+                normalized.append(item)
+            else:
+                raise ValueError("relation lookup keys must be LookupKeyDescriptor values")
+        object.__setattr__(self, "lookup_keys", tuple(normalized))
+        names = [item.name for item in normalized]
+        if len(set(names)) != len(names):
             raise ValueError("relation contains duplicate lookup keys")
-        for key in self.lookup_keys:
-            _required_text(key, "relation lookup key")
+
+    def lookup_key(self, name: str) -> LookupKeyDescriptor | None:
+        return next((item for item in self.lookup_keys if item.name == name), None)
+
+    @property
+    def lookup_key_names(self) -> tuple[str, ...]:
+        return tuple(item.name for item in self.lookup_keys)
 
     def canonical_dict(self) -> dict[str, object]:
         return {
@@ -97,7 +128,7 @@ class RelationDescriptor:
             "target_field": self.target_field,
             "name": self.name,
             "target_schema": self.target_schema,
-            "lookup_keys": list(self.lookup_keys),
+            "lookup_keys": [item.canonical_dict() for item in self.lookup_keys],
         }
 
 

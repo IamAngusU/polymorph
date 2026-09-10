@@ -4,9 +4,15 @@ from dataclasses import dataclass, replace
 
 from polymorph.models.mapping import MappingCandidate, MappingDecision, MappingStatus
 from polymorph.models.schema import FieldDescriptor, SchemaDescriptor
+from polymorph.models.types import automatic_copy_type_safe
 
 from .base import Reranker, SemanticEncoder
-from .deterministic import deterministic_score
+from .deterministic import (
+    automatic_mapping_contract_safe,
+    deterministic_score,
+    foreign_key_lookup_key,
+    role_compatible_for_automatic,
+)
 
 
 @dataclass(slots=True)
@@ -29,7 +35,7 @@ class HybridMatcher:
         target_schema: SchemaDescriptor,
     ) -> list[MappingCandidate]:
         deterministic_evidence = [
-            deterministic_score(source, target) for target in target_schema.fields
+            deterministic_score(source, target, target_schema) for target in target_schema.fields
         ]
         deterministic_ranking = sorted((score for score, _ in deterministic_evidence), reverse=True)
         deterministic_margin = (
@@ -39,9 +45,23 @@ class HybridMatcher:
             if deterministic_ranking
             else 0.0
         )
-        deterministic_is_decisive = bool(deterministic_ranking) and (
-            deterministic_ranking[0] >= self.deterministic_auto_floor
+        deterministic_top_index = (
+            max(
+                range(len(deterministic_evidence)),
+                key=lambda index: deterministic_evidence[index][0],
+            )
+            if deterministic_evidence
+            else None
+        )
+        deterministic_is_decisive = (
+            deterministic_top_index is not None
+            and deterministic_ranking[0] >= self.deterministic_auto_floor
             and deterministic_margin >= self.deterministic_minimum_margin
+            and automatic_mapping_contract_safe(
+                source,
+                target_schema.fields[deterministic_top_index],
+                target_schema,
+            )
         )
 
         semantic_scores: list[float | None] = [None] * len(target_schema.fields)
@@ -87,14 +107,18 @@ class HybridMatcher:
         if self.reranker is None or len(candidates) < 2:
             return candidates
 
-        deterministic = sorted(
-            (candidate.deterministic_score for candidate in candidates),
+        deterministic_candidates = sorted(
+            candidates,
+            key=lambda candidate: candidate.deterministic_score,
             reverse=True,
         )
+        deterministic = [candidate.deterministic_score for candidate in deterministic_candidates]
         deterministic_margin = deterministic[0] - deterministic[1]
+        deterministic_target = target_schema.by_id()[deterministic_candidates[0].target_field_id]
         if (
             deterministic[0] >= self.deterministic_auto_floor
             and deterministic_margin >= self.deterministic_minimum_margin
+            and automatic_mapping_contract_safe(source, deterministic_target, target_schema)
         ):
             return candidates
 
@@ -159,10 +183,27 @@ class HybridMatcher:
             deterministic[1].deterministic_score if len(deterministic) > 1 else 0.0
         )
         deterministic_margin = deterministic_top.deterministic_score - deterministic_second
+        target_by_id = target_schema.by_id()
+        deterministic_target = target_by_id[deterministic_top.target_field_id]
+        verified_relation_lookup = (
+            foreign_key_lookup_key(source, deterministic_target, target_schema) is not None
+        )
+        type_ok = (
+            automatic_copy_type_safe(source.data_type, deterministic_target.data_type)
+            or verified_relation_lookup
+        )
+        role_ok = (
+            role_compatible_for_automatic(source.role, deterministic_target.role)
+            or verified_relation_lookup
+        )
+        contract_safe = automatic_mapping_contract_safe(source, deterministic_target, target_schema)
         deterministic_ok = (
             deterministic_top.target_field_id == top.target_field_id
             and deterministic_top.deterministic_score >= self.deterministic_auto_floor
             and deterministic_margin >= self.deterministic_minimum_margin
+            and type_ok
+            and role_ok
+            and contract_safe
         )
 
         if top.score >= self.auto_threshold and margin >= self.minimum_margin and deterministic_ok:
@@ -173,6 +214,12 @@ class HybridMatcher:
             status = MappingStatus.BLOCKED
 
         reasons = top.reasons
+        if not type_ok:
+            reasons = (*reasons, "automatic approval requires compatible declared types")
+        if not role_ok:
+            reasons = (*reasons, "automatic approval requires compatible field roles")
+        if not contract_safe:
+            reasons = (*reasons, "automatic approval requires an executable policy route")
         if not deterministic_ok:
             reasons = (
                 *reasons,

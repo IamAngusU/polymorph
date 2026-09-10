@@ -5,9 +5,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
-from .connectors.inference import runtime_type
+from .connectors.inference import value_satisfies_type
 from .errors import PolymorphError
-from .matching.deterministic import type_compatibility
 from .models.mapping import MappingPlan
 from .models.schema import SchemaDescriptor
 from .models.types import Sensitivity
@@ -231,19 +230,30 @@ class PreflightRunner:
                                 )
                             )
                             continue
-                        if transformed is not None:
-                            actual = runtime_type(transformed)
-                            if type_compatibility(actual, target.data_type) == 0.0:
-                                findings.append(
-                                    PreflightFinding(
-                                        PreflightSeverity.BLOCKING,
-                                        "transformed_type_mismatch",
-                                        "transformed value does not satisfy target type contract",
-                                        index,
-                                        source.id,
-                                        target.id,
-                                    )
+                        if transformed is None and not target.nullable:
+                            findings.append(
+                                PreflightFinding(
+                                    PreflightSeverity.BLOCKING,
+                                    "required_target_null",
+                                    "source transform produced null for a non-nullable target",
+                                    index,
+                                    source.id,
+                                    target.id,
                                 )
+                            )
+                        elif transformed is not None and not value_satisfies_type(
+                            transformed, target.data_type
+                        ):
+                            findings.append(
+                                PreflightFinding(
+                                    PreflightSeverity.BLOCKING,
+                                    "transformed_type_mismatch",
+                                    "transformed value does not satisfy target type contract",
+                                    index,
+                                    source.id,
+                                    target.id,
+                                )
+                            )
                         continue
 
                     if rule.transform == "lookup_foreign_key":
@@ -260,12 +270,31 @@ class PreflightRunner:
                             )
                             continue
                         match_column = rule.parameters.get("match_column")
-                        if not match_column:
+                        relation = target_schema.relation_for_source_field(target.id)
+                        lookup_key = (
+                            relation.lookup_key(match_column)
+                            if relation is not None and isinstance(match_column, str)
+                            else None
+                        )
+                        if lookup_key is None:
                             findings.append(
                                 PreflightFinding(
                                     PreflightSeverity.BLOCKING,
                                     "foreign_key_lookup_invalid",
                                     "foreign-key rule does not declare its unique match column",
+                                    index,
+                                    source.id,
+                                    target.id,
+                                )
+                            )
+                            continue
+                        assert isinstance(match_column, str)
+                        if not value_satisfies_type(value, lookup_key.data_type):
+                            findings.append(
+                                PreflightFinding(
+                                    PreflightSeverity.BLOCKING,
+                                    "foreign_key_lookup_input_type_mismatch",
+                                    "foreign-key input does not satisfy the lookup-column type",
                                     index,
                                     source.id,
                                     target.id,
@@ -291,12 +320,25 @@ class PreflightRunner:
                             )
                             continue
                         lookup_checks += 1
-                        if resolved is None and not target.nullable:
+                        if resolved is None:
                             findings.append(
                                 PreflightFinding(
                                     PreflightSeverity.BLOCKING,
                                     "foreign_key_resolved_null",
-                                    "foreign-key resolution returned null for a required target",
+                                    "non-null foreign-key lookup input did not resolve",
+                                    index,
+                                    source.id,
+                                    target.id,
+                                )
+                            )
+                        elif resolved is not None and not value_satisfies_type(
+                            resolved, target.data_type
+                        ):
+                            findings.append(
+                                PreflightFinding(
+                                    PreflightSeverity.BLOCKING,
+                                    "foreign_key_resolved_type_mismatch",
+                                    "foreign-key resolution returned an invalid target type",
                                     index,
                                     source.id,
                                     target.id,

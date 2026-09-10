@@ -158,12 +158,15 @@ pip install -e ".[fileid,csv-detection,benchmark]"
 polymorph inspect auto ./unknown-upload --magika
 polymorph doctor
 polymorph benchmark inspect ./unknown-upload --records 10000 --magika
-polymorph benchmark mapping ./benchmarks/safety-smoke.json --require-auto-precision 1.0
-polymorph benchmark workflow --records 1000 --batch-size 100 --output workflow.json
+polymorph benchmark mapping ./benchmarks/safety-regression.json --require-auto-precision 1.0 --require-automation-coverage 0.70
+polymorph benchmark workflow --records 1000 --batch-size 100 --work-dir ./workflow-run --output workflow.json
 polymorph recipe health
 polymorph audit summary ./audit.sqlite
+polymorph events check ./workflow-run/operational-events.jsonl --run-id RUN_ID
 polymorph explain write_outcome_unknown
 ```
+
+`RUN_ID` is the `workflow.observability.run_id` value in `workflow.json`.
 
 The benchmark commands are explicit diagnostics. Production code paths do not start Python allocation tracing or memory polling.
 
@@ -199,9 +202,12 @@ URLs can also leak credentials through shell history, so production automation s
 `DatabaseEndpoint` plus a secret provider. Automatic-promotion policy still needs a large,
 source-separated adversarial corpus and independent security review.
 
-The alpha is not fully self-monitoring. Destination audit is optional, and there is no complete
-event stream, alerting service or queue metric exporter. Recipe health is a real closed safety
-loop, but its only automatic response is to reduce trust after repeated rejected runs.
+The alpha is not fully self-monitoring. The benchmark and destination runtime now write a local
+payload-free event stream with run and correlation IDs, plus a CLI health gate for lifecycle,
+event-ID uniqueness, event semantics and delivery-count agreement. Coverage outside that workflow
+is incomplete, destination audit remains optional, and there is no notification service or queue
+metric exporter. Recipe health is a real closed safety loop, but its only automatic response is to
+reduce trust after repeated rejected runs.
 
 ## License
 

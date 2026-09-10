@@ -158,7 +158,11 @@ def propose_plan_repair(
         if rule.transform == "lookup_foreign_key":
             relation = new_target.relation_for_source_field(new_target_field.id)
             match_column = rule.parameters.get("match_column")
-            if relation is None or match_column not in relation.lookup_keys:
+            if (
+                relation is None
+                or not isinstance(match_column, str)
+                or relation.lookup_key(match_column) is None
+            ):
                 findings.append(
                     RepairFinding(
                         RepairSeverity.BLOCKING,

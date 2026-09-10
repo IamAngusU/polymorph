@@ -18,17 +18,36 @@ metadata. They intentionally contain no property for sample payload values.
 
 For spreadsheets and delimited files, field IDs are positional (`c1`, `c2`, ...) while names are semantic descriptors. This distinction matters during drift repair: a positional ID is not proof that a moved column still represents the same business field.
 
-Database connectors introspect primary keys, foreign keys and single-column unique constraints. A foreign-key target may expose referenced unique business keys as aliases, allowing the matcher to recognize relationships without pretending the business key is the internal foreign-key value.
+Database connectors introspect primary keys, foreign keys and single-column unique constraints. A
+foreign-key target may expose referenced unique business keys, including their declared types, as
+aliases. This lets the matcher recognize relationships without pretending the business key is the
+internal foreign-key value. Members of composite primary or foreign keys, expression indexes and
+partial or filtered unique indexes are never advertised as independently executable lookups.
+
+Legacy relation JSON may still contain lookup-key names as strings. They load with an unknown type,
+remain available for explicit review and cannot justify an automatic mapping. Canonical relation
+JSON stores each key as `{name, data_type}`. Adding this type evidence changes both exact and
+structural schema fingerprints on purpose. An old untyped recipe therefore stops matching and must
+be recreated after review instead of being silently rebound or reused.
 
 ## 2. Mapping plane
 
 The matcher aggregates bounded evidence from normalized names and aliases, token overlap, string similarity, declared type compatibility, field roles, sensitivity compatibility and verified relationship aliases. Optional local descriptor embeddings and a cross-encoder reranker can improve candidate ordering.
 
-Model evidence is advisory. An `AUTO` decision requires the selected target to also be the independently strongest deterministic target, to clear the deterministic score floor and deterministic margin, and to satisfy the final policy thresholds. If model evidence changes the winner away from the deterministic winner, the decision requires review.
+Model evidence is advisory. An `AUTO` decision requires the selected target to also be the
+independently strongest deterministic target, to clear the deterministic score floor and
+deterministic margin, and to satisfy the final policy thresholds. Direct copy approval is
+directional: the runtime must accept the source type, a nullable source cannot feed a required
+target, sensitivity labels must match and roles must be compatible. If model evidence changes the
+winner away from the deterministic winner, the decision requires review.
 
 Any target collision between plausible source mappings is conservatively demoted to review. A high score never overrides an information-flow conflict, required-target failure or relationship proof.
 
-`build_plan()` converts accepted decisions into registered operations. A business key targeting a database foreign key becomes `lookup_foreign_key` only when the target relationship exposes an actual unique lookup column. Secret and opaque routes use transport semantics rather than value transforms.
+`build_plan()` converts accepted decisions into registered operations. A business key targeting a
+database foreign key becomes `lookup_foreign_key` automatically only when the target relationship
+exposes an actual unique lookup column and the source value can satisfy that lookup column's typed
+contract. Reviewed legacy metadata may still be made explicit, but a known type mismatch remains
+blocking. Secret and opaque routes use transport semantics rather than value transforms.
 
 A `MappingPlan` binds source and target schema fingerprints, rules, version and plan ID into a canonical SHA-256 digest. Delivery envelopes authenticate that digest. Repair therefore creates a new plan version and digest instead of mutating the semantics behind an existing authorization.
 

@@ -1,7 +1,18 @@
+import pytest
+
+from polymorph.errors import PolicyViolation
+from polymorph.matching.deterministic import automatic_mapping_contract_safe
 from polymorph.matching.hybrid import HybridMatcher
-from polymorph.models.mapping import MappingStatus
-from polymorph.models.schema import FieldDescriptor, SchemaDescriptor
-from polymorph.models.types import DataType
+from polymorph.models.mapping import MappingDecision, MappingStatus
+from polymorph.models.schema import (
+    FieldDescriptor,
+    LookupKeyDescriptor,
+    RelationDescriptor,
+    SchemaDescriptor,
+)
+from polymorph.models.types import DataType, FieldRole, Sensitivity
+from polymorph.planning import build_plan
+from polymorph.validation import PlanValidator
 
 
 def test_german_customer_number_maps_to_customer_number():
@@ -224,3 +235,386 @@ def test_account_number_does_not_auto_map_to_customer_number() -> None:
     decision = HybridMatcher().decide(source, target)
 
     assert decision.status is not MappingStatus.AUTO
+
+
+def test_exact_name_does_not_auto_promote_across_incompatible_roles() -> None:
+    source = FieldDescriptor(
+        "secret",
+        "api token",
+        DataType.STRING,
+        sensitivity=Sensitivity.SECRET,
+        role=FieldRole.CREDENTIAL,
+    )
+    target = SchemaDescriptor(
+        "target",
+        (
+            FieldDescriptor(
+                "value",
+                "api token",
+                DataType.STRING,
+                sensitivity=Sensitivity.SECRET,
+                role=FieldRole.VALUE,
+            ),
+        ),
+    )
+
+    decision = HybridMatcher().decide(source, target)
+
+    assert decision.status is MappingStatus.REVIEW
+    assert "automatic approval requires compatible field roles" in decision.reasons
+
+
+def test_exact_name_does_not_auto_promote_without_declared_type_evidence() -> None:
+    source = FieldDescriptor("source", "customer id", DataType.UNKNOWN)
+    target = SchemaDescriptor(
+        "target", (FieldDescriptor("target", "customer id", DataType.UNKNOWN),)
+    )
+
+    decision = HybridMatcher().decide(source, target)
+
+    assert decision.status is MappingStatus.REVIEW
+    assert "automatic approval requires compatible declared types" in decision.reasons
+
+
+@pytest.mark.parametrize(
+    ("source_type", "target_type"),
+    [
+        (DataType.DECIMAL, DataType.INTEGER),
+        (DataType.DATE, DataType.DATETIME),
+        (DataType.DATETIME, DataType.DATE),
+    ],
+)
+def test_exact_name_does_not_auto_promote_across_runtime_unsafe_type_direction(
+    source_type: DataType,
+    target_type: DataType,
+) -> None:
+    source = FieldDescriptor("source", "created value", source_type)
+    target = SchemaDescriptor("target", (FieldDescriptor("target", "created value", target_type),))
+
+    decision = HybridMatcher().decide(source, target)
+
+    assert decision.status is MappingStatus.REVIEW
+    assert "automatic approval requires compatible declared types" in decision.reasons
+
+
+def test_integer_to_decimal_remains_runtime_safe_for_automatic_copy() -> None:
+    source = FieldDescriptor("source", "quantity", DataType.INTEGER)
+    target = SchemaDescriptor("target", (FieldDescriptor("target", "quantity", DataType.DECIMAL),))
+
+    decision = HybridMatcher().decide(source, target)
+
+    assert decision.status is MappingStatus.AUTO
+
+
+def test_foreign_key_alias_without_relation_evidence_requires_review() -> None:
+    source = FieldDescriptor(
+        "source",
+        "customer number",
+        DataType.STRING,
+        role=FieldRole.NATURAL_KEY,
+    )
+    target = SchemaDescriptor(
+        "target",
+        (
+            FieldDescriptor(
+                "customer_id",
+                "customer id",
+                DataType.INTEGER,
+                role=FieldRole.FOREIGN_KEY,
+                aliases=("client number",),
+            ),
+        ),
+    )
+
+    decision = HybridMatcher().decide(source, target)
+
+    assert decision.status is MappingStatus.REVIEW
+    assert "automatic approval requires compatible declared types" in decision.reasons
+
+
+def test_relation_backed_foreign_key_auto_uses_the_same_lookup_evidence_as_planning() -> None:
+    source_schema = SchemaDescriptor(
+        "source",
+        (
+            FieldDescriptor(
+                "source_customer",
+                "customer number",
+                DataType.STRING,
+                role=FieldRole.NATURAL_KEY,
+            ),
+        ),
+    )
+    target_schema = SchemaDescriptor(
+        "target",
+        (
+            FieldDescriptor(
+                "customer_id",
+                "customer id",
+                DataType.INTEGER,
+                role=FieldRole.FOREIGN_KEY,
+                aliases=("customer number",),
+            ),
+        ),
+        (
+            RelationDescriptor(
+                "customer_id",
+                "customers",
+                "id",
+                lookup_keys=(LookupKeyDescriptor("customer number", DataType.STRING),),
+            ),
+        ),
+    )
+
+    decision = HybridMatcher().decide(source_schema.fields[0], target_schema)
+    plan = build_plan(source_schema, target_schema, [decision])
+
+    assert decision.status is MappingStatus.AUTO
+    assert len(plan.rules) == 1
+    assert plan.rules[0].transform == "lookup_foreign_key"
+    assert plan.rules[0].parameters == {"match_column": "customer number"}
+
+
+def test_relation_backed_foreign_key_with_unknown_source_type_requires_review() -> None:
+    source = FieldDescriptor(
+        "source_customer",
+        "customer number",
+        DataType.UNKNOWN,
+        role=FieldRole.NATURAL_KEY,
+    )
+    target = SchemaDescriptor(
+        "target",
+        (
+            FieldDescriptor(
+                "customer_id",
+                "customer id",
+                DataType.INTEGER,
+                role=FieldRole.FOREIGN_KEY,
+                aliases=("customer number",),
+            ),
+        ),
+        (
+            RelationDescriptor(
+                "customer_id",
+                "customers",
+                "id",
+                lookup_keys=(LookupKeyDescriptor("customer number", DataType.STRING),),
+            ),
+        ),
+    )
+
+    decision = HybridMatcher().decide(source, target)
+
+    assert decision.status is MappingStatus.REVIEW
+    assert "automatic approval requires compatible declared types" in decision.reasons
+
+
+def test_relation_lookup_with_incompatible_declared_key_type_never_auto_plans() -> None:
+    source = SchemaDescriptor(
+        "source",
+        (
+            FieldDescriptor(
+                "customer_number",
+                "customer number",
+                DataType.JSON,
+                role=FieldRole.NATURAL_KEY,
+            ),
+        ),
+    )
+    target = SchemaDescriptor(
+        "target",
+        (
+            FieldDescriptor(
+                "customer_id",
+                "customer id",
+                DataType.INTEGER,
+                role=FieldRole.FOREIGN_KEY,
+                aliases=("customer number",),
+            ),
+        ),
+        (
+            RelationDescriptor(
+                "customer_id",
+                "customers",
+                "id",
+                lookup_keys=(LookupKeyDescriptor("customer number", DataType.INTEGER),),
+            ),
+        ),
+    )
+
+    decision = HybridMatcher().decide(source.fields[0], target)
+
+    assert decision.status is MappingStatus.REVIEW
+    assert "automatic approval requires compatible declared types" in decision.reasons
+    unsafe_auto = MappingDecision(
+        source.fields[0].id,
+        "customer_id",
+        MappingStatus.AUTO,
+        1.0,
+        1.0,
+    )
+    with pytest.raises(PolicyViolation, match="executable contract"):
+        build_plan(source, target, [unsafe_auto])
+
+
+def test_untyped_legacy_lookup_is_reviewable_but_never_automatic() -> None:
+    source = SchemaDescriptor(
+        "source",
+        (
+            FieldDescriptor(
+                "customer_number",
+                "customer number",
+                DataType.STRING,
+                role=FieldRole.NATURAL_KEY,
+            ),
+        ),
+    )
+    target = SchemaDescriptor(
+        "target",
+        (
+            FieldDescriptor(
+                "customer_id",
+                "customer id",
+                DataType.INTEGER,
+                role=FieldRole.FOREIGN_KEY,
+                aliases=("customer number",),
+            ),
+        ),
+        (RelationDescriptor("customer_id", "customers", "id", lookup_keys=("customer number",)),),
+    )
+
+    decision = HybridMatcher().decide(source.fields[0], target)
+    plan = build_plan(source, target, [decision], allow_review=True)
+    report = PlanValidator().validate(plan, source, target)
+
+    assert decision.status is MappingStatus.REVIEW
+    assert plan.rules[0].transform == "lookup_foreign_key"
+    assert report.valid
+    assert report.requires_review
+    assert {item.code for item in report.findings} == {"foreign_key_lookup_type_unknown"}
+
+
+def test_internal_source_does_not_auto_promote_to_opaque_destination() -> None:
+    source = FieldDescriptor("source", "payload", DataType.STRING)
+    target = SchemaDescriptor(
+        "target",
+        (
+            FieldDescriptor(
+                "target",
+                "payload",
+                DataType.STRING,
+                sensitivity=Sensitivity.OPAQUE,
+            ),
+        ),
+    )
+
+    decision = HybridMatcher().decide(source, target)
+
+    assert decision.status is MappingStatus.REVIEW
+    assert "automatic approval requires an executable policy route" in decision.reasons
+
+
+def test_nullable_source_does_not_auto_map_to_required_target() -> None:
+    source = FieldDescriptor("source", "email", DataType.STRING, nullable=True)
+    target = SchemaDescriptor(
+        "target", (FieldDescriptor("target", "email", DataType.STRING, nullable=False),)
+    )
+
+    decision = HybridMatcher().decide(source, target)
+
+    assert decision.status is MappingStatus.REVIEW
+    assert not automatic_mapping_contract_safe(source, target.fields[0], target)
+
+
+def test_required_source_can_auto_map_to_nullable_target() -> None:
+    source = FieldDescriptor("source", "email", DataType.STRING, nullable=False)
+    target = SchemaDescriptor(
+        "target", (FieldDescriptor("target", "email", DataType.STRING, nullable=True),)
+    )
+
+    assert HybridMatcher().decide(source, target).status is MappingStatus.AUTO
+
+
+@pytest.mark.parametrize(
+    ("source_sensitivity", "target_sensitivity"),
+    [
+        (Sensitivity.PERSONAL, Sensitivity.PUBLIC),
+        (Sensitivity.CONFIDENTIAL, Sensitivity.INTERNAL),
+        (Sensitivity.INTERNAL, Sensitivity.PUBLIC),
+    ],
+)
+def test_sensitivity_downgrades_never_auto(
+    source_sensitivity: Sensitivity,
+    target_sensitivity: Sensitivity,
+) -> None:
+    source = FieldDescriptor("source", "email", DataType.STRING, sensitivity=source_sensitivity)
+    target = SchemaDescriptor(
+        "target",
+        (FieldDescriptor("target", "email", DataType.STRING, sensitivity=target_sensitivity),),
+    )
+
+    decision = HybridMatcher().decide(source, target)
+
+    assert decision.status is not MappingStatus.AUTO
+    assert not automatic_mapping_contract_safe(source, target.fields[0], target)
+
+
+def test_sensitivity_upgrade_is_reviewable_but_not_automatic() -> None:
+    source = FieldDescriptor("source", "email", DataType.STRING, sensitivity=Sensitivity.INTERNAL)
+    target = SchemaDescriptor(
+        "target",
+        (FieldDescriptor("target", "email", DataType.STRING, sensitivity=Sensitivity.PERSONAL),),
+    )
+
+    decision = HybridMatcher().decide(source, target)
+
+    assert decision.status is MappingStatus.REVIEW
+    assert not automatic_mapping_contract_safe(source, target.fields[0], target)
+
+
+def test_contract_unsafe_deterministic_winner_does_not_suppress_model_ranking() -> None:
+    class SafeTargetEncoder:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def similarities(self, query: str, candidates):
+            del query, candidates
+            self.calls += 1
+            return [0.0, 1.0]
+
+        def similarity(self, left: str, right: str) -> float:
+            del left, right
+            return 1.0
+
+    source = FieldDescriptor(
+        "source",
+        "api token",
+        DataType.STRING,
+        sensitivity=Sensitivity.SECRET,
+        role=FieldRole.CREDENTIAL,
+    )
+    target = SchemaDescriptor(
+        "target",
+        (
+            FieldDescriptor(
+                "unsafe_value",
+                "api token",
+                DataType.STRING,
+                sensitivity=Sensitivity.SECRET,
+                role=FieldRole.VALUE,
+            ),
+            FieldDescriptor(
+                "safe_credential",
+                "access credential",
+                DataType.STRING,
+                sensitivity=Sensitivity.SECRET,
+                role=FieldRole.CREDENTIAL,
+            ),
+        ),
+    )
+    encoder = SafeTargetEncoder()
+
+    decision = HybridMatcher(semantic=encoder, semantic_weight=0.9).decide(source, target)
+
+    assert encoder.calls == 1
+    assert decision.target_field_id == "safe_credential"
+    assert decision.status is MappingStatus.REVIEW

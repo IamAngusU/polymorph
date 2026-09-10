@@ -17,6 +17,13 @@ All notable changes to this alpha are documented here.
 - a six-scenario failure lab for content confusion, ambiguous mapping, recipe suspension, relay
   tampering, lost acknowledgements and uncertain destination outcomes
 - a dedicated CI job that publishes workflow and failure-lab evidence
+- a local metadata-only operational event stream with run and correlation identifiers
+- `events summary` and `events check` commands for structural validation and scheduler-friendly
+  health exits
+- a 42-case mapping safety regression corpus with precision, coverage and suggestion gates
+- a ten-scenario concurrent recovery suite covering restarts, lease fencing, process-contended
+  schema migration and duplicate
+  suppression
 
 ### Changed
 
@@ -28,6 +35,16 @@ All notable changes to this alpha are documented here.
 - audit summaries and recipe health use one consistent SQLite read snapshot
 - database connectors cache their immutable reflected table instead of reflecting it before every
   record write
+- automatic mapping now requires compatible declared types and field roles, except for verified
+  natural-key to foreign-key lookup paths
+- automatic mapping treats nullable-to-required routes and every sensitivity-label change as
+  review-required or blocking
+- mapping reports separate unsafe automatic failures from lower-risk review suggestion mismatches
+- benchmark manifests require unique cases, strict fields, complete labels and executable matcher
+  output contracts
+- foreign-key lookup metadata now carries the lookup column type; legacy untyped keys stay
+  reviewable but cannot justify automatic promotion
+- destination preflight and runtime use the same non-coercing value contract
 
 ### Fixed
 
@@ -39,6 +56,21 @@ All notable changes to this alpha are documented here.
   log
 - workflow verification checks every destination value without assuming relay delivery order,
   reports post-commit audit failures truthfully and strips local paths and PID from standard JSON
+- concurrent legacy Relay and Ledger schema upgrades are serialized instead of racing duplicate
+  column changes
+- composite foreign keys and composite primary-key members are no longer advertised as executable
+  single-column lookups
+- partial or filtered unique indexes and expression indexes are no longer advertised as executable
+  relationship lookup keys
+- non-null business keys that resolve to null, wrong-typed resolver results and source transforms
+  that produce null for required targets now fail before a destination write
+- per-record foreign-key inputs are checked against the selected lookup-column type before a
+  database can apply implicit comparison coercion
+- operational event health rejects duplicate event IDs, invalid event semantics and oversized
+  newline-free records without unbounded reads
+- operational event health rejects incomplete workflow counters, unknown stage components, deeply
+  nested JSON and out-of-range timestamps instead of weakening health checks
+- inspect and mapping benchmark reports no longer persist an unstable local process id
 
 ## 0.4.0a1 - 2026-09-09
 

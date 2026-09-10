@@ -4,8 +4,14 @@ import re
 import unicodedata
 from difflib import SequenceMatcher
 
-from polymorph.models.schema import FieldDescriptor
-from polymorph.models.types import DataType, FieldRole, Sensitivity
+from polymorph.models.schema import FieldDescriptor, SchemaDescriptor
+from polymorph.models.types import (
+    DataType,
+    FieldRole,
+    Sensitivity,
+    automatic_copy_type_safe,
+    sensitivity_route_safe,
+)
 
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
@@ -68,9 +74,13 @@ def type_compatibility(source: DataType, target: DataType) -> float:
 
 
 def sensitivity_compatible(source: Sensitivity, target: Sensitivity) -> bool:
-    if source in {Sensitivity.SECRET, Sensitivity.OPAQUE}:
-        return target in {Sensitivity.SECRET, Sensitivity.OPAQUE}
-    return True
+    return sensitivity_route_safe(source, target)
+
+
+def role_compatible_for_automatic(source: FieldRole, target: FieldRole) -> bool:
+    return source is target or (
+        FieldRole.VALUE in {source, target} and FieldRole.CREDENTIAL not in {source, target}
+    )
 
 
 def name_similarity(left: FieldDescriptor, right: FieldDescriptor) -> tuple[float, tuple[str, ...]]:
@@ -118,8 +128,89 @@ def name_similarity(left: FieldDescriptor, right: FieldDescriptor) -> tuple[floa
     return best_score, tuple(reasons)
 
 
+def foreign_key_lookup_key(
+    source: FieldDescriptor,
+    target: FieldDescriptor,
+    target_schema: SchemaDescriptor,
+) -> str | None:
+    """Return a relation-backed lookup key with a complete automatic type contract."""
+
+    return _foreign_key_lookup_key(source, target, target_schema, automatic=True)
+
+
+def reviewable_foreign_key_lookup_key(
+    source: FieldDescriptor,
+    target: FieldDescriptor,
+    target_schema: SchemaDescriptor,
+) -> str | None:
+    """Return a compatible lookup path, allowing missing types only after review."""
+
+    return _foreign_key_lookup_key(source, target, target_schema, automatic=False)
+
+
+def _foreign_key_lookup_key(
+    source: FieldDescriptor,
+    target: FieldDescriptor,
+    target_schema: SchemaDescriptor,
+    *,
+    automatic: bool,
+) -> str | None:
+    if source.sensitivity in {Sensitivity.SECRET, Sensitivity.OPAQUE}:
+        return None
+    if source.role is not FieldRole.NATURAL_KEY or target.role is not FieldRole.FOREIGN_KEY:
+        return None
+    relation = target_schema.relation_for_source_field(target.id)
+    if relation is None or not relation.lookup_keys:
+        return None
+    scored: list[tuple[float, str]] = []
+    for key in relation.lookup_keys:
+        declared_types_known = DataType.UNKNOWN not in {
+            source.data_type,
+            key.data_type,
+        }
+        types_compatible = declared_types_known and automatic_copy_type_safe(
+            source.data_type, key.data_type
+        )
+        if automatic and not types_compatible:
+            continue
+        if not automatic and declared_types_known and not types_compatible:
+            continue
+        candidate = FieldDescriptor(
+            id=key.name,
+            name=key.name,
+            data_type=key.data_type,
+            role=FieldRole.NATURAL_KEY,
+        )
+        score, _ = name_similarity(source, candidate)
+        scored.append((score, key.name))
+    scored.sort(reverse=True)
+    if not scored or scored[0][0] < 0.42:
+        return None
+    return scored[0][1]
+
+
+def automatic_mapping_contract_safe(
+    source: FieldDescriptor,
+    target: FieldDescriptor,
+    target_schema: SchemaDescriptor,
+) -> bool:
+    """Independently check whether an automatic decision has an executable contract."""
+
+    if source.sensitivity is not target.sensitivity:
+        return False
+    if source.nullable and not target.nullable:
+        return False
+    if foreign_key_lookup_key(source, target, target_schema) is not None:
+        return True
+    return automatic_copy_type_safe(
+        source.data_type, target.data_type
+    ) and role_compatible_for_automatic(source.role, target.role)
+
+
 def deterministic_score(
-    source: FieldDescriptor, target: FieldDescriptor
+    source: FieldDescriptor,
+    target: FieldDescriptor,
+    target_schema: SchemaDescriptor | None = None,
 ) -> tuple[float, tuple[str, ...]]:
     if not sensitivity_compatible(source.sensitivity, target.sensitivity):
         return 0.0, ("sensitivity incompatible",)
@@ -128,14 +219,12 @@ def deterministic_score(
     type_score = type_compatibility(source.data_type, target.data_type)
     role_score = 1.0 if source.role is target.role else 0.55
     relation_lookup = (
-        source.role is FieldRole.NATURAL_KEY
-        and target.role is FieldRole.FOREIGN_KEY
-        and "relation alias evidence" in reasons
+        target_schema is not None
+        and foreign_key_lookup_key(source, target, target_schema) is not None
     )
     if relation_lookup:
-        # A source business key is expected to differ in type from the internal FK. The
-        # generated alias comes from a real UNIQUE key on the referenced relation, making
-        # it stronger evidence than ordinary name similarity.
+        # A source business key is expected to differ in type from the internal FK. The target
+        # schema proves that planning can execute a lookup through a declared unique key.
         type_score = max(type_score, 0.85)
         role_score = max(role_score, 0.85)
 
@@ -144,7 +233,7 @@ def deterministic_score(
         score = min(1.0, score + 0.12)
     extra = list(reasons)
     if relation_lookup:
-        extra.append("unique foreign-key lookup path")
+        extra.append("verified foreign-key lookup path")
     if type_score == 1.0:
         extra.append("type match")
     if source.role is target.role:

@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "suite": "recovery-stress",
+  "execution_model": "threaded multi-connection and process-contended local SQLite",
+  "claim": "ledger-backed duplicate suppression with fail-closed ambiguous outcomes",
+  "non_claims": [
+    "general exactly-once delivery",
+    "distributed consensus",
+    "OS process crash injection",
+    "multi-process delivery or lease contention",
+    "automatic replay of ambiguous non-idempotent writes"
+  ],
+  "scenarios": [
+    {
+      "id": "parallel_legacy_relay_schema_upgrade",
+      "test": "test_parallel_startup_migrates_legacy_relay_once",
+      "clients": 12,
+      "boundary": "relay startup migration",
+      "expected": "one serialized migration without startup failure or loss of existing rows"
+    },
+    {
+      "id": "parallel_legacy_ledger_schema_upgrade",
+      "test": "test_parallel_startup_migrates_legacy_delivery_ledger_once",
+      "clients": 12,
+      "boundary": "delivery-ledger startup migration",
+      "expected": "one serialized migration without startup failure or loss of existing rows"
+    },
+    {
+      "id": "process_contended_legacy_relay_schema_upgrade",
+      "test": "test_process_startup_migrates_legacy_relay_once",
+      "clients": 12,
+      "boundary": "relay startup migration across independent Python processes",
+      "expected": "one serialized migration without process failure or loss of existing rows"
+    },
+    {
+      "id": "process_contended_legacy_ledger_schema_upgrade",
+      "test": "test_process_startup_migrates_legacy_delivery_ledger_once",
+      "clients": 12,
+      "boundary": "delivery-ledger startup migration across independent Python processes",
+      "expected": "one serialized migration without process failure or loss of existing rows"
+    },
+    {
+      "id": "concurrent_source_retry",
+      "test": "test_concurrent_source_retries_keep_one_outbox_and_relay_copy",
+      "clients": 12,
+      "boundary": "source outbox and sealed relay enqueue",
+      "expected": "one canonical durable copy in each store"
+    },
+    {
+      "id": "parallel_relay_lease",
+      "test": "test_parallel_relay_workers_receive_disjoint_active_leases",
+      "clients": 6,
+      "records": 24,
+      "boundary": "independent SQLite relay clients",
+      "expected": "disjoint active leases with fenced acknowledgement tokens"
+    },
+    {
+      "id": "overlapping_destination_delivery",
+      "test": "test_parallel_destination_delivery_crosses_write_boundary_once",
+      "clients": 2,
+      "boundary": "durable write-started ledger transition",
+      "expected": "one destination write, one fail-closed ambiguous observation"
+    },
+    {
+      "id": "expired_relay_lease_during_write",
+      "test": "test_expired_relay_lease_during_write_does_not_enable_second_write",
+      "clients": 2,
+      "boundary": "relay lease expiry during a destination write",
+      "expected": "one write, one fail-closed observation and fenced stale acknowledgement"
+    },
+    {
+      "id": "restart_after_commit_before_ack",
+      "test": "test_restart_after_commit_before_transport_ack_suppresses_second_write",
+      "boundary": "source outbox, relay lease, destination ledger, spool and destination file",
+      "expected": "redelivery is reported as duplicate and a stale lease cannot acknowledge it"
+    },
+    {
+      "id": "restart_between_destination_write_and_ledger_commit",
+      "test": "test_restart_after_destination_write_before_ledger_commit_fails_closed",
+      "boundary": "destination acknowledgement and committed ledger transition",
+      "expected": "write-started remains ambiguous and is not blindly written a second time"
+    }
+  ]
+}

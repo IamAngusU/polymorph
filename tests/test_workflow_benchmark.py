@@ -96,6 +96,7 @@ def test_real_workflow_benchmark_crosses_every_durable_boundary(tmp_path: Path) 
         "destination_delivery",
         "acknowledgements",
         "destination_audit_outcome_check",
+        "destination_operational_event_check",
         "end_to_end_verification",
     ]
     assert all(stage["status"] == "passed" for stage in payload["stages"])

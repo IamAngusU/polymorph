@@ -1,0 +1,271 @@
+{
+  "version": 1,
+  "description": "Synthetic mapping safety regression corpus. This is release evidence, not a customer-data accuracy benchmark.",
+  "provenance": {
+    "kind": "hand-labelled synthetic cases",
+    "contains_customer_data": false,
+    "suitable_for_accuracy_marketing": false
+  },
+  "cases": [
+    {
+      "id": "exact-customer-id",
+      "source_schema": {"id": "s:customer", "fields": [{"id": "s1", "name": "customer id", "data_type": "string", "role": "natural_key"}]},
+      "target_schema": {"id": "t:customer", "fields": [{"id": "customer_id", "name": "customer id", "data_type": "string", "role": "natural_key"}, {"id": "order_id", "name": "order id", "data_type": "string", "role": "natural_key"}]},
+      "expected": {"s1": "customer_id"}
+    },
+    {
+      "id": "german-customer-number-alias",
+      "source_schema": {"id": "s:de-customer", "fields": [{"id": "s1", "name": "Kundennummer", "data_type": "string"}]},
+      "target_schema": {"id": "t:de-customer", "fields": [{"id": "customer_number", "name": "customer number", "data_type": "string", "aliases": ["Kundennummer"]}, {"id": "invoice_number", "name": "invoice number", "data_type": "string"}]},
+      "expected": {"s1": "customer_number"}
+    },
+    {
+      "id": "french-customer-number-alias",
+      "source_schema": {"id": "s:fr-customer", "fields": [{"id": "s1", "name": "Numéro client", "data_type": "string"}]},
+      "target_schema": {"id": "t:fr-customer", "fields": [{"id": "customer_number", "name": "customer number", "data_type": "string", "aliases": ["Numéro client"]}, {"id": "supplier_number", "name": "supplier number", "data_type": "string"}]},
+      "expected": {"s1": "customer_number"}
+    },
+    {
+      "id": "spanish-order-number-alias",
+      "source_schema": {"id": "s:es-order", "fields": [{"id": "s1", "name": "Número de pedido", "data_type": "string"}]},
+      "target_schema": {"id": "t:es-order", "fields": [{"id": "order_number", "name": "order number", "data_type": "string", "aliases": ["Número de pedido"]}, {"id": "invoice_number", "name": "invoice number", "data_type": "string"}]},
+      "expected": {"s1": "order_number"}
+    },
+    {
+      "id": "portuguese-invoice-number-alias",
+      "source_schema": {"id": "s:pt-invoice", "fields": [{"id": "s1", "name": "Número da fatura", "data_type": "string"}]},
+      "target_schema": {"id": "t:pt-invoice", "fields": [{"id": "invoice_number", "name": "invoice number", "data_type": "string", "aliases": ["Número da fatura"]}, {"id": "order_number", "name": "order number", "data_type": "string"}]},
+      "expected": {"s1": "invoice_number"}
+    },
+    {
+      "id": "italian-product-name-alias",
+      "source_schema": {"id": "s:it-product", "fields": [{"id": "s1", "name": "Nome prodotto", "data_type": "string"}]},
+      "target_schema": {"id": "t:it-product", "fields": [{"id": "product_name", "name": "product name", "data_type": "string", "aliases": ["Nome prodotto"]}, {"id": "customer_name", "name": "customer name", "data_type": "string"}]},
+      "expected": {"s1": "product_name"}
+    },
+    {
+      "id": "cyrillic-customer-exact",
+      "source_schema": {"id": "s:ru", "fields": [{"id": "s1", "name": "Клиент", "data_type": "string"}]},
+      "target_schema": {"id": "t:ru", "fields": [{"id": "client", "name": "Клиент", "data_type": "string"}, {"id": "invoice", "name": "Счет", "data_type": "string"}]},
+      "expected": {"s1": "client"}
+    },
+    {
+      "id": "japanese-order-exact",
+      "source_schema": {"id": "s:ja", "fields": [{"id": "s1", "name": "注文番号", "data_type": "string"}]},
+      "target_schema": {"id": "t:ja", "fields": [{"id": "order_number", "name": "注文番号", "data_type": "string"}, {"id": "customer_number", "name": "顧客番号", "data_type": "string"}]},
+      "expected": {"s1": "order_number"}
+    },
+    {
+      "id": "chinese-product-exact",
+      "source_schema": {"id": "s:zh", "fields": [{"id": "s1", "name": "产品名称", "data_type": "string"}]},
+      "target_schema": {"id": "t:zh", "fields": [{"id": "product_name", "name": "产品名称", "data_type": "string"}, {"id": "customer_name", "name": "客户名称", "data_type": "string"}]},
+      "expected": {"s1": "product_name"}
+    },
+    {
+      "id": "arabic-invoice-exact",
+      "source_schema": {"id": "s:ar", "fields": [{"id": "s1", "name": "رقم الفاتورة", "data_type": "string"}]},
+      "target_schema": {"id": "t:ar", "fields": [{"id": "invoice_number", "name": "رقم الفاتورة", "data_type": "string"}, {"id": "order_number", "name": "رقم الطلب", "data_type": "string"}]},
+      "expected": {"s1": "invoice_number"}
+    },
+    {
+      "id": "camel-snake-normalization",
+      "source_schema": {"id": "s:camel", "fields": [{"id": "s1", "name": "orderReference", "data_type": "string"}]},
+      "target_schema": {"id": "t:snake", "fields": [{"id": "order_reference", "name": "order_reference", "data_type": "string"}, {"id": "customer_reference", "name": "customer_reference", "data_type": "string"}]},
+      "expected": {"s1": "order_reference"}
+    },
+    {
+      "id": "numeric-compatible-integer-decimal",
+      "source_schema": {"id": "s:numeric", "fields": [{"id": "s1", "name": "quantity", "data_type": "integer"}]},
+      "target_schema": {"id": "t:numeric", "fields": [{"id": "quantity", "name": "quantity", "data_type": "decimal"}, {"id": "price", "name": "price", "data_type": "decimal"}]},
+      "expected": {"s1": "quantity"}
+    },
+    {
+      "id": "temporal-compatible-date-datetime",
+      "source_schema": {"id": "s:temporal", "fields": [{"id": "s1", "name": "created date", "data_type": "date"}]},
+      "target_schema": {"id": "t:temporal", "fields": [{"id": "created_date", "name": "created date", "data_type": "datetime"}, {"id": "updated_date", "name": "updated date", "data_type": "datetime"}]},
+      "expected": {"s1": "created_date"},
+      "review_only": ["s1"]
+    },
+    {
+      "id": "verified-foreign-key-alias",
+      "source_schema": {"id": "s:fk", "fields": [{"id": "s1", "name": "Debitor Nr", "data_type": "string", "role": "natural_key"}]},
+      "target_schema": {"id": "t:fk", "fields": [{"id": "customer_id", "name": "customer id", "data_type": "integer", "role": "foreign_key", "aliases": ["external customer number"]}, {"id": "order_id", "name": "order id", "data_type": "integer", "role": "primary_key"}], "relations": [{"source_field_id": "customer_id", "target_container": "customers", "target_field": "id", "lookup_keys": [{"name": "external customer number", "data_type": "string"}]}]},
+      "expected": {"s1": "customer_id"}
+    },
+    {
+      "id": "ambiguous-reference-must-abstain",
+      "source_schema": {"id": "s:ambiguous-ref", "fields": [{"id": "s1", "name": "reference", "data_type": "string"}]},
+      "target_schema": {"id": "t:ambiguous-ref", "fields": [{"id": "customer_reference", "name": "customer reference", "data_type": "string"}, {"id": "order_reference", "name": "order reference", "data_type": "string"}]},
+      "expected": {"s1": null}
+    },
+    {
+      "id": "generic-id-must-abstain",
+      "source_schema": {"id": "s:generic-id", "fields": [{"id": "s1", "name": "id", "data_type": "string"}]},
+      "target_schema": {"id": "t:generic-id", "fields": [{"id": "customer_id", "name": "customer id", "data_type": "string"}, {"id": "order_id", "name": "order id", "data_type": "string"}, {"id": "invoice_id", "name": "invoice id", "data_type": "string"}]},
+      "expected": {"s1": null}
+    },
+    {
+      "id": "account-number-is-not-customer-number",
+      "source_schema": {"id": "s:account", "fields": [{"id": "s1", "name": "account number", "data_type": "string"}]},
+      "target_schema": {"id": "t:customer", "fields": [{"id": "customer_number", "name": "customer number", "data_type": "string"}]},
+      "expected": {"s1": null}
+    },
+    {
+      "id": "invoice-number-is-not-order-number",
+      "source_schema": {"id": "s:invoice-order", "fields": [{"id": "s1", "name": "invoice number", "data_type": "string"}]},
+      "target_schema": {"id": "t:invoice-order", "fields": [{"id": "order_number", "name": "order number", "data_type": "string"}]},
+      "expected": {"s1": null}
+    },
+    {
+      "id": "gross-is-not-net",
+      "source_schema": {"id": "s:gross", "fields": [{"id": "s1", "name": "gross amount", "data_type": "decimal"}]},
+      "target_schema": {"id": "t:net", "fields": [{"id": "net_amount", "name": "net amount", "data_type": "decimal"}]},
+      "expected": {"s1": null}
+    },
+    {
+      "id": "shipping-is-not-billing",
+      "source_schema": {"id": "s:shipping", "fields": [{"id": "s1", "name": "shipping address", "data_type": "string", "sensitivity": "personal"}]},
+      "target_schema": {"id": "t:billing", "fields": [{"id": "billing_address", "name": "billing address", "data_type": "string", "sensitivity": "personal"}]},
+      "expected": {"s1": null}
+    },
+    {
+      "id": "ambiguous-date-must-abstain",
+      "source_schema": {"id": "s:date", "fields": [{"id": "s1", "name": "date", "data_type": "date"}]},
+      "target_schema": {"id": "t:date", "fields": [{"id": "order_date", "name": "order date", "data_type": "date"}, {"id": "shipping_date", "name": "shipping date", "data_type": "date"}]},
+      "expected": {"s1": null}
+    },
+    {
+      "id": "ambiguous-name-must-abstain",
+      "source_schema": {"id": "s:name", "fields": [{"id": "s1", "name": "name", "data_type": "string"}]},
+      "target_schema": {"id": "t:name", "fields": [{"id": "customer_name", "name": "customer name", "data_type": "string"}, {"id": "product_name", "name": "product name", "data_type": "string"}]},
+      "expected": {"s1": null}
+    },
+    {
+      "id": "currency-context-must-abstain",
+      "source_schema": {"id": "s:currency", "fields": [{"id": "s1", "name": "amount", "data_type": "decimal"}]},
+      "target_schema": {"id": "t:currency", "fields": [{"id": "amount_eur", "name": "amount EUR", "data_type": "decimal", "description": "Amount denominated in EUR"}, {"id": "amount_usd", "name": "amount USD", "data_type": "decimal", "description": "Amount denominated in USD"}]},
+      "expected": {"s1": null}
+    },
+    {
+      "id": "secret-downgrade-must-abstain",
+      "source_schema": {"id": "s:secret", "fields": [{"id": "s1", "name": "api token", "data_type": "string", "sensitivity": "secret", "role": "credential"}]},
+      "target_schema": {"id": "t:secret", "fields": [{"id": "api_token", "name": "api token", "data_type": "string", "sensitivity": "internal", "role": "credential"}]},
+      "expected": {"s1": null}
+    },
+    {
+      "id": "credential-role-mismatch-must-not-auto",
+      "source_schema": {"id": "s:credential-role", "fields": [{"id": "s1", "name": "api token", "data_type": "string", "sensitivity": "secret", "role": "credential"}]},
+      "target_schema": {"id": "t:credential-role", "fields": [{"id": "api_token_value", "name": "api token", "data_type": "string", "sensitivity": "secret", "role": "value"}]},
+      "expected": {"s1": null}
+    },
+    {
+      "id": "unknown-types-require-review",
+      "source_schema": {"id": "s:unknown-type", "fields": [{"id": "s1", "name": "customer id", "data_type": "unknown"}]},
+      "target_schema": {"id": "t:unknown-type", "fields": [{"id": "customer_id", "name": "customer id", "data_type": "unknown"}]},
+      "expected": {"s1": "customer_id"},
+      "review_only": ["s1"]
+    },
+    {
+      "id": "hard-type-mismatch-requires-review",
+      "source_schema": {"id": "s:type-mismatch", "fields": [{"id": "s1", "name": "active", "data_type": "string"}]},
+      "target_schema": {"id": "t:type-mismatch", "fields": [{"id": "active", "name": "active", "data_type": "boolean"}]},
+      "expected": {"s1": "active"},
+      "review_only": ["s1"]
+    },
+    {
+      "id": "duplicate-source-claim-requires-review",
+      "source_schema": {"id": "s:duplicate", "fields": [{"id": "canonical", "name": "customer id", "data_type": "string"}, {"id": "duplicate", "name": "client id", "data_type": "string"}]},
+      "target_schema": {"id": "t:duplicate", "fields": [{"id": "customer_id", "name": "customer id", "data_type": "string"}]},
+      "expected": {"canonical": "customer_id", "duplicate": null}
+    },
+    {
+      "id": "unicode-homoglyph-requires-review",
+      "source_schema": {"id": "s:homoglyph", "fields": [{"id": "s1", "name": "customer ıd", "data_type": "string"}]},
+      "target_schema": {"id": "t:homoglyph", "fields": [{"id": "customer_id", "name": "customer id", "data_type": "string"}, {"id": "invoice_id", "name": "invoice id", "data_type": "string"}]},
+      "expected": {"s1": "customer_id"},
+      "review_only": ["s1"]
+    },
+    {
+      "id": "abbreviated-customer-number-requires-review",
+      "source_schema": {"id": "s:abbrev", "fields": [{"id": "s1", "name": "cust no", "data_type": "string"}]},
+      "target_schema": {"id": "t:abbrev", "fields": [{"id": "customer_number", "name": "customer number", "data_type": "string"}, {"id": "supplier_number", "name": "supplier number", "data_type": "string"}]},
+      "expected": {"s1": "customer_number"},
+      "review_only": ["s1"]
+    },
+    {
+      "id": "german-false-friend-gift-must-abstain",
+      "source_schema": {"id": "s:false-friend", "fields": [{"id": "s1", "name": "Giftstoff", "data_type": "string", "description": "German term for a poisonous substance"}]},
+      "target_schema": {"id": "t:false-friend", "fields": [{"id": "gift_message", "name": "gift message", "data_type": "string"}, {"id": "product_note", "name": "product note", "data_type": "string"}]},
+      "expected": {"s1": null}
+    },
+    {
+      "id": "generic-status-must-abstain",
+      "source_schema": {"id": "s:status", "fields": [{"id": "s1", "name": "status", "data_type": "string"}]},
+      "target_schema": {"id": "t:status", "fields": [{"id": "order_status", "name": "order status", "data_type": "string"}, {"id": "payment_status", "name": "payment status", "data_type": "string"}]},
+      "expected": {"s1": null}
+    },
+    {
+      "id": "multi-field-order-happy-path",
+      "source_schema": {"id": "s:order", "fields": [{"id": "number", "name": "order number", "data_type": "string"}, {"id": "quantity", "name": "quantity", "data_type": "integer"}, {"id": "net", "name": "net amount", "data_type": "decimal"}]},
+      "target_schema": {"id": "t:order", "fields": [{"id": "order_number", "name": "order number", "data_type": "string"}, {"id": "quantity", "name": "quantity", "data_type": "integer"}, {"id": "net_amount", "name": "net amount", "data_type": "decimal"}, {"id": "gross_amount", "name": "gross amount", "data_type": "decimal"}]},
+      "expected": {"number": "order_number", "quantity": "quantity", "net": "net_amount"}
+    },
+    {
+      "id": "pii-address-ambiguity-must-abstain",
+      "source_schema": {"id": "s:pii-address", "fields": [{"id": "s1", "name": "address", "data_type": "string", "sensitivity": "personal"}]},
+      "target_schema": {"id": "t:pii-address", "fields": [{"id": "billing_address", "name": "billing address", "data_type": "string", "sensitivity": "personal"}, {"id": "shipping_address", "name": "shipping address", "data_type": "string", "sensitivity": "personal"}]},
+      "expected": {"s1": null}
+    },
+    {
+      "id": "unrelated-non-latin-must-abstain",
+      "source_schema": {"id": "s:non-latin", "fields": [{"id": "s1", "name": "Клиент", "data_type": "string"}]},
+      "target_schema": {"id": "t:non-latin", "fields": [{"id": "order_number", "name": "注文番号", "data_type": "string"}, {"id": "product_name", "name": "产品名称", "data_type": "string"}]},
+      "expected": {"s1": null}
+    },
+    {
+      "id": "secret-to-secret-exact",
+      "source_schema": {"id": "s:secret-safe", "fields": [{"id": "s1", "name": "api token", "data_type": "string", "sensitivity": "secret", "role": "credential"}]},
+      "target_schema": {"id": "t:secret-safe", "fields": [{"id": "api_token", "name": "api token", "data_type": "string", "sensitivity": "secret", "role": "credential"}, {"id": "api_password", "name": "api password", "data_type": "string", "sensitivity": "secret", "role": "credential"}]},
+      "expected": {"s1": "api_token"}
+    },
+    {
+      "id": "secret-credential-ambiguity-must-abstain",
+      "source_schema": {"id": "s:credential", "fields": [{"id": "s1", "name": "credential", "data_type": "string", "sensitivity": "secret", "role": "credential"}]},
+      "target_schema": {"id": "t:credential", "fields": [{"id": "api_token", "name": "api token", "data_type": "string", "sensitivity": "secret", "role": "credential"}, {"id": "api_password", "name": "api password", "data_type": "string", "sensitivity": "secret", "role": "credential"}]},
+      "expected": {"s1": null}
+    },
+    {
+      "id": "personal-to-public-downgrade-must-abstain",
+      "source_schema": {"id": "s:personal-downgrade", "fields": [{"id": "s1", "name": "customer email", "data_type": "string", "sensitivity": "personal"}]},
+      "target_schema": {"id": "t:personal-downgrade", "fields": [{"id": "customer_email", "name": "customer email", "data_type": "string", "sensitivity": "public"}]},
+      "expected": {"s1": null}
+    },
+    {
+      "id": "internal-to-personal-upgrade-requires-review",
+      "source_schema": {"id": "s:sensitivity-upgrade", "fields": [{"id": "s1", "name": "customer email", "data_type": "string", "sensitivity": "internal"}]},
+      "target_schema": {"id": "t:sensitivity-upgrade", "fields": [{"id": "customer_email", "name": "customer email", "data_type": "string", "sensitivity": "personal"}]},
+      "expected": {"s1": "customer_email"},
+      "review_only": ["s1"]
+    },
+    {
+      "id": "nullable-source-to-required-target-requires-review",
+      "source_schema": {"id": "s:nullable-source", "fields": [{"id": "s1", "name": "customer email", "data_type": "string", "nullable": true}]},
+      "target_schema": {"id": "t:required-target", "fields": [{"id": "customer_email", "name": "customer email", "data_type": "string", "nullable": false}]},
+      "expected": {"s1": "customer_email"},
+      "review_only": ["s1"]
+    },
+    {
+      "id": "required-source-to-nullable-target-is-safe",
+      "source_schema": {"id": "s:required-source", "fields": [{"id": "s1", "name": "customer email", "data_type": "string", "nullable": false}]},
+      "target_schema": {"id": "t:nullable-target", "fields": [{"id": "customer_email", "name": "customer email", "data_type": "string", "nullable": true}]},
+      "expected": {"s1": "customer_email"}
+    },
+    {
+      "id": "primary-key-role-conflict-requires-review",
+      "source_schema": {"id": "s:key-role", "fields": [{"id": "s1", "name": "customer id", "data_type": "integer", "role": "primary_key"}]},
+      "target_schema": {"id": "t:key-role", "fields": [{"id": "customer_id", "name": "customer id", "data_type": "integer", "role": "foreign_key"}]},
+      "expected": {"s1": "customer_id"},
+      "review_only": ["s1"]
+    }
+  ]
+}

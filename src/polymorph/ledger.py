@@ -89,7 +89,11 @@ class DeliveryLedger:
         return connection
 
     def _initialize(self) -> None:
-        with closing(self._connect()) as connection, connection:
+        connection = self._connect()
+        try:
+            # Fence schema inspection and migration together. Concurrent destination
+            # workers may start on the same legacy ledger during a rolling restart.
+            connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS deliveries (
@@ -116,6 +120,13 @@ class DeliveryLedger:
                 connection.execute("ALTER TABLE deliveries ADD COLUMN claim_token TEXT")
             if "claim_expires_at" not in columns:
                 connection.execute("ALTER TABLE deliveries ADD COLUMN claim_expires_at TEXT")
+            connection.execute("COMMIT")
+        except Exception:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
+        finally:
+            connection.close()
 
     def _now(self) -> datetime:
         value = self._clock()
