@@ -29,6 +29,7 @@ from polymorph.models.schema import (
 from polymorph.models.types import DataType, FieldRole, Sensitivity
 from polymorph.secrets import SecretProvider
 
+from ._database_proof import write_verified_rows
 from .base import (
     AtomicBatchCapabilities,
     BatchWriteItem,
@@ -340,7 +341,20 @@ class DatabaseConnector:
     ) -> int:
         self._ensure_open()
         table = self._table()
-        rows = [dict(record) for record in records]
+        rows: list[dict[str, object]] = []
+        for record in records:
+            if len(rows) >= DATABASE_ATOMIC_BATCH_MAX_RECORDS:
+                raise ConnectorWriteError(
+                    "database write exceeds the record count limit",
+                    outcome=WriteOutcome.NOT_COMMITTED,
+                )
+            try:
+                rows.append(dict(record))
+            except Exception:
+                raise ConnectorWriteError(
+                    "database write contains an invalid record",
+                    outcome=WriteOutcome.NOT_COMMITTED,
+                ) from None
         if not rows:
             return 0
         return self._write_rows(table, rows)
@@ -383,6 +397,11 @@ class DatabaseConnector:
         delivery_identities: set[tuple[str, str]] = set()
         idempotency_keys: set[str] = set()
         for item in items:
+            if len(rows) >= item_count:
+                raise ConnectorWriteError(
+                    "database batch changed while it was being validated",
+                    outcome=WriteOutcome.NOT_COMMITTED,
+                )
             if not isinstance(item, BatchWriteItem):
                 raise ConnectorWriteError(
                     "database batch contains an invalid item",
@@ -420,70 +439,13 @@ class DatabaseConnector:
         return self._write_rows(table, rows)
 
     def _write_rows(self, table: Table, rows: list[dict[str, object]]) -> int:
-        allowed = set(table.columns.keys())
-        for row in rows:
-            unknown = set(row) - allowed
-            if unknown:
-                raise ConnectorWriteError(
-                    "record contains columns outside the destination schema",
-                    outcome=WriteOutcome.NOT_COMMITTED,
-                )
-
-        connection = self.engine.connect()
-        transaction = connection.begin()
-        expected_count = len(rows)
-        is_multirow = expected_count > 1
-        try:
-            try:
-                result = connection.execute(
-                    table.insert(),
-                    rows if is_multirow else rows[0],
-                )
-            except Exception as exc:
-                try:
-                    transaction.rollback()
-                except Exception:
-                    outcome = WriteOutcome.UNKNOWN
-                else:
-                    outcome = (
-                        WriteOutcome.NOT_COMMITTED
-                        if self.capabilities.transactional_write
-                        else WriteOutcome.UNKNOWN
-                    )
-                raise ConnectorWriteError(
-                    "database write failed",
-                    outcome=outcome,
-                ) from exc
-            if not self._proves_exact_rowcount(
-                result,
-                expected_count=expected_count,
-                is_multirow=is_multirow,
-            ):
-                try:
-                    transaction.rollback()
-                except Exception as exc:
-                    raise ConnectorWriteError(
-                        "database row count is unproven and rollback outcome is unknown",
-                        outcome=WriteOutcome.UNKNOWN,
-                    ) from exc
-                raise ConnectorWriteError(
-                    "database did not prove the exact affected row count",
-                    outcome=(
-                        WriteOutcome.NOT_COMMITTED
-                        if self.capabilities.transactional_write
-                        else WriteOutcome.UNKNOWN
-                    ),
-                )
-            try:
-                transaction.commit()
-            except Exception as exc:
-                raise ConnectorWriteError(
-                    "database commit outcome is unknown",
-                    outcome=WriteOutcome.UNKNOWN,
-                ) from exc
-        finally:
-            connection.close()
-        return expected_count
+        return write_verified_rows(
+            self.engine,
+            table,
+            rows,
+            transactional_write=self.capabilities.transactional_write,
+            proves_rowcount=self._proves_exact_rowcount,
+        )
 
     @staticmethod
     def _proves_exact_rowcount(
