@@ -4,25 +4,30 @@
   <strong>English</strong> · <a href="COMMERCIAL.de.md">Deutsch</a>
 </p>
 
-Commercial use is not granted by the public repository license.
+Commercial use of Polymorph is already allowed under AGPL-3.0-only.
 
-Polymorph is publicly source-available under PolyForm Noncommercial 1.0.0. If you want to use it commercially, the clean path is a separate written agreement. Not a creative interpretation of the word "noncommercial".
+If you can comply with the public AGPL license, you do not need a paid license just because the software is used by a business or in a revenue-generating context.
 
-Paid commercial licenses are available directly from Angus Uelsmann through [angusu.de](https://angusu.de).
+The separate commercial license exists for a different reason: **some organizations need proprietary terms instead of AGPL terms.**
+
+Alternative commercial licenses are available directly from Angus Uelsmann through [angusu.de](https://angusu.de).
 
 Depending on the use case, a commercial agreement may cover:
 
-- internal business use
-- embedding Polymorph into another product
-- hosted or managed services
-- redistribution
-- white-label use
-- fees, revenue participation or other negotiated terms
+- proprietary or closed-source use
+- embedding Polymorph into a product that cannot comply with AGPL copyleft obligations
+- operating a modified network service without the AGPL source-offer obligations
+- redistribution under negotiated proprietary terms
+- white-label or additional branding rights
+- support, warranty, indemnity, SLAs or other negotiated obligations
+- fees, revenue participation or other commercial terms
 
-Commercial rights exist only when they are agreed in writing. Nothing in this file silently grants them.
+The agreement grants an alternative set of rights for the covered use case. It does not make the public AGPL release less open, and it does not retroactively remove AGPL rights from copies already received under that license.
 
-The public license requires its `Required Notice` lines to remain with redistributed copies where applicable. Product attribution for a hosted or commercial offering belongs in the separate commercial agreement.
+If AGPL works for you, use AGPL. If it does not, that is what this page is for. No interpretive dance around the word "commercial" required.
 
 For the human-readable overview, see [LICENSING.md](LICENSING.md).
 
-This page is informational. It does not replace, amend or add permissions to [`LICENSE`](LICENSE). The license wins every argument about the license. Efficient arrangement, really.
+Branding rights are separate from the software license; see [TRADEMARKS.md](TRADEMARKS.md).
+
+This page is informational. It does not replace, amend or add restrictions to [`LICENSE`](LICENSE).
