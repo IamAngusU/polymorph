@@ -12,11 +12,11 @@ Eine Änderung sollte explizite Trust Boundaries erhalten, Unsicherheit sichtbar
 
 Issues, Design-Feedback, reproduzierbare Testfälle und verantwortungsvolle Security Reports sind willkommen.
 
-Bevor du Code beiträgst, öffne bitte zuerst ein Issue oder kontaktiere den Maintainer. Polymorph kombiniert eine öffentliche Noncommercial-Lizenz mit separat ausgehandelten kommerziellen Lizenzen. Third-party-Code kann deshalb erst gemerged werden, wenn eine Contributor-Vereinbarung für dieses Lizenzmodell von beiden Seiten geprüft und akzeptiert wurde.
+Polymorph wird öffentlich unter AGPL-3.0-only lizenziert und kann zusätzlich unter separaten kommerziellen Bedingungen angeboten werden. Damit dieses Dual-Licensing-Modell sauber erhalten bleibt, werden substantielle Third-party-Codebeiträge erst gemerged, wenn eine Contributor-Vereinbarung dem Maintainer ausreichende Rechte gibt, den Beitrag unter AGPL zu veröffentlichen und in alternative kommerzielle Lizenzen einzubeziehen.
 
-Diese Datei ist nicht diese Vereinbarung. Ein Pull Request ist ebenfalls keine überraschende Lizenzstrategie.
+Bevor du Code beiträgst, öffne bitte zuerst ein Issue oder kontaktiere den Maintainer.
 
-Unaufgeforderte PRs können trotzdem für die Diskussion nützlich sein, sollten aber bis dahin nicht automatisch mit einem Merge rechnen.
+Diese Datei ist nicht die Contributor-Vereinbarung. Ein Pull Request ist ebenfalls kein überraschendes Copyright Assignment. Solange dieser Prozess für einen Beitrag nicht existiert und akzeptiert wurde, können unaufgeforderte PRs für die Diskussion nützlich sein, sollten aber nicht automatisch mit einem Merge rechnen.
 
 ## Vor einer Änderung
 
@@ -94,4 +94,6 @@ Für vermutete Schwachstellen bitte kein öffentliches Issue eröffnen. Nutze de
 
 ## Lizenz
 
-Beigetragener Code ändert die Repository-Lizenz nicht. Siehe [LICENSING.de.md](LICENSING.de.md) und [`LICENSE`](LICENSE).
+Die öffentliche Projektlizenz ist AGPL-3.0-only. Eine Contributor-Vereinbarung kann dem Maintainer zusätzlich die Rechte geben, die für alternative kommerzielle Lizenzierung des Beitrags nötig sind; ein PR allein erledigt diese Aufgabe nicht.
+
+Siehe [LICENSING.de.md](LICENSING.de.md) und [`LICENSE`](LICENSE).
