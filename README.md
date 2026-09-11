@@ -56,12 +56,12 @@ Polymorph deliberately separates useful signals from signals that may authorize 
 | File extension or display name | Yes | No |
 | Successful parser call | Yes | No |
 | Magika classification | Yes | No |
-| Old recipe | Yes | No |
+| Old recipe | Yes | No. Yesterday was also a different day. |
 | Embedding similarity | Yes | No |
 | Cross-encoder score | Yes | No |
 | Current schema, policy and deterministic contract evidence | Yes | Yes, when all gates pass |
 
-A model may improve candidate ordering. It does not get a pen.
+Useful is not authority. A calculator helps with a tax return too. It still does not get to choose the deductions.
 
 If a high-confidence model result disagrees with the independently strongest deterministic target, the mapping is review-required. A larger number after the decimal point is not a new trust boundary.
 
