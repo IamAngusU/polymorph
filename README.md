@@ -20,6 +20,7 @@
 </p>
 
 <p align="center"><sub>Measured baselines, not universal promises. Click a metric for context.</sub></p>
+<p align="center"><sub>Open source under AGPL-3.0-only · alternative commercial licensing available.</sub></p>
 
 Polymorph is a local-first, policy-driven data bridge for recurring imports and integrations that are too important for a hopeful script and too awkward for a large integration platform.
 
@@ -325,6 +326,7 @@ See [Performance baseline](docs/PERFORMANCE_BASELINE.md) for the exact machine, 
 - [Security reporting](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 - [Licensing explained](LICENSING.md)
+- [Name and logo policy](TRADEMARKS.md)
 
 ## Status: alpha means alpha
 
@@ -350,10 +352,14 @@ The project documents these limits because "alpha" is a software maturity label,
 
 ## License
 
-Polymorph is source-available under the **PolyForm Noncommercial License 1.0.0**. It is not OSI Open Source.
+Polymorph is open source under the **GNU Affero General Public License version 3 only** (`AGPL-3.0-only`).
 
-The actual permissions are defined by [`LICENSE`](LICENSE). Commercial use requires a separate license from Angus Uelsmann.
+Commercial use is allowed under the AGPL. If those terms work for your use case, no separate paid license is required. A separate commercial license is available for proprietary or closed-source use and other use cases that need different terms.
 
-For the human-readable overview, see [LICENSING.md](LICENSING.md). Paid commercial terms, including any revenue participation or white-label rights, are agreed only in a separate written agreement. See [commercial licensing](COMMERCIAL.md).
+**Open source does not mean authorless.** Copyright and license notices remain part of the project, and modified versions must follow the notice and source obligations in the AGPL.
 
-Required notices reference [angusu.de](https://angusu.de) and this repository. Third-party components retain their own licenses; see [THIRD_PARTY.md](THIRD_PARTY.md).
+See [LICENSING.md](LICENSING.md) for the human-readable overview, [COMMERCIAL.md](COMMERCIAL.md) for alternative commercial licensing, and [TRADEMARKS.md](TRADEMARKS.md) for the Polymorph name and logo policy.
+
+Copyright 2026 Angus Uelsmann · [angusu.de](https://angusu.de) · [NOTICE](NOTICE)
+
+Third-party components retain their own licenses; see [THIRD_PARTY.md](THIRD_PARTY.md).
