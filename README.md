@@ -2,6 +2,10 @@
   <img src="https://raw.githubusercontent.com/IamAngusU/polymorph/main/docs/assets/brand-mark.webp" width="116" alt="Polymorph mark">
 </p>
 
+<p align="center">
+  <strong>English</strong> · <a href="README.de.md">Deutsch</a>
+</p>
+
 <h1 align="center">Polymorph</h1>
 
 <p align="center">
@@ -319,6 +323,8 @@ See [Performance baseline](docs/PERFORMANCE_BASELINE.md) for the exact machine, 
 - [Test strategy](docs/TEST_STRATEGY.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Security reporting](SECURITY.md)
+- [Contributing](CONTRIBUTING.md)
+- [Licensing explained](LICENSING.md)
 
 ## Status: alpha means alpha
 
@@ -346,8 +352,8 @@ The project documents these limits because "alpha" is a software maturity label,
 
 Polymorph is source-available under the **PolyForm Noncommercial License 1.0.0**. It is not OSI Open Source.
 
-Permitted use is defined by the license itself. Commercial use requires a separate license from Angus Uelsmann.
+The actual permissions are defined by [`LICENSE`](LICENSE). Commercial use requires a separate license from Angus Uelsmann.
 
-Paid commercial terms, including any revenue participation or white-label rights, are agreed in a separate written agreement. See [commercial licensing](COMMERCIAL.md).
+For the human-readable overview, see [LICENSING.md](LICENSING.md). Paid commercial terms, including any revenue participation or white-label rights, are agreed only in a separate written agreement. See [commercial licensing](COMMERCIAL.md).
 
 Required notices reference [angusu.de](https://angusu.de) and this repository. Third-party components retain their own licenses; see [THIRD_PARTY.md](THIRD_PARTY.md).
