@@ -1,7 +1,14 @@
-include CHANGELOG.md COMMERCIAL.md CONTRIBUTING.md LICENSE NOTICE SECURITY.md THIRD_PARTY.md
+include CHANGELOG.md
+include COMMERCIAL.md COMMERCIAL.de.md
+include CONTRIBUTING.md CONTRIBUTING.de.md
+include LICENSE LICENSING.md LICENSING.de.md NOTICE
+include README.md README.de.md
+include SECURITY.md SECURITY.de.md
+include TRADEMARKS.md TRADEMARKS.de.md
+include THIRD_PARTY.md
 include examples.py
 recursive-include benchmarks *.json *.md
-recursive-include docs *.md *.png *.webp
+recursive-include docs *.md *.png *.webp *.svg
 recursive-include scripts *.py
 recursive-include tests *.py
 recursive-include tests/fixtures/csv-spectrum *.csv *.json *.md *.txt SHA256SUMS
