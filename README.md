@@ -4,55 +4,118 @@
 
 # Polymorph
 
-Polymorph is a local-first, policy-driven data bridge for moving data between structurally different systems without turning a central orchestration service into a universal plaintext trust point.
+> Move data between incompatible systems. Prove the route before writing. Keep plaintext at the endpoints. Stop cleanly when the evidence is not good enough.
 
-It is built around one reliability rule: **uncertainty must reduce automation, never increase guessing**. File names, extensions, model scores, old recipes and successful parser calls are evidence, not authority. Automatic promotion requires independently strong deterministic evidence, an immutable validated plan and a complete no-write preflight.
+Polymorph is a local-first, policy-driven data bridge for recurring imports and integrations that are too important for a hopeful script and too awkward for a large integration platform.
 
-Stable protocol and persisted-state namespaces are intentionally decoupled from the product name so a later rename does not invalidate encrypted envelopes, delivery state or recipe history.
+System A calls a field `customer_no`. System B expects `account_id`. Then someone moves a spreadsheet column, renames a header, adds a formula, changes a foreign-key contract or sends the same report with a different layout.
 
-## v0.4 alpha hardening
+The traditional solution is often some variation of "map it once and hope nobody touches anything".
+
+Polymorph has trust issues instead.
+
+Its core reliability rule is simple:
+
+**Uncertainty must reduce automation, never increase guessing.**
+
+A filename is evidence. A successful parser call is evidence. A model score is evidence. A recipe that worked yesterday is evidence.
+
+Yesterday was also a different day.
+
+Automatic promotion requires independently strong deterministic evidence, an immutable validated plan and a complete no-write preflight. If the system cannot prove a route inside its declared operating domain, it asks for review instead of manufacturing confidence.
+
+Stable protocol and persisted-state namespaces are intentionally decoupled from the product name so a later rename does not invalidate encrypted envelopes, delivery state or recipe history. Branding is allowed to have a midlife crisis. Persisted cryptographic state is not.
+
+## Why Polymorph exists
+
+Another AI column mapper is not much of a product. It is a feature, and several vendors already have one.
+
+Polymorph is intended to be the trust layer between systems that were never designed to agree with each other.
+
+The useful version does four things well:
+
+1. **Understand the source conservatively.** Inspect bytes, structure, schema, relationships and policy before trusting labels.
+2. **Prove the route before writing.** Mapping, transforms and foreign-key resolution are validated against one exact plan.
+3. **Keep plaintext at the endpoints.** The relay receives ciphertext and routing metadata, not the payload values it transports.
+4. **Fail in boring ways.** Ambiguous mappings require review. Unknown write outcomes remain unknown. Retries do not become optimism with a loop around them.
+
+Initial users are developers and technical operators with recurring imports where a wrong identifier, amount, credential or foreign key is expensive:
+
+- agencies moving customer exports into several client systems
+- small operations teams importing Excel, CSV and API data into an ERP or database
+- security-conscious teams that cannot send payloads to a hosted mapping service
+- software vendors that need a self-hosted ingestion edge for customer data
+- regulated teams that need a reviewable plan and an honest record of uncertain writes
+
+## Evidence is not authority
+
+Polymorph deliberately separates useful signals from signals that may authorize automation.
+
+| Signal | Useful? | Can authorize a write by itself? |
+| --- | --- | --- |
+| File extension or display name | Yes | No |
+| Successful parser call | Yes | No |
+| Magika classification | Yes | No |
+| Old recipe | Yes | No |
+| Embedding similarity | Yes | No |
+| Cross-encoder score | Yes | No |
+| Current schema, policy and deterministic contract evidence | Yes | Yes, when all gates pass |
+
+A model may improve candidate ordering. It does not get a pen.
+
+If a high-confidence model result disagrees with the independently strongest deterministic target, the mapping is review-required. A larger number after the decimal point is not a new trust boundary.
+
+## What v0.4 alpha already does
+
+### Input trust
 
 - Content-first file inspection. Parser selection does not trust the extension or display name.
-- A fail-closed parser-worker foundation can run content inspection against an exact-byte snapshot.
-  Non-setid Linux Bubblewrap 0.12.0 or newer is the strict backend; a normal Windows child process
-  is reported only as process separation. Structured schema and record parsers are not claimed as
-  isolated yet.
-- Opened-handle identity binding for CSV, JSON and Excel closes ordinary path-swap gaps between
-  inspection and parsing. This is not a claim of hostile-code process isolation.
-- ZIP/OOXML central-directory checks for traversal, symlinks, duplicate or encrypted members, suspicious expansion, oversized members, macros and external workbook links and data connections before a workbook parser is opened.
-- GZIP members are validated with bounded streaming and member-count limits. JSON and XML have
-  explicit parse, depth, item, element and per-tag attribute budgets before expensive parser work.
-- Optional local Magika evidence. A high-confidence conflict between independent detectors blocks automatic parser selection rather than picking a favorite.
+- Opened-handle identity binding for CSV, JSON and Excel closes ordinary path-swap gaps between inspection and parsing.
+- ZIP and OOXML central-directory checks reject traversal, symlinks, duplicate or encrypted members, suspicious expansion, oversized members, macros and external workbook links or data connections before a workbook parser is opened.
+- GZIP members are validated with bounded streaming and member-count limits.
+- JSON and XML have explicit parse, depth, item, element and per-tag attribute budgets before expensive parser work.
+- Optional local Magika evidence can challenge deterministic detection. A strong conflict blocks automatic parser selection rather than starting a confidence popularity contest.
+- A fail-closed parser-worker foundation can inspect an exact-byte snapshot. Non-setid Linux Bubblewrap 0.12.0 or newer is the strict backend. A normal Windows child process is reported only as process separation.
 - Excel parsing requires XML hardening through `defusedxml`, then performs layout discovery for title rows, moved columns, repeated headers and fixed-width identifiers such as `000042`.
-- Spreadsheet formulas are detected separately. Cached formula results are treated as freshness-unproven and prevent automatic recipe promotion.
-- CSV dialect selection uses a deterministic candidate ensemble and can optionally include CleverCSV. A close tie is rejected instead of guessed.
-- Deterministic schema matching remains the automatic authority. Optional local embeddings and a multilingual cross-encoder reranker can improve candidate order, but neither can independently authorize a write mapping.
-- One-command `prepare` flow for content inspection, mapping, recipe reuse and full no-write preflight.
-- Versioned local recipes. A recipe is reusable memory, not permission: it is structurally matched, rebound to the current exact schemas, assigned a new plan digest and validated again before use.
-- Metadata-only recipe outcomes drive a conservative reuse circuit. Repeated rejected runs suspend
-  the old recipe and fall back to fresh mapping instead of silently changing it.
-- Full-scan preflight exercises source transforms and optional read-only foreign-key resolution without destination writes. Sampled scans can inform review but cannot auto-promote a recipe.
-- Opt-in resource benchmarks and labelled mapping-corpus evaluation. Normal runs do not enable tracing or RSS polling.
-- Full-record blind transport using X25519, HKDF-SHA256 and ChaCha20-Poly1305.
-- Ed25519 source authentication bound to tenant and connector identity, including finite rotation
-  drain and hard revocation.
-- Destination recipient keys are accepted from a separately pinned Ed25519 destination identity,
-  not from control-plane claims alone. Signed, route-bound certificates form a monotonic rotation
-  chain, and an optional local checkpoint rejects stale generations and competing forks.
-- Durable source outbox that persists exact signed ciphertext for safe retry after a lost
-  acknowledgement.
-- Ciphertext-only relay queue with fenced leases, durable idempotency ledger, sealed quarantine
-  and explicit unknown-write-outcome handling.
-- Capability-gated atomic destination batches keep the same per-record authentication, ledger,
-  audit and replay evidence while collapsing safe SQLite and PostgreSQL writes into one
-  transaction. Count and sealed-wire budgets bound every internal batch.
-- Destination runtime pinned to one exact plan and target contract, with final field, required,
-  nullability and type checks before a connector write.
-- CSV exports reject spreadsheet formula-like values by default. HTTP redirects never count as a
-  committed write.
-- Ed25519-signed capabilities and a hash-chained metadata-only audit log.
-- Reason-code explanations plus verified audit and recipe-health summaries for operator diagnosis.
-- Credential references and encrypted destination recipient key files.
+- Spreadsheet formulas are detected separately. Cached formula results have unproven freshness and therefore block automatic recipe promotion.
+- CSV dialect selection uses a deterministic candidate ensemble and may include CleverCSV. A close tie is rejected instead of guessed. Revolutionary, apparently.
+
+### Mapping and preflight
+
+- Deterministic schema matching is the automatic authority.
+- Matching uses names, aliases, declared types, nullability, sensitivity, field roles and verified relationship evidence.
+- Optional local embeddings and a multilingual cross-encoder reranker may improve candidate order, but neither may independently authorize a mapping.
+- Target collisions, directional type problems, sensitivity conflicts and weak relationship proof demote or block automation even when a score looks impressive.
+- Versioned recipes store reusable memory, not permission. Every reuse is rebound to current exact schemas, receives a new plan digest, is validated again and must pass preflight again.
+- Repeated rejected recipe runs reduce trust and suspend automatic reuse instead of making the matcher increasingly creative.
+- `prepare` combines content inspection, mapping, recipe reuse and a complete no-write preflight.
+- Full-scan preflight exercises source transforms and optional read-only foreign-key resolution without destination writes.
+- Sampled scans are diagnostic only. They cannot auto-promote a recipe.
+- `--max-input-records` is a hard per-run blast-radius budget. The first record above the limit blocks readiness instead of silently approving a source that grew by two orders of magnitude over lunch.
+
+### Blind transport and delivery
+
+- Full-record blind transport uses X25519, HKDF-SHA256 and ChaCha20-Poly1305.
+- Source records are authenticated with Ed25519 identities bound to tenant and connector scope, including finite rotation drain and hard revocation.
+- Destination recipient keys come from separately pinned Ed25519 destination identities, not from control-plane claims alone.
+- Signed route-bound recipient certificates form a monotonic rotation chain. An optional local checkpoint rejects stale generations and competing forks.
+- A durable source outbox persists the exact signed ciphertext used for the first send. Lost acknowledgement? Retry those exact bytes. Resealing the same logical record produces different authenticated ciphertext, because cryptography is not obligated to cooperate with a convenient retry implementation.
+- The relay queue stores ciphertext plus required routing metadata, uses fenced leases and keeps a durable idempotency ledger.
+- Destination delivery distinguishes proven `NOT_COMMITTED` writes from `UNKNOWN` outcomes. Unknown does not become retry-safe because an exception looked apologetic.
+- Capability-gated atomic destination batches preserve per-record authentication, ledger, audit and replay evidence while using one transaction for supported SQLite and PostgreSQL writes.
+- Every batch is bounded by record count and sealed-wire size.
+- The destination runtime is pinned to one exact plan and target contract, then rechecks field set, required values, nullability and types before crossing the connector write boundary.
+- CSV exports reject spreadsheet formula-like values by default.
+- HTTP redirects never count as a committed write.
+
+### Operations and diagnosis
+
+- Ed25519-signed capabilities scope privileged operations.
+- Metadata-only audit events form a SHA-256 hash chain and may additionally be signed.
+- Reason-code explanations expose why something was blocked or demoted.
+- Recipe-health summaries make repeated rejection visible.
+- Payload-free operational events carry run and correlation IDs for the currently instrumented workflow.
+- Credential references and encrypted destination recipient key files avoid pretending raw connection strings are a secret-management strategy.
 
 ## Trust model
 
@@ -85,17 +148,17 @@ Stable protocol and persisted-state namespaces are intentionally decoupled from 
     +--------------------------------------------------+
 ```
 
-The relay still sees the metadata required to route a record. Payload confidentiality is not traffic-analysis resistance. The source and destination endpoints necessarily see plaintext at their respective trust boundaries.
+The relay still sees metadata required to route a record, including tenant, connector IDs, record and transfer IDs, plan digest and field IDs. Payload confidentiality is not traffic-analysis resistance. Source and destination endpoints necessarily see plaintext at their respective trust boundaries.
 
-The destination identity public key must reach the source through an operator-controlled channel
-that is independent of the control plane. The control plane may distribute signed recipient-key
-certificates, but cannot replace their tenant, destination, key, validity or rotation metadata.
-See [recipient key authenticity and rotation](https://github.com/IamAngusU/polymorph/blob/main/docs/RECIPIENT_KEY_ROTATION.md).
+The destination identity public key must reach the source through an operator-controlled channel independent of the control plane. The control plane may distribute signed recipient-key certificates, but it cannot replace their tenant, destination, key, validity or rotation metadata.
 
-## Fast path
+See [recipient key authenticity and rotation](docs/RECIPIENT_KEY_ROTATION.md).
 
-Python 3.11 through 3.14 is exercised in CI. For a development checkout with the core development
-checks and the deterministic model-free path:
+## Quick start
+
+Python 3.11 through 3.14 is exercised in CI.
+
+For a development checkout with the deterministic model-free path:
 
 ```bash
 git clone https://github.com/IamAngusU/polymorph.git
@@ -104,21 +167,19 @@ python scripts/bootstrap.py
 python scripts/dev.py doctor
 ```
 
-The fully durable, signed and audited local transport moved 1,000 five-field records at a median
-52.41 records/s with a SQLite destination and 85.42 MiB median peak RSS. Treat those as local
-measurements, not cross-platform guarantees. Optional research models are not needed for the core:
+Optional research models are not required for the core:
 
 ```bash
 python scripts/bootstrap.py --skip-models
 ```
 
-See [Development setup](https://github.com/IamAngusU/polymorph/blob/main/docs/DEVELOPMENT.md) for the deliberately local data layout. The software
-is source-available under a noncommercial license, not OSI Open Source. Check the license before
-using it inside a commercial organization.
-
 `python examples.py` runs a tiny deterministic mapping example without models or external services.
 
-Create source and target schemas as usual, or let `prepare` inspect a supported file directly. The easiest safe workflow is:
+See [Development setup](docs/DEVELOPMENT.md) for the deliberately local data layout.
+
+## The easiest safe workflow
+
+Inspect the destination schema, then let `prepare` inspect the source, find or build a mapping plan and run the complete no-write preflight:
 
 ```bash
 polymorph inspect db 'sqlite:///target.sqlite' --table orders -o target.schema.json
@@ -126,15 +187,21 @@ polymorph prepare ./incoming-file target.schema.json --output-plan orders.plan.j
   --max-input-records 5000
 ```
 
-`prepare` performs content detection, schema inspection, recipe lookup, fresh mapping when needed and a full no-write preflight. A plan is only written when the route is promotable. If the evidence is insufficient, the command exits as review-required instead of manufacturing confidence. `--max-input-records` is a hard per-run blast-radius budget: the first record above it blocks readiness instead of turning an unexpectedly large source into an approved plan.
+A plan is written only when the route is promotable.
 
-For a foreign-key route, add a read-only destination resolver so preflight can prove the natural-key lookup before promotion:
+If evidence is insufficient, `prepare` exits as review-required instead of producing a confident-looking JSON file and leaving future-you to discover what it meant.
+
+For a foreign-key route, add a read-only resolver so preflight can prove the natural-key lookup before promotion:
 
 ```bash
-polymorph prepare ./orders-upload target.schema.json --resolver-db-url 'sqlite:///target.sqlite' --resolver-db-table orders
+polymorph prepare ./orders-upload target.schema.json \
+  --resolver-db-url 'sqlite:///target.sqlite' \
+  --resolver-db-table orders
 ```
 
 ## Manual plan workflow
+
+When you want each stage separately:
 
 ```bash
 polymorph inspect auto ./upload.bin -o source.schema.json
@@ -144,48 +211,57 @@ polymorph plan validate route.plan.json source.schema.json target.schema.json
 polymorph preflight ./upload.bin target.schema.json route.plan.json
 ```
 
-Review-level decisions are not inserted into a plan by default. `--allow-review` exists for an explicit operator decision, not as a way to make the matcher more permissive.
+Review-level decisions are not inserted into a plan by default. `--allow-review` exists for an explicit operator decision, not as a way to ask the matcher to please stop being difficult.
 
-## Optional research model profiles
+## Optional model evidence
 
-The core is fully functional without a model. The CPU descriptor encoder is local-only at runtime,
-pinned to an upstream revision and hash-verified during installation. The native SentencePiece
-tokenizer avoids loading the much larger JSON vocabulary representation.
+The core is fully functional without a model.
+
+The optional CPU descriptor encoder is local-only at runtime, pinned to an upstream revision and hash-verified during installation. The native SentencePiece tokenizer avoids loading the much larger JSON vocabulary representation.
 
 ```bash
 pip install -e ".[semantic]"
 polymorph model install --profile multilingual-cpu
-```
-
-After explicit installation, `--models` enables the encoder without repeating its path:
-
-```bash
 polymorph prepare ./incoming-file target.schema.json --models
 ```
 
-Both current profiles are research-only for product use. The encoder's English teacher used
-`msmarco-triplets`; the reranker documents mMARCO/MS MARCO directly. Their weight cards say
-Apache-2.0, while the underlying MS MARCO dataset terms say noncommercial research. The standard
-bootstrap therefore downloads neither model. After reviewing the provenance, a lab can install
-them explicitly with `--include-research-encoder` or `--include-research-reranker`. See the model
-profile document before using either in a commercial path.
+Both current model profiles are research-only for product use. Their provenance and dataset terms are documented in [Model profiles](docs/MODEL_PROFILE.md). The standard bootstrap downloads neither model.
 
-Models receive schema descriptors, not record payload values. Their evidence can improve ranking and reduce review work, but automatic promotion still requires an independently strong deterministic mapping.
+Models receive schema descriptors, not record payload values. Their evidence may improve ordering and reduce review work, but automatic promotion still requires independently strong deterministic evidence.
 
-See [Model profiles](https://github.com/IamAngusU/polymorph/blob/main/docs/MODEL_PROFILE.md).
+And currently, on the checked-in synthetic regression corpus, the model paths make the same automatic decisions as the deterministic profile.
 
-## File trust and benchmarks
+| Profile | Result | Wall time | Peak RSS |
+| --- | --- | ---: | ---: |
+| Deterministic | Same decisions | 4.02 ms | 73.30 MiB |
+| Encoder | Same decisions | 0.926 s | 284.52 MiB |
+| Encoder + reranker | Same decisions | 2.325 s | 437.87 MiB |
+
+The encoder run produced 100% observed automatic precision on 17 of 17 automatic decisions and 89.47% automation coverage among explicitly eligible fields. That is regression evidence on a synthetic corpus, not a claim of universal mapping accuracy.
+
+So yes, the model stack works.
+
+On this corpus it currently converts more electricity into heat without improving the decision set. We keep measuring instead of assigning architectural importance to fan noise.
+
+See [Measured performance baseline](docs/PERFORMANCE_BASELINE.md).
+
+## Diagnostics and benchmarks
 
 ```bash
 pip install -e ".[fileid,csv-detection,benchmark]"
 polymorph inspect auto ./unknown-upload --magika
+
 # Strict Linux boundary. Fails closed when compatible Bubblewrap is unavailable.
 polymorph inspect isolated-content ./unknown-upload
+
 polymorph doctor
 polymorph benchmark inspect ./unknown-upload --records 10000 --magika
 polymorph benchmark parser-worker ./unknown-upload --runs 5
-polymorph benchmark mapping ./benchmarks/safety-regression.json --require-auto-precision 1.0 --require-automation-coverage 0.70
-polymorph benchmark workflow --records 1000 --batch-size 100 --work-dir ./workflow-run --output workflow.json
+polymorph benchmark mapping ./benchmarks/safety-regression.json \
+  --require-auto-precision 1.0 \
+  --require-automation-coverage 0.70
+polymorph benchmark workflow --records 1000 --batch-size 100 \
+  --work-dir ./workflow-run --output workflow.json
 polymorph recipe health
 polymorph audit summary ./audit.sqlite
 polymorph events check ./workflow-run/operational-events.jsonl --run-id RUN_ID
@@ -193,62 +269,72 @@ polymorph explain write_outcome_unknown
 ```
 
 `RUN_ID` is the `workflow.observability.run_id` value in `workflow.json`.
-If the workflow used an event budget above 64 MiB, pass the same
-`--event-stream-max-mib` value to `events summary` or `events check`.
-On Windows, trusted local files can be measured with
-`--backend process --require-containment process`. That is process separation only, not a
-filesystem or network sandbox.
 
-The benchmark commands are explicit diagnostics. Production code paths do not start Python allocation tracing or memory polling.
+The benchmark commands are explicit diagnostics. Normal production paths do not enable CPython allocation tracing or RSS polling merely so a graph can feel involved.
+
+## Measured local baseline
+
+The fully durable, signed and audited local transport moved 1,000 five-field records at a median **52.41 records/s** with a SQLite destination and **85.42 MiB** median peak RSS on the documented Windows development machine.
+
+Each run included recipient-certificate verification, X25519 and ChaCha20-Poly1305 sealing, Ed25519 source signatures, durable source outbox, relay validation and fenced leases, destination authentication and decryption, contract validation, SQLite writes, sealed-spool cleanup, signed hash-chain audit and acknowledgements.
+
+All 1,000 records were delivered once in every retained run.
+
+Separate durable SQLite commits dominate that profile. The useful optimization targets are transaction batching, connection reuse and batch acknowledgements. Turning durability off would also make the benchmark faster, in the same way removing brakes makes a car lighter.
+
+See [Performance baseline](docs/PERFORMANCE_BASELINE.md) for the exact machine, methodology and caveats.
 
 ## Documentation
 
-- [Architecture](https://github.com/IamAngusU/polymorph/blob/main/docs/ARCHITECTURE.md)
-- [Reliability model](https://github.com/IamAngusU/polymorph/blob/main/docs/RELIABILITY.md)
-- [File trust gate](https://github.com/IamAngusU/polymorph/blob/main/docs/FILE_TRUST.md)
-- [Parser isolation](https://github.com/IamAngusU/polymorph/blob/main/docs/PARSER_ISOLATION.md)
-- [Recipes](https://github.com/IamAngusU/polymorph/blob/main/docs/RECIPES.md)
-- [Benchmarking](https://github.com/IamAngusU/polymorph/blob/main/docs/BENCHMARKING.md)
-- [Workflow and failure lab](https://github.com/IamAngusU/polymorph/blob/main/docs/WORKFLOW_LAB.md)
-- [Measured performance baseline](https://github.com/IamAngusU/polymorph/blob/main/docs/PERFORMANCE_BASELINE.md)
-- [Protocol](https://github.com/IamAngusU/polymorph/blob/main/docs/PROTOCOL.md)
-- [Threat model](https://github.com/IamAngusU/polymorph/blob/main/docs/THREAT_MODEL.md)
-- [Operations and replay safety](https://github.com/IamAngusU/polymorph/blob/main/docs/OPERATIONS.md)
-- [Operational visibility](https://github.com/IamAngusU/polymorph/blob/main/docs/OBSERVABILITY.md)
-- [Ecosystem and dataset review](https://github.com/IamAngusU/polymorph/blob/main/docs/ECOSYSTEM_REVIEW.md)
-- [Security reporting](https://github.com/IamAngusU/polymorph/blob/main/SECURITY.md)
-- [Roadmap](https://github.com/IamAngusU/polymorph/blob/main/docs/ROADMAP.md)
-- [Product direction](https://github.com/IamAngusU/polymorph/blob/main/docs/PRODUCT.md)
-- [Operator workflows](https://github.com/IamAngusU/polymorph/blob/main/docs/WORKFLOWS.md)
-- [Test strategy](https://github.com/IamAngusU/polymorph/blob/main/docs/TEST_STRATEGY.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Reliability model](docs/RELIABILITY.md)
+- [Product direction](docs/PRODUCT.md)
+- [File trust gate](docs/FILE_TRUST.md)
+- [Parser isolation](docs/PARSER_ISOLATION.md)
+- [Recipes](docs/RECIPES.md)
+- [Benchmarking](docs/BENCHMARKING.md)
+- [Workflow and failure lab](docs/WORKFLOW_LAB.md)
+- [Measured performance baseline](docs/PERFORMANCE_BASELINE.md)
+- [Protocol](docs/PROTOCOL.md)
+- [Threat model](docs/THREAT_MODEL.md)
+- [Operations and replay safety](docs/OPERATIONS.md)
+- [Operational visibility](docs/OBSERVABILITY.md)
+- [Recipient key authenticity and rotation](docs/RECIPIENT_KEY_ROTATION.md)
+- [Security coverage](docs/SECURITY_COVERAGE.md)
+- [Ecosystem and dataset review](docs/ECOSYSTEM_REVIEW.md)
+- [Operator workflows](docs/WORKFLOWS.md)
+- [Test strategy](docs/TEST_STRATEGY.md)
+- [Roadmap](docs/ROADMAP.md)
+- [Security reporting](SECURITY.md)
 
-## Status
+## Status: alpha means alpha
 
-Polymorph remains an alpha. Inspection, mapping, planning and preflight are available through the
-CLI. Source transport, relay and destination delivery are tested Python APIs; long-running agent
-services, an authenticated control channel and a deployment supervisor are still roadmap work.
+Polymorph remains an alpha.
 
-Strict Linux containment is available for the content-inspection stage when Bubblewrap is usable.
-Structured schema parsing and record iteration are not isolated yet. There is also no durable
-trust-bundle distribution, cumulative per-tenant queue quota or external audit checkpoint against
-log-suffix truncation. Raw database URLs can leak credentials through shell history, so production
-automation should use `DatabaseEndpoint` plus a secret provider. Automatic-promotion policy still
-needs a large, source-separated adversarial corpus and independent security review.
+Inspection, mapping, planning and preflight are available through the CLI. Source transport, relay and destination delivery are tested Python APIs. Long-running agent services, an authenticated control channel and a deployment supervisor are still roadmap work.
 
-The alpha is not fully self-monitoring. The benchmark and destination runtime now write a local
-payload-free event stream with run and correlation IDs, plus a CLI health gate for lifecycle,
-event-ID uniqueness, event semantics and delivery-count agreement. Coverage outside that workflow
-is incomplete, destination audit remains optional, and there is no notification service or queue
-metric exporter. Recipe health is a real closed safety loop, but its only automatic response is to
-reduce trust after repeated rejected runs.
+Important current limits:
+
+- Strict Linux containment currently covers the content-inspection worker only.
+- Structured schema parsing and record iteration still execute in the local process after the content gate accepts a file.
+- Windows process mode is process separation, not filesystem or network containment.
+- There is no durable trust-bundle distribution yet.
+- There is no cumulative per-tenant relay queue quota yet.
+- There is no external audit checkpoint protecting against log-suffix truncation yet.
+- Raw database URLs may leak credentials through shell history. Production automation should use `DatabaseEndpoint` plus a secret provider.
+- Automatic-promotion policy still needs a large, source-separated adversarial corpus and independent security review.
+- Operational event coverage is incomplete outside the currently instrumented workflow.
+- Destination audit remains optional.
+- There is no notification service or queue metric exporter yet.
+
+The project documents these limits because "alpha" is a software maturity label, not a decorative badge we remove when the README starts looking expensive.
 
 ## License
 
-Polymorph is source-available under the **PolyForm Noncommercial License 1.0.0**, not OSI Open
-Source. Permitted use is defined by the license itself. Commercial use requires a separate license
-from Angus Uelsmann.
+Polymorph is source-available under the **PolyForm Noncommercial License 1.0.0**. It is not OSI Open Source.
 
-Paid commercial terms, including any revenue participation or white-label rights, are agreed in a
-separate written agreement. See [commercial licensing](https://github.com/IamAngusU/polymorph/blob/main/COMMERCIAL.md).
+Permitted use is defined by the license itself. Commercial use requires a separate license from Angus Uelsmann.
 
-Required notices reference [angusu.de](https://angusu.de) and this repository. Third-party components retain their own licenses; see [THIRD_PARTY.md](https://github.com/IamAngusU/polymorph/blob/main/THIRD_PARTY.md).
+Paid commercial terms, including any revenue participation or white-label rights, are agreed in a separate written agreement. See [commercial licensing](COMMERCIAL.md).
+
+Required notices reference [angusu.de](https://angusu.de) and this repository. Third-party components retain their own licenses; see [THIRD_PARTY.md](THIRD_PARTY.md).
