@@ -8,7 +8,7 @@ version = "0.4.0a1"
 description = "Policy-driven adaptive data bridge with an opaque data plane."
 readme = "README.md"
 requires-python = ">=3.11"
-license = "PolyForm-Noncommercial-1.0.0"
+license = "AGPL-3.0-only"
 license-files = ["LICENSE", "NOTICE"]
 authors = [
   { name = "Angus Uelsmann" }
