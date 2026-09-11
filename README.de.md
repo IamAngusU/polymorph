@@ -13,10 +13,10 @@
 </p>
 
 <p align="center">
-  <a href="docs/PERFORMANCE_BASELINE.md#file-inspection"><img src="docs/assets/badges/fixture-rows.svg" height="42" alt="Datei-Fixtures mit je 50.000 Zeilen"></a>
-  <a href="#gemessene-lokale-baseline"><img src="docs/assets/badges/workflow.svg" height="42" alt="Sicherer Workflow mit 1.000 Records"></a>
-  <a href="#gemessene-lokale-baseline"><img src="docs/assets/badges/throughput.svg" height="42" alt="Median 52,41 Records pro Sekunde lokal"></a>
-  <a href="#optionale-modell-evidenz"><img src="docs/assets/badges/auto-precision.svg" height="42" alt="17 von 17 beobachteten automatischen Entscheidungen korrekt"></a>
+  <a href="docs/PERFORMANCE_BASELINE.md#file-inspection"><img src="docs/assets/badges/fixture-rows.de.svg" height="42" alt="Datei-Fixtures mit je 50.000 Zeilen"></a>
+  <a href="#gemessene-lokale-baseline"><img src="docs/assets/badges/workflow.de.svg" height="42" alt="Sicherer Workflow mit 1.000 Records"></a>
+  <a href="#gemessene-lokale-baseline"><img src="docs/assets/badges/throughput.de.svg" height="42" alt="Median 52,41 Records pro Sekunde lokal"></a>
+  <a href="#optionale-modell-evidenz"><img src="docs/assets/badges/auto-precision.de.svg" height="42" alt="17 von 17 beobachteten automatischen Entscheidungen korrekt"></a>
 </p>
 
 <p align="center"><sub>Gemessene Baselines, keine universellen Versprechen. Ein Klick führt zum Kontext.</sub></p>
