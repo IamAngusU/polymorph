@@ -1,7 +1,17 @@
 Polymorph
-Copyright 2026 Angus Uelsmann
+Copyright (C) 2026 Angus Uelsmann
 https://angusu.de
 https://github.com/IamAngusU/polymorph
 
-Licensed under the PolyForm Noncommercial License 1.0.0.
-Commercial use requires a separate license from the copyright holder.
+SPDX-License-Identifier: AGPL-3.0-only
+
+Polymorph is licensed under the GNU Affero General Public License,
+version 3 only. See LICENSE for the complete terms.
+
+Alternative commercial licenses are available from the copyright holder
+for use cases that require different terms, including proprietary use.
+See LICENSING.md and COMMERCIAL.md.
+
+Third-party components retain their own licenses. See THIRD_PARTY.md.
+The Polymorph name and project logo are handled separately from the
+software license. See TRADEMARKS.md.
