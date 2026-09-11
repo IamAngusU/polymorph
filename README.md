@@ -2,9 +2,20 @@
   <img src="https://raw.githubusercontent.com/IamAngusU/polymorph/main/docs/assets/brand-mark.webp" width="116" alt="Polymorph mark">
 </p>
 
-# Polymorph
+<h1 align="center">Polymorph</h1>
 
-> Move data between incompatible systems. Prove the route before writing. Keep plaintext at the endpoints. Stop cleanly when the evidence is not good enough.
+<p align="center">
+  <strong>Move data between incompatible systems. Prove the route before writing.<br>Keep plaintext at the endpoints. Stop cleanly when the evidence is not good enough.</strong>
+</p>
+
+<p align="center">
+  <a href="docs/PERFORMANCE_BASELINE.md#file-inspection"><img src="docs/assets/badges/fixture-rows.svg" height="42" alt="50k-row file fixtures"></a>
+  <a href="#measured-local-baseline"><img src="docs/assets/badges/workflow.svg" height="42" alt="1,000-record secure workflow baseline"></a>
+  <a href="#measured-local-baseline"><img src="docs/assets/badges/throughput.svg" height="42" alt="52.41 records per second median local throughput"></a>
+  <a href="#optional-model-evidence"><img src="docs/assets/badges/auto-precision.svg" height="42" alt="17 of 17 observed automatic decisions correct"></a>
+</p>
+
+<p align="center"><sub>Measured baselines, not universal promises. Click a metric for context.</sub></p>
 
 Polymorph is a local-first, policy-driven data bridge for recurring imports and integrations that are too important for a hopeful script and too awkward for a large integration platform.
 
@@ -56,12 +67,14 @@ Polymorph deliberately separates useful signals from signals that may authorize 
 | File extension or display name | Yes | No |
 | Successful parser call | Yes | No |
 | Magika classification | Yes | No |
-| Old recipe | Yes | No. Yesterday was also a different day. |
+| Old recipe | Yes | No |
 | Embedding similarity | Yes | No |
 | Cross-encoder score | Yes | No |
 | Current schema, policy and deterministic contract evidence | Yes | Yes, when all gates pass |
 
-Useful is not authority. A calculator helps with a tax return too. It still does not get to choose the deductions.
+**Useful is not authority.**
+
+A model may improve candidate ordering. It does not get a pen.
 
 If a high-confidence model result disagrees with the independently strongest deterministic target, the mapping is review-required. A larger number after the decimal point is not a new trust boundary.
 
