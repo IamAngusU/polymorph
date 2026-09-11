@@ -62,6 +62,9 @@ All notable changes to this alpha are documented here.
 
 ### Changed
 
+- public licensing moved from PolyForm Noncommercial to **AGPL-3.0-only**, with an alternative
+  commercial license for proprietary use; previously received copies keep the terms under which
+  they were received
 - the real SQLite workflow uses safe all-or-none destination batches, batched state transactions,
   audit appends, event appends and acknowledgements without weakening per-record crypto or fences
 - recipient trust-state reads cache only a verified unchanged file snapshot; route, certificate
