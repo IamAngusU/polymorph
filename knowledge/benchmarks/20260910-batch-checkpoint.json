@@ -1,0 +1,36 @@
+{
+  "format": "angusu.bridge.public-workflow/1",
+  "date": "2026-09-10",
+  "status": "provisional batch checkpoint",
+  "hardware": {
+    "cpu_model": null,
+    "ram_total_bytes": null,
+    "storage_operator_supplied": null,
+    "os": "Windows build 26200",
+    "gpu_models": null,
+    "gpu_used": false
+  },
+  "python": null,
+  "model_profile": "none",
+  "workload": {
+    "kind": "builtin_secure_workflow",
+    "records": 1000,
+    "batch_size": 100,
+    "repeats": 7,
+    "fields": 5,
+    "durability": "FULL",
+    "journal_mode": "DELETE",
+    "measurement": "standard"
+  },
+  "median_records_per_second": 353.52,
+  "median_wall_seconds": null,
+  "median_peak_rss_mib": null,
+  "raw_report_sha256": null,
+  "source": "docs/PERFORMANCE_EVIDENCE.md",
+  "note": "User-supplied orchestrator log, seven runs before subsequent trust-cache, replay and write-proof changes. Same Windows host; environment equivalence and current performance not established.",
+  "max_peak_rss_mib": 95.23,
+  "range_records_per_second": [
+    351.06,
+    355.79
+  ]
+}
