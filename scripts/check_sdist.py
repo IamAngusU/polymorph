@@ -8,13 +8,21 @@ ROOT = Path(__file__).resolve().parent.parent
 ROOT_FILES = (
     "CHANGELOG.md",
     "COMMERCIAL.md",
+    "COMMERCIAL.de.md",
     "CONTRIBUTING.md",
+    "CONTRIBUTING.de.md",
     "LICENSE",
+    "LICENSING.md",
+    "LICENSING.de.md",
     "MANIFEST.in",
     "NOTICE",
     "README.md",
+    "README.de.md",
     "SECURITY.md",
+    "SECURITY.de.md",
     "THIRD_PARTY.md",
+    "TRADEMARKS.md",
+    "TRADEMARKS.de.md",
     "examples.py",
     "pyproject.toml",
 )
@@ -35,7 +43,7 @@ def expected_release_paths(root: Path = ROOT) -> set[str]:
 
     paths = {root / name for name in ROOT_FILES}
     paths.update(_selected_files(root / "benchmarks", {".json", ".md"}))
-    paths.update(_selected_files(root / "docs", {".md", ".png", ".webp"}))
+    paths.update(_selected_files(root / "docs", {".md", ".png", ".svg", ".webp"}))
     paths.update(_selected_files(root / "scripts", {".py"}))
     paths.update(
         _selected_files(
