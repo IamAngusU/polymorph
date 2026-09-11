@@ -12,11 +12,11 @@ A change should preserve explicit trust boundaries, keep uncertainty visible and
 
 Issues, design feedback, reproducible test cases and responsible security reports are welcome.
 
-Before sending a code contribution, open an issue or contact the maintainer first. Polymorph combines a public noncommercial license with separately negotiated commercial licenses, so third-party code cannot be merged until a contributor agreement covering that licensing model has been reviewed and accepted by both sides.
+Polymorph is publicly licensed under AGPL-3.0-only and may also be offered under separate commercial terms. To preserve that dual-licensing model, substantive third-party code cannot be merged until a contributor agreement gives the maintainer sufficient rights to publish the contribution under AGPL and include it in alternative commercial licenses.
 
-This file is not that agreement. A pull request is also not a surprise licensing strategy.
+Before sending a code contribution, open an issue or contact the maintainer first.
 
-Unsolicited PRs may still be useful for discussion, but should not be expected to merge until that process exists.
+This file is not the contributor agreement. A pull request is also not a surprise copyright assignment. Until that process exists and has been accepted for a contribution, unsolicited PRs may be useful for discussion but should not be expected to merge.
 
 ## Before proposing a change
 
@@ -94,4 +94,6 @@ Do not open a public issue for a suspected vulnerability. Use the private report
 
 ## License
 
-Contributing code does not change the repository license. See [LICENSING.md](LICENSING.md) and [`LICENSE`](LICENSE).
+The public project license is AGPL-3.0-only. A contributor agreement may additionally grant the maintainer the rights needed to offer the contribution under alternative commercial terms; a PR alone does not do that job.
+
+See [LICENSING.md](LICENSING.md) and [`LICENSE`](LICENSE).
