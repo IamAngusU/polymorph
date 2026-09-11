@@ -13,6 +13,7 @@ ROOT_FILES = (
     "MANIFEST.in",
     "NOTICE",
     "README.md",
+    "README.de.md",
     "SECURITY.md",
     "THIRD_PARTY.md",
     "examples.py",
@@ -35,7 +36,8 @@ def expected_release_paths(root: Path = ROOT) -> set[str]:
 
     paths = {root / name for name in ROOT_FILES}
     paths.update(_selected_files(root / "benchmarks", {".json", ".md"}))
-    paths.update(_selected_files(root / "docs", {".md", ".png", ".webp"}))
+    paths.update(_selected_files(root / "docs", {".md", ".png", ".webp", ".svg"}))
+    paths.update(_selected_files(root / "knowledge", {".json", ".md"}))
     paths.update(_selected_files(root / "scripts", {".py"}))
     paths.update(
         _selected_files(

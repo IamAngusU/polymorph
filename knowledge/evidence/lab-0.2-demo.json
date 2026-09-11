@@ -1,0 +1,22 @@
+{
+  "format": "angusu.bridge.public-training/1",
+  "version": "lab-0.2-demo",
+  "status": "candidate_not_released",
+  "created_at": "2026-09-11T06:00:20.256+00:00",
+  "model_sha256": "c3780fbe620c8a5fc3648b375f2aad62c10bb6f6a8cf0ea0ae4d01a3413e8e69",
+  "model_bytes": 93382,
+  "evidence": {
+    "unique_train_queries": 365,
+    "unique_train_comparisons": 1656,
+    "training_source_groups": 19,
+    "weight_updates": 13248,
+    "holdout_queries": 53,
+    "holdout_correct": 44,
+    "baseline_correct": 32,
+    "paired_regressions": 0,
+    "independent_customer_sources": 0,
+    "training_report_sha256": "563ad46bef85f486bed90f4f4fac5a647958758013c35d8c92bd904067a29543",
+    "evaluation_report_sha256": "1185e90b4e0534564eff8ad18dfa445714d2a2d37eac868b58fca701577a67a7"
+  },
+  "scope": "Synthetic advisory ranking, compared with its own untrained baseline, NOT Polymorph AUTO precision. No general package has been published."
+}

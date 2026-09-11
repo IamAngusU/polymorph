@@ -1,0 +1,31 @@
+{
+  "format": "angusu.bridge.public-workflow/1",
+  "date": "2026-09-10",
+  "status": "historical documented baseline",
+  "hardware": {
+    "cpu_model": null,
+    "ram_total_bytes": null,
+    "storage_operator_supplied": null,
+    "os": "Windows build 26200",
+    "gpu_models": null,
+    "gpu_used": false
+  },
+  "python": "3.11.9",
+  "model_profile": "none",
+  "workload": {
+    "kind": "builtin_secure_workflow",
+    "records": 1000,
+    "batch_size": 100,
+    "repeats": 3,
+    "fields": 5,
+    "durability": "FULL",
+    "journal_mode": "DELETE",
+    "measurement": "standard"
+  },
+  "median_records_per_second": 52.41,
+  "median_wall_seconds": 19.079,
+  "median_peak_rss_mib": 85.42,
+  "raw_report_sha256": null,
+  "source": "https://github.com/IamAngusU/polymorph/blob/928b268d5a3931419fbbb44ea49579c18ad5294e/docs/PERFORMANCE_BASELINE.md",
+  "note": "Reported by maintainer in repository, not rerun here. Hardware model was not recorded. Not a current release claim."
+}
