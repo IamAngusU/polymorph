@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0a10 - 2026-09-12
+
+### Fixed
+
+- Detect namespace-prefixed OOXML formula tags and retain formula-cache uncertainty.
+- Preserve empty CSV cells as value-free quality evidence.
+- Route automatic INTEGER mappings through one strict transform exercised by preflight and execution.
+- Accept existing local SQLite files in `polymorph inspect db` without requiring a hand-written SQLAlchemy URL.
+
+### Evidence
+
+- External adversarial fixtures retained zero unsafe automatic decisions, zero writes, and zero network use.
+- A complete 1,000,000-row local CSV trial observed bounded process-tree memory from 100,000 to 1,000,000 rows on the measured Windows host.
 ## [0.4.0a9] - 2026-09-12
 
 - expose own-data Trial and release Trust Center through the primary polymorph CLI while preserving toolkit aliases

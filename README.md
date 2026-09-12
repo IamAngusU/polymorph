@@ -28,7 +28,7 @@
 </p>
 
 ```powershell
-python -m pip install "https://github.com/IamAngusU/polymorph/releases/download/v0.4.0a9/polymorph_bridge-0.4.0a9-py3-none-any.whl"
+python -m pip install "https://github.com/IamAngusU/polymorph/releases/download/v0.4.0a10/polymorph_bridge-0.4.0a10-py3-none-any.whl"
 polymorph trial C:\path\to\customers.xlsx --open
 ```
 
@@ -472,7 +472,7 @@ Two post-fix GPU samples observed device-wide allocated VRAM staying at 2,788 Mi
 ## Downloads
 
 - [Download the current source as a ZIP](https://github.com/IamAngusU/polymorph/archive/refs/heads/main.zip)
-- [Download the tested v0.4.0a9 pre-release, wheel, sdist, and Polymorph Run 1.1.0 buddy](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a9)
+- [Download the tested v0.4.0a10 pre-release, wheel, sdist, and Polymorph Run 1.1.0 buddy](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a10)
 
 ## Long-term run metrics
 

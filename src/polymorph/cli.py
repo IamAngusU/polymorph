@@ -143,6 +143,22 @@ def _sqlite_database_path(url: str | None) -> str | None:
     return database
 
 
+def _normalized_database_url(value: str) -> str:
+    try:
+        make_url(value)
+    except ArgumentError:
+        candidate = Path(value).expanduser()
+        try:
+            if candidate.is_file():
+                return f"sqlite:///{candidate.resolve().as_posix()}"
+        except OSError:
+            pass
+        raise SystemExit(
+            "error: database must be a SQLAlchemy URL or an existing local SQLite file"
+        ) from None
+    return value
+
+
 def _emit(payload: object, *, output: str | None = None) -> None:
     text = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True)
     if output:
@@ -227,8 +243,9 @@ def _inspect_json(args: argparse.Namespace) -> None:
 
 
 def _inspect_db(args: argparse.Namespace) -> None:
-    _protect_write_path(args.output, _sqlite_database_path(args.url))
-    with DatabaseConnector(args.url, args.table, schema=args.schema) as connector:
+    url = _normalized_database_url(args.url)
+    _protect_write_path(args.output, _sqlite_database_path(url))
+    with DatabaseConnector(url, args.table, schema=args.schema) as connector:
         _emit_schema(connector.inspect_schema(), args)
 
 

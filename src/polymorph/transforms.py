@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -30,6 +32,29 @@ def _copy(value: object, _: Mapping[str, str]) -> object:
 
 def _trim(value: object, _: Mapping[str, str]) -> object:
     return value.strip() if isinstance(value, str) else value
+
+
+def _parse_integer(value: object, _: Mapping[str, str]) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise PolymorphError("integer parsing rejected a boolean")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, Decimal):
+        if not value.is_finite() or value != value.to_integral_value():
+            raise PolymorphError("integer parsing failed")
+        return int(value)
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise PolymorphError("integer parsing failed")
+        return int(value)
+    if not isinstance(value, str):
+        raise PolymorphError("integer parsing failed")
+    text = value.strip()
+    if re.fullmatch(r"[+-]?[0-9]+", text) is None:
+        raise PolymorphError("integer parsing failed")
+    return int(text, 10)
 
 
 def _parse_decimal(value: object, params: Mapping[str, str]) -> Decimal | None:
@@ -64,6 +89,7 @@ def _parse_datetime(value: object, params: Mapping[str, str]) -> datetime | None
 TRANSFORMS: dict[str, Transform] = {
     "copy": _copy,
     "trim": _trim,
+    "parse_integer": _parse_integer,
     "parse_decimal": _parse_decimal,
     "parse_datetime": _parse_datetime,
 }

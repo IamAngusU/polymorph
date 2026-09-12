@@ -30,7 +30,7 @@ from polymorph.models.types import DataType, Sensitivity
 from .base import ConnectorCapabilities
 
 _FIXED_ZERO_FORMAT = re.compile(r"^0+$")
-_FORMULA_TAG = re.compile(rb"<f(?:\s|>)")
+_FORMULA_TAG = re.compile(rb"<(?:[A-Za-z_][A-Za-z0-9_.-]*:)?f(?:\s|>)")
 
 
 class _Cell(Protocol):

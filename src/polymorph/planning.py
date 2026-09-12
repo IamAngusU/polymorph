@@ -10,7 +10,7 @@ from .matching.deterministic import (
 )
 from .models.mapping import MappingDecision, MappingPlan, MappingRule, MappingStatus
 from .models.schema import FieldDescriptor, SchemaDescriptor
-from .models.types import Sensitivity
+from .models.types import DataType, Sensitivity
 from .policy import PolicyEngine
 
 
@@ -34,6 +34,9 @@ def _mapping_rule(
             "lookup_foreign_key",
             {"match_column": lookup_key},
         )
+
+    if source.data_type is DataType.INTEGER and target.data_type is DataType.INTEGER:
+        return MappingRule(source.id, target.id, "parse_integer")
 
     return MappingRule(source.id, target.id, "copy")
 

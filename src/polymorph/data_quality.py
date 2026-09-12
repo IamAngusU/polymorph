@@ -165,6 +165,14 @@ class DataQualityAnalyzer:
     def __init__(self, schema: object, limits: QualityLimits | None = None) -> None:
         self._schema, self.schema_fingerprint = _canonical_schema(schema)
         self._fields, self._has_field_contract = _field_profiles(self._schema)
+        schema_id = self._schema.get("id")
+        metadata = self._schema.get("metadata")
+        self._null_represents_empty_text = bool(
+            isinstance(schema_id, str)
+            and schema_id.startswith("csv:")
+            and isinstance(metadata, Mapping)
+            and isinstance(metadata.get("delimiter"), str)
+        )
         self.limits = limits or QualityLimits()
 
     def inspect(self, records: Iterable[Mapping[str, object]]) -> QualityReport:
@@ -237,7 +245,15 @@ class DataQualityAnalyzer:
                         )
             for field, value in record.items():
                 field_name = str(field)[:256]
-                if isinstance(value, str):
+                if value is None and self._null_represents_empty_text:
+                    add(
+                        "empty_string",
+                        field_name,
+                        IssueSeverity.REVIEW,
+                        CleaningAction.EMPTY_TO_NULL.value,
+                        record_number,
+                    )
+                elif isinstance(value, str):
                     if value and value != value.strip():
                         add(
                             "outer_whitespace",
