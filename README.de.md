@@ -397,3 +397,18 @@ In zwei GPU-Samples nach den Fixes blieb der geraeteweit belegte VRAM exakt bei 
 ![Polymorph Run Performance-Verlauf](docs/assets/performance-history.svg)
 
 Jeder unterstuetzte Buddy-Lauf aktualisiert die append-only lokale Historie unter `.polymorph/metrics`. Das getrackte SVG und JSONL werden erst nach ausdruecklicher Pruefung mit `python scripts/run_metrics.py --project "D:\polymorph" --export-public` aktualisiert; der Befehl committet und pusht nie selbst. Siehe [Vertrag der Metrik-Historie](docs/METRICS_HISTORY.md).
+
+## In fuenf Minuten starten
+
+Neue Nutzer beginnen mit [`START-HERE.de.md`](START-HERE.de.md). Unter Windows:
+
+```powershell
+git clone https://github.com/IamAngusU/polymorph.git
+cd polymorph
+py -3.11 -m venv .venv
+.venv\Scripts\python -m pip install ".[benchmark]"
+World-Benchmark.cmd
+```
+
+Der Nachweis laedt keine Daten hoch, aktiviert kein Modell, pusht nichts und startet keine GitHub
+Action. Parquet, PostgreSQL und die datensparsame Review-Zeitmessung stehen in der Startanleitung.

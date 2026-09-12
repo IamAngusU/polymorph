@@ -1,0 +1,62 @@
+{
+  "schema": "polymorph.public-mapping-evidence",
+  "version": 1,
+  "product_version": "0.4.0a2",
+  "observed_at": "2026-09-12T10:49:00Z",
+  "corpus": "benchmarks/independent-public-multilingual-v1.json",
+  "evidence_level": "independent-public-schema",
+  "mapping": {
+    "auto_correct": 1,
+    "auto_decisions": 1,
+    "auto_incorrect": 0,
+    "auto_precision": 1.0,
+    "automation_coverage": 0.07142857142857142,
+    "automation_eligible_fields": 14,
+    "blocked_decisions": 0,
+    "case_latency_p50_ms": 1.19645,
+    "case_latency_p95_ms": 2.2229449999999997,
+    "cases": 4,
+    "decision_contract_failure_count": 0,
+    "decision_contract_failures": [],
+    "decision_contract_valid": true,
+    "failures": [],
+    "fields_scored": 14,
+    "mappable_fields": 14,
+    "overall_automation_rate": 0.07142857142857142,
+    "review_decisions": 13,
+    "safety_failure_count": 0,
+    "safety_failures": [],
+    "suggestion_accuracy": 1.0,
+    "suggestion_correct": 14,
+    "suggestion_mismatch_count": 0,
+    "suggestion_mismatches": [],
+    "unsafe_auto_decisions": 0,
+    "unsafe_auto_on_contract_mismatch": 0,
+    "unsafe_auto_on_invalid_output": 0,
+    "unsafe_auto_on_review_only": 0,
+    "unsafe_auto_on_unmappable": 0
+  },
+  "measurement": {
+    "mode": "standard",
+    "observer_effect": "wall time, CPU time and optional sampled process RSS only",
+    "python_allocation_tracing": false
+  },
+  "resources": {
+    "cpu_ms": 0.0,
+    "measurement_mode": "standard",
+    "name": "mapping_corpus",
+    "peak_python_bytes": null,
+    "peak_rss_bytes": 76812288,
+    "python_allocation_tracing": false,
+    "result_count": 14,
+    "rss_after_bytes": 76812288,
+    "rss_before_bytes": 76562432,
+    "throughput_per_second": 2689.153108853076,
+    "wall_ms": 5.2061
+  },
+  "caveats": [
+    "Four source groups and fourteen schema fields are too small for a universal accuracy claim.",
+    "The corpus was not used to train or tune the evaluated matcher.",
+    "Results apply to the exact checked-in corpus and version."
+  ]
+}

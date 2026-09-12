@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "companies-house-company-profile-en",
+      "source_schema": {"id": "public:companies-house:profile", "fields": [
+        {"id": "company_number", "name": "company number", "data_type": "string", "role": "natural_key"},
+        {"id": "company_name", "name": "company name", "data_type": "string"},
+        {"id": "date_of_creation", "name": "date of creation", "data_type": "date"}
+      ]},
+      "target_schema": {"id": "canonical:organization", "fields": [
+        {"id": "registration_number", "name": "organization registration number", "data_type": "string", "role": "natural_key"},
+        {"id": "legal_name", "name": "legal name", "data_type": "string"},
+        {"id": "incorporation_date", "name": "incorporation date", "data_type": "date"},
+        {"id": "customer_number", "name": "customer number", "data_type": "string", "role": "natural_key"}
+      ]},
+      "expected": {"company_number": "registration_number", "company_name": "legal_name", "date_of_creation": "incorporation_date"}
+    },
+    {
+      "id": "insee-sirene-fr",
+      "source_schema": {"id": "public:insee:sirene", "fields": [
+        {"id": "siren", "name": "siren", "data_type": "string", "role": "natural_key"},
+        {"id": "denomination", "name": "denominationUniteLegale", "data_type": "string"},
+        {"id": "creation", "name": "dateCreationUniteLegale", "data_type": "date"}
+      ]},
+      "target_schema": {"id": "canonical:organization-fr", "fields": [
+        {"id": "registration_number", "name": "organization registration number", "data_type": "string", "role": "natural_key"},
+        {"id": "legal_name", "name": "legal name", "data_type": "string"},
+        {"id": "incorporation_date", "name": "incorporation date", "data_type": "date"},
+        {"id": "tax_id", "name": "tax identifier", "data_type": "string"}
+      ]},
+      "expected": {"siren": "registration_number", "denomination": "legal_name", "creation": "incorporation_date"}
+    },
+    {
+      "id": "destatis-genesis-de",
+      "source_schema": {"id": "public:destatis:genesis", "fields": [
+        {"id": "stichtag", "name": "Stichtag", "data_type": "date"},
+        {"id": "area", "name": "Gebietsflaeche qkm", "data_type": "decimal"}
+      ]},
+      "target_schema": {"id": "canonical:statistics", "fields": [
+        {"id": "reference_date", "name": "reference date", "data_type": "date"},
+        {"id": "area_km2", "name": "area square kilometers", "data_type": "decimal"},
+        {"id": "population", "name": "population", "data_type": "integer"}
+      ]},
+      "expected": {"stichtag": "reference_date", "area": "area_km2"}
+    },
+    {
+      "id": "peppol-billing-en",
+      "source_schema": {"id": "public:peppol:billing", "fields": [
+        {"id": "invoice_id", "name": "Invoice number", "data_type": "string", "role": "natural_key"},
+        {"id": "issue_date", "name": "Invoice issue date", "data_type": "date"},
+        {"id": "currency", "name": "Document currency code", "data_type": "string"},
+        {"id": "net", "name": "Invoice total amount without VAT", "data_type": "decimal"},
+        {"id": "vat", "name": "Invoice total VAT amount", "data_type": "decimal"},
+        {"id": "payable", "name": "Amount due for payment", "data_type": "decimal"}
+      ]},
+      "target_schema": {"id": "canonical:invoice", "fields": [
+        {"id": "invoice_number", "name": "invoice number", "data_type": "string", "role": "natural_key"},
+        {"id": "invoice_date", "name": "invoice date", "data_type": "date"},
+        {"id": "currency_code", "name": "currency code", "data_type": "string"},
+        {"id": "net_amount", "name": "net amount", "data_type": "decimal"},
+        {"id": "vat_amount", "name": "VAT amount", "data_type": "decimal"},
+        {"id": "payable_amount", "name": "payable amount", "data_type": "decimal"},
+        {"id": "gross_amount", "name": "gross amount", "data_type": "decimal"}
+      ]},
+      "expected": {"invoice_id": "invoice_number", "issue_date": "invoice_date", "currency": "currency_code", "net": "net_amount", "vat": "vat_amount", "payable": "payable_amount"}
+    }
+  ]
+}

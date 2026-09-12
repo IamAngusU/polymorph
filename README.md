@@ -397,3 +397,18 @@ Two post-fix GPU samples observed device-wide allocated VRAM staying at 2,788 Mi
 ![Polymorph Run performance history](docs/assets/performance-history.svg)
 
 Every supported buddy run refreshes the append-only local history under `.polymorph/metrics`. The tracked SVG and JSONL are published only after an explicit review with `python scripts/run_metrics.py --project "D:\polymorph" --export-public`; the command never commits or pushes. See [the metrics history contract](docs/METRICS_HISTORY.md).
+
+## Start in five minutes
+
+New users should begin with [`START-HERE.md`](START-HERE.md). On Windows, the complete local proof is:
+
+```powershell
+git clone https://github.com/IamAngusU/polymorph.git
+cd polymorph
+py -3.11 -m venv .venv
+.venv\Scripts\python -m pip install ".[benchmark]"
+World-Benchmark.cmd
+```
+
+The proof does not upload data, activate a model, push to GitHub or start GitHub Actions. Parquet,
+PostgreSQL and metadata-only review timing are documented in the start guide.

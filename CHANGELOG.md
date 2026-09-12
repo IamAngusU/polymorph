@@ -4,7 +4,16 @@ All notable changes to this alpha are documented here.
 
 ## Unreleased
 
+## 0.4.0a2 - 2026-09-12
+
 ### Added
+
+- five-minute English and German onboarding guides plus a packaged local evidence runner
+- read-only Parquet schema inspection and bounded record streaming behind the content trust gate
+- an explicit real PostgreSQL connector write and rollback lab that never records its URL
+- a multilingual ERP, finance, unit and tax glossary with strictly advisory-only authority
+- metadata-only review-session timing for measuring operator effort instead of estimating it
+- a source-separated public multilingual schema corpus with retained provenance and limitations
 
 - capability-gated atomic destination writes with explicit count, aggregate sealed-wire and
   cross-path idempotency contracts

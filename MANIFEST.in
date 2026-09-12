@@ -2,7 +2,7 @@ include CHANGELOG.md
 include COMMERCIAL.md COMMERCIAL.de.md
 include CONTRIBUTING.md CONTRIBUTING.de.md
 include LICENSE LICENSING.md LICENSING.de.md NOTICE
-include README.md README.de.md
+include README.md README.de.md START-HERE.md START-HERE.de.md
 include SECURITY.md SECURITY.de.md
 include TRADEMARKS.md TRADEMARKS.de.md
 include THIRD_PARTY.md
@@ -11,6 +11,7 @@ include World-Benchmark.cmd
 recursive-include benchmarks *.json *.md
 recursive-include docs *.md *.webp *.svg
 recursive-include scripts *.py
+recursive-include src/polymorph/data *.json
 recursive-include tests *.py
 recursive-include tests/fixtures/csv-spectrum *.csv *.json *.md *.txt SHA256SUMS
 recursive-include tests/fixtures/json-test-suite *.json *.md *.txt SHA256SUMS

@@ -152,3 +152,16 @@ observed VRAM change was 0 MiB. The workflow does not load optional mapping mode
 - State the connector, durability mode, batch size, record shape and record count.
 - Keep correctness assertions in the benchmark. A fast partial workflow is a broken workflow.
 - Use held-out, source-separated corpora for mapping quality claims.
+
+## Parquet and public-schema evidence, 2026-09-12
+
+Polymorph 0.4.0a2 inspected and streamed a deterministic local Zstandard-compressed Parquet fixture
+with 10,000 rows and five flat columns. The 90,788-byte fixture was read at 1,543,972 rows/second;
+record-read peak RSS was 95,776,768 bytes. This is a warm local parser-path measurement, not the
+encrypted end-to-end workflow rate and not a large-data claim. The sanitized report is retained at
+`benchmarks/results/parquet-windows-20260912.json`.
+
+The independent public multilingual schema corpus scored 14 of 14 suggestions correctly, with 13
+review decisions, one deterministic automatic decision and zero unsafe automatic decisions. Its
+four source groups are too small for a universal accuracy claim. The sanitized report is retained
+at `benchmarks/results/mapping-independent-public-v1-windows-20260912.json`.

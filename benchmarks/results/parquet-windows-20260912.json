@@ -1,0 +1,67 @@
+{
+  "schema": "polymorph.public-parquet-evidence",
+  "version": 1,
+  "product_version": "0.4.0a2",
+  "observed_at": "2026-09-12T10:50:04Z",
+  "environment": {
+    "operating_system": "Windows",
+    "architecture": "AMD64",
+    "python": "3.11.9",
+    "pyarrow": "25.0.1",
+    "logical_cpus": 24,
+    "gpu_used": false
+  },
+  "fixture": {
+    "rows": 10000,
+    "columns": 5,
+    "compression": "zstd",
+    "size_bytes": 90788,
+    "contains_customer_data": false
+  },
+  "metrics": [
+    {
+      "cpu_ms": 0.0,
+      "measurement_mode": "standard",
+      "name": "content_inspection",
+      "peak_python_bytes": null,
+      "peak_rss_bytes": 76775424,
+      "python_allocation_tracing": false,
+      "result_count": null,
+      "rss_after_bytes": 76775424,
+      "rss_before_bytes": 76464128,
+      "throughput_per_second": null,
+      "wall_ms": 0.3817
+    },
+    {
+      "cpu_ms": 15.625,
+      "measurement_mode": "standard",
+      "name": "schema_inspection",
+      "peak_python_bytes": null,
+      "peak_rss_bytes": 87490560,
+      "python_allocation_tracing": false,
+      "result_count": null,
+      "rss_after_bytes": 87490560,
+      "rss_before_bytes": 76783616,
+      "throughput_per_second": null,
+      "wall_ms": 17.8
+    },
+    {
+      "cpu_ms": 0.0,
+      "measurement_mode": "standard",
+      "name": "record_read",
+      "peak_python_bytes": null,
+      "peak_rss_bytes": 95776768,
+      "python_allocation_tracing": false,
+      "result_count": 10000,
+      "rss_after_bytes": 95776768,
+      "rss_before_bytes": 87482368,
+      "throughput_per_second": 1543972.3320158103,
+      "wall_ms": 6.4768
+    }
+  ],
+  "caveats": [
+    "Record-read throughput is a local flat-Parquet parser measurement, not encrypted end-to-end workflow throughput.",
+    "Peak RSS is sampled and machine-specific.",
+    "The deterministic fixture fits in filesystem cache and is not a large-data claim."
+  ]
+}

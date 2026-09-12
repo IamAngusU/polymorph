@@ -74,3 +74,14 @@ train, development and holdout splits. Include explicit abstention labels and a 
 The evidence levels, privacy rules and required metadata are defined in
 [`docs/WORLD_READINESS.md`](../docs/WORLD_READINESS.md). A useful corpus expands domains and failure
 modes; duplicating easy aliases only makes the chart greener.
+
+## `independent-public-multilingual-v1.json`
+
+The first source-separated public schema holdout covers English Companies House, French INSEE
+SIRENE, German Destatis GENESIS and invoice terminology documented by Peppol. It contains 4 source
+groups and 14 labelled fields. Its provenance and limitations are retained beside the corpus.
+
+The initial `0.4.0a2` observation produced 14 correct suggestions, 13 review decisions, one
+deterministic automatic decision and zero unsafe automatic decisions. The checked-in test requires
+perfect suggestion accuracy and zero unsafe automatic decisions on this exact small corpus. This is
+a regression gate, not a claim of universal accuracy.

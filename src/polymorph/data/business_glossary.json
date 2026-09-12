@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "authority": "advisory_only",
+  "concepts": [
+    {"id": "invoice_number", "terms": {"en": ["invoice number", "invoice no"], "de": ["rechnungsnummer", "rechnungsnr"], "fr": ["numero de facture", "numero facture"]}},
+    {"id": "invoice_date", "terms": {"en": ["invoice date", "invoice issue date"], "de": ["rechnungsdatum", "belegdatum"], "fr": ["date de facture", "date facture"]}},
+    {"id": "due_date", "terms": {"en": ["due date", "payment due date"], "de": ["faelligkeitsdatum", "zahlungsziel"], "fr": ["date echeance", "date limite de paiement"]}},
+    {"id": "currency", "terms": {"en": ["currency", "currency code", "document currency code"], "de": ["waehrung", "waehrungscode"], "fr": ["devise", "code devise"]}},
+    {"id": "net_amount", "terms": {"en": ["net amount", "invoice total amount without vat", "tax exclusive amount"], "de": ["nettobetrag", "summe netto"], "fr": ["montant net", "montant hors taxe"]}},
+    {"id": "gross_amount", "terms": {"en": ["gross amount", "invoice total amount with vat", "tax inclusive amount"], "de": ["bruttobetrag", "summe brutto"], "fr": ["montant brut", "montant toutes taxes comprises"]}},
+    {"id": "vat_amount", "terms": {"en": ["vat amount", "invoice total vat amount", "tax amount"], "de": ["mehrwertsteuerbetrag", "umsatzsteuerbetrag", "mwst betrag"], "fr": ["montant tva", "taxe sur la valeur ajoutee"]}},
+    {"id": "vat_rate", "terms": {"en": ["vat rate", "tax rate"], "de": ["mehrwertsteuersatz", "umsatzsteuersatz", "mwst satz"], "fr": ["taux tva", "taux de taxe"]}},
+    {"id": "payable_amount", "terms": {"en": ["payable amount", "amount due for payment"], "de": ["zahlbetrag", "offener betrag"], "fr": ["montant a payer", "net a payer"]}},
+    {"id": "customer_number", "terms": {"en": ["customer number", "customer id"], "de": ["kundennummer", "debitorennummer", "debitor"], "fr": ["numero client", "identifiant client"]}},
+    {"id": "supplier_number", "terms": {"en": ["supplier number", "vendor number"], "de": ["lieferantennummer", "kreditorennummer", "kreditor"], "fr": ["numero fournisseur", "identifiant fournisseur"]}},
+    {"id": "company_registration_number", "terms": {"en": ["company number", "company registration number", "organization registration number"], "de": ["handelsregisternummer", "unternehmensnummer"], "fr": ["siren", "numero siren", "numero entreprise"]}},
+    {"id": "legal_name", "terms": {"en": ["company name", "legal name"], "de": ["firmenname", "rechtlicher name"], "fr": ["denominationunitelegale", "denomination unite legale", "raison sociale"]}},
+    {"id": "incorporation_date", "terms": {"en": ["date of creation", "incorporation date"], "de": ["gruendungsdatum", "errichtungsdatum"], "fr": ["datecreationunitelegale", "date creation unite legale"]}},
+    {"id": "quantity", "terms": {"en": ["quantity", "invoiced quantity"], "de": ["menge", "anzahl"], "fr": ["quantite", "quantite facturee"]}},
+    {"id": "unit_price", "terms": {"en": ["unit price", "item net price"], "de": ["einzelpreis", "stueckpreis"], "fr": ["prix unitaire", "prix net article"]}},
+    {"id": "tax_id", "terms": {"en": ["tax id", "vat identifier"], "de": ["steuer id", "steuernummer", "umsatzsteuer id"], "fr": ["numero tva", "identifiant fiscal"]}},
+    {"id": "iban", "terms": {"en": ["iban", "bank account iban"], "de": ["iban", "kontonummer iban"], "fr": ["iban", "compte bancaire iban"]}},
+    {"id": "reference_date", "terms": {"en": ["reference date", "reporting date"], "de": ["stichtag", "berichtsdatum"], "fr": ["date de reference", "date observation"]}},
+    {"id": "area_square_kilometers", "terms": {"en": ["area square kilometers", "area km2"], "de": ["gebietsflaeche qkm", "flaeche qkm"], "fr": ["superficie km2", "surface km2"]}}
+  ]
+}

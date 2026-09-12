@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polymorph-bridge"
-version = "0.4.0a1"
-description = "Policy-driven adaptive data bridge with an opaque data plane."
+version = "0.4.0a2"
+description = "Local-first trust layer for safe data mapping and encrypted delivery."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "AGPL-3.0-only"
@@ -39,6 +39,7 @@ postgres = ["psycopg[binary]>=3.2"]
 fileid = ["magika>=1.0"]
 csv-detection = ["clevercsv>=0.8"]
 benchmark = ["psutil>=6.0"]
+parquet = ["pyarrow>=18.0"]
 semantic = [
   "huggingface-hub>=0.27",
   "numpy>=1.26",
@@ -59,6 +60,7 @@ dev = [
 
 [project.scripts]
 polymorph = "polymorph.cli:main"
+polymorph-review = "polymorph.review_metrics:main"
 
 [project.urls]
 Homepage = "https://angusu.de"
@@ -72,7 +74,7 @@ Security = "https://github.com/IamAngusU/polymorph/blob/main/SECURITY.md"
 where = ["src"]
 
 [tool.setuptools.package-data]
-polymorph = ["py.typed"]
+polymorph = ["py.typed", "data/*.json"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
@@ -92,5 +94,12 @@ strict = true
 packages = ["polymorph"]
 
 [[tool.mypy.overrides]]
-module = ["onnxruntime", "onnxruntime.*", "sentencepiece", "sentencepiece.*"]
+module = [
+  "onnxruntime",
+  "onnxruntime.*",
+  "pyarrow",
+  "pyarrow.*",
+  "sentencepiece",
+  "sentencepiece.*",
+]
 ignore_missing_imports = true

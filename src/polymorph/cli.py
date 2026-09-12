@@ -31,6 +31,7 @@ from .connectors.csv_file import CsvConnector
 from .connectors.database import DatabaseConnector
 from .connectors.excel import ExcelConnector
 from .connectors.json_file import JsonFileConnector
+from .connectors.parquet import ParquetConnector
 from .content import ContentInspector, ContentKind, FileInspection, MagikaClassifier
 from .diagnostics import explain_reason
 from .errors import PolymorphError
@@ -207,6 +208,12 @@ def _inspect_excel(args: argparse.Namespace) -> None:
 def _inspect_csv(args: argparse.Namespace) -> None:
     _protect_write_path(args.output, args.path)
     connector = CsvConnector(args.path, delimiter=args.delimiter, encoding=args.encoding)
+    _emit_schema(connector.inspect_schema(), args)
+
+
+def _inspect_parquet(args: argparse.Namespace) -> None:
+    _protect_write_path(args.output, args.path)
+    connector = ParquetConnector(args.path, columns=args.columns, batch_rows=args.batch_rows)
     _emit_schema(connector.inspect_schema(), args)
 
 
@@ -641,6 +648,8 @@ def _connector_for_inspection(path: str, report: FileInspection) -> SourceConnec
         return JsonFileConnector(path, expected_source_identity=report.identity)
     if report.kind is ContentKind.DELIMITED_TEXT:
         return CsvConnector(path, expected_source_identity=report.identity)
+    if report.kind is ContentKind.PARQUET:
+        return ParquetConnector(path, expected_source_identity=report.identity)
     if report.kind is ContentKind.TEXT and any(
         signal.startswith("JSON-like") for signal in report.signals
     ):
@@ -1891,6 +1900,13 @@ def build_parser() -> argparse.ArgumentParser:
     csv_parser.add_argument("--encoding", default="utf-8-sig")
     _add_output(csv_parser)
     csv_parser.set_defaults(func=_inspect_csv)
+
+    parquet_parser = inspect_sub.add_parser("parquet")
+    parquet_parser.add_argument("path")
+    parquet_parser.add_argument("--columns", nargs="+")
+    parquet_parser.add_argument("--batch-rows", type=int, default=1024)
+    _add_output(parquet_parser)
+    parquet_parser.set_defaults(func=_inspect_parquet)
 
     json_parser = inspect_sub.add_parser("json")
     json_parser.add_argument("path")

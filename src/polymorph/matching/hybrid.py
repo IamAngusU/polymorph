@@ -13,6 +13,7 @@ from .deterministic import (
     foreign_key_lookup_key,
     role_compatible_for_automatic,
 )
+from .glossary import advisory_glossary_target
 
 
 @dataclass(slots=True)
@@ -241,6 +242,22 @@ class HybridMatcher:
         self, source_schema: SchemaDescriptor, target_schema: SchemaDescriptor
     ) -> list[MappingDecision]:
         decisions = [self.decide(source, target_schema) for source in source_schema.fields]
+
+        paired = zip(source_schema.fields, decisions, strict=True)
+        for index, (source, decision) in enumerate(paired):
+            if decision.status is MappingStatus.AUTO:
+                continue
+            glossary_target = advisory_glossary_target(source, target_schema)
+            if glossary_target is None or glossary_target.id == decision.target_field_id:
+                continue
+            decisions[index] = MappingDecision(
+                source_field_id=source.id,
+                target_field_id=glossary_target.id,
+                status=MappingStatus.REVIEW,
+                score=max(0.55, decision.score),
+                margin=0.0,
+                reasons=(*decision.reasons, "business glossary advisory match"),
+            )
 
         # Any two plausible source fields claiming the same target make automatic approval
         # unsafe. Review candidates participate in this conflict check too, otherwise one
