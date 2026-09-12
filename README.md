@@ -365,6 +365,25 @@ separately.
 
 See [Performance baseline](docs/PERFORMANCE_BASELINE.md) for the exact machine, methodology and caveats.
 
+## Ecosystem and operations kit (new in 0.4.0a5)
+
+The new local toolkit closes practical integration gaps without turning evidence into authority:
+
+```powershell
+polymorph-kit connector scaffold "Acme CRM" --output .\acme-connector
+polymorph-kit quality inspect .\incoming.csv --output .\quality.json
+polymorph-kit ui export .\review-ui
+polymorph-kit review finalize .\review-draft.json --output .\review.json
+polymorph-kit sync inspect .\.polymorph\sync.sqlite3
+```
+
+The review component is dependency-free, light-mode, responsive, bilingual, and framework-neutral.
+Its drafts contain schema metadata but no rows and carry no write authority. Cleaning plans are
+explicit and lazy. OAuth access tokens stay in memory. Recurring cursors advance only after a
+structured completed write. See [the ecosystem kit](docs/ECOSYSTEM_KIT.md),
+[embedded review UI](docs/REVIEW_UI.md), [recurring runs](docs/RECURRING_RUNS.md), and the
+[enterprise readiness facts](docs/ENTERPRISE_READINESS.md).
+
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
@@ -438,7 +457,7 @@ Two post-fix GPU samples observed device-wide allocated VRAM staying at 2,788 Mi
 ## Downloads
 
 - [Download the current source as a ZIP](https://github.com/IamAngusU/polymorph/archive/refs/heads/main.zip)
-- [Download the tested v0.4.0a4 pre-release, wheel, sdist, and Polymorph Run 1.1.0 buddy](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a4)
+- [Download the tested v0.4.0a5 pre-release, wheel, sdist, and Polymorph Run 1.1.0 buddy](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a5)
 
 ## Long-term run metrics
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polymorph-bridge"
-version = "0.4.0a4"
+version = "0.4.0a5"
 description = "Local-first trust layer for safe data mapping and encrypted delivery."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -61,6 +61,7 @@ dev = [
 [project.scripts]
 polymorph = "polymorph.cli:main"
 polymorph-review = "polymorph.review_metrics:main"
+polymorph-kit = "polymorph.toolkit:main"
 
 [project.urls]
 Homepage = "https://angusu.de"
@@ -74,7 +75,7 @@ Security = "https://github.com/IamAngusU/polymorph/blob/main/SECURITY.md"
 where = ["src"]
 
 [tool.setuptools.package-data]
-polymorph = ["py.typed", "data/*.json"]
+polymorph = ["py.typed", "data/*.json", "ui/*.js", "ui/*.html", "ui/*.md"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

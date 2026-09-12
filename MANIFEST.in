@@ -10,8 +10,10 @@ include examples.py
 include World-Benchmark.cmd
 recursive-include benchmarks *.json *.md
 recursive-include docs *.md *.webp *.svg
+recursive-include examples *.py
 recursive-include scripts *.py
 recursive-include src/polymorph/data *.json
+recursive-include src/polymorph/ui *.js *.html *.md
 recursive-include tests *.py
 recursive-include tests/fixtures/csv-spectrum *.csv *.json *.md *.txt SHA256SUMS
 recursive-include tests/fixtures/json-test-suite *.json *.md *.txt SHA256SUMS

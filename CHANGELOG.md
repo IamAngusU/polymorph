@@ -4,6 +4,23 @@ All notable changes to this alpha are documented here.
 
 ## Unreleased
 
+## 0.4.0a5 - 2026-09-12
+
+- Added `polymorph-kit`, a local-first integration toolkit with no generated or activated GitHub
+  Actions workflows.
+- Added a no-overwrite, fail-closed source connector scaffolder whose capability manifest starts
+  entirely false and includes provider lifecycle and quota guidance.
+- Added bounded streaming data-quality reports that retain row numbers and issue metadata but no
+  customer values, plus lazy schema-bound cleaning plans requiring explicit operator construction.
+- Added portable EN/DE review UI assets and canonical review artifacts bound to exact source and
+  destination schema fingerprints. Artifacts can record mappings but never grant write authority.
+- Added a thread-safe in-memory OAuth access-token provider driven by a trusted-host refresh
+  callback, with redacted representations, bounded token lifetime, and no refresh-token storage.
+- Added durable local recurring-run checkpoints with commit-only advancement, compare-and-swap
+  generations, idempotent receipts, bounded cursors, and fenced expiring single-host leases.
+- Added honest enterprise-readiness, recurring-run, review-UI, and ecosystem boundary documents
+  plus copy-paste integration recipes.
+
 ## 0.4.0a4 - 2026-09-12
 
 ### Added

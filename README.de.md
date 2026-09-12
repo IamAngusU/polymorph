@@ -367,6 +367,27 @@ GPU-Auslastung galt für das ganze Gerät und ist keinem Prozess zugeordnet.
 
 Siehe [Performance baseline](docs/PERFORMANCE_BASELINE.md) für Maschine, Methodik und Einschränkungen.
 
+## Ecosystem- und Operations-Kit (neu in 0.4.0a5)
+
+Das neue lokale Toolkit schliesst praktische Integrationsluecken, ohne Evidenz zu Autoritaet zu
+machen:
+
+```powershell
+polymorph-kit connector scaffold "Acme CRM" --output .\acme-connector
+polymorph-kit quality inspect .\incoming.csv --output .\quality.json
+polymorph-kit ui export .\review-ui
+polymorph-kit review finalize .\review-draft.json --output .\review.json
+polymorph-kit sync inspect .\.polymorph\sync.sqlite3
+```
+
+Die Review-Komponente ist dependency-frei, hell, responsiv, zweisprachig und framework-neutral.
+Ihre Entwuerfe enthalten Schema-Metadaten, aber keine Rows, und verleihen keine Write-Autoritaet.
+Cleaning-Plans sind explizit und lazy. OAuth-Access-Tokens bleiben im Speicher. Wiederkehrende
+Cursor ruecken nur nach einem strukturiert abgeschlossenen Write vor. Details stehen im
+[Ecosystem-Kit](docs/ECOSYSTEM_KIT.md), in der [Review-UI-Anleitung](docs/REVIEW_UI.md), bei den
+[wiederkehrenden Runs](docs/RECURRING_RUNS.md) und in den
+[Enterprise-Readiness-Fakten](docs/ENTERPRISE_READINESS.md).
+
 ## Dokumentation
 
 - [Architektur](docs/ARCHITECTURE.md)
@@ -440,7 +461,7 @@ In zwei GPU-Samples nach den Fixes blieb der geraeteweit belegte VRAM exakt bei 
 ## Downloads
 
 - [Aktuellen Quellcode direkt als ZIP laden](https://github.com/IamAngusU/polymorph/archive/refs/heads/main.zip)
-- [Geprueftes v0.4.0a4-Pre-Release mit Wheel, sdist und Polymorph Run 1.1.0 Buddy laden](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a4)
+- [Geprueftes v0.4.0a5-Pre-Release mit Wheel, sdist und Polymorph Run 1.1.0 Buddy laden](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a5)
 
 ## Langfristige Run-Metriken
 

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; object-src 'none'; base-uri 'none'">
+  <title>Polymorph Review Desk</title>
+  <style>body{margin:0;padding:clamp(16px,5vw,70px);background:#e9e3d5}main{max-width:1120px;margin:auto}</style>
+</head>
+<body>
+  <main><polymorph-review locale="en"></polymorph-review></main>
+  <script type="module">
+    import "./polymorph-review.js";
+    document.querySelector("polymorph-review").model = {
+      session_id: "example-only-no-write",
+      source_schema_fingerprint: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      destination_schema_fingerprint: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      target_fields: ["customer_id", "invoice_total", "tax_rate", "currency_code"],
+      suggestions: [
+        {source_field:"Kundennummer",target_field:"customer_id",confidence:.96,reasons:["alias","unique-key"]},
+        {source_field:"Bruttobetrag",target_field:"invoice_total",confidence:.74,reasons:["currency-shape","domain-term"]},
+        {source_field:"MwSt",target_field:"tax_rate",confidence:.62,reasons:["tax-vocabulary","percent-shape"]}
+      ]
+    };
+  </script>
+</body>
+</html>
