@@ -4,6 +4,16 @@ All notable changes to this alpha are documented here.
 
 ## Unreleased
 
+## 0.4.0a7 - 2026-09-12
+
+- Replaced the per-append full audit-table quota scan with transactionally maintained constant-time
+  usage metadata, preserving pre-write quota checks across multiple writers.
+- Added automatic usage backfill for existing audit stores and postconditions that roll back an
+  append if the hash-chain tail, inserted rows, or usage metadata disagree.
+- Reused the already serialized audit event bytes for hashing and quota accounting.
+- Added regression coverage for legacy migration, shared-writer quotas, and absence of aggregate
+  table scans in the append hot path.
+
 ## 0.4.0a6 - 2026-09-12
 
 - Fixed the portable review integration against the real `MoveSession`: preparations now expose

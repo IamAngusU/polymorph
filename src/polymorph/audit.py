@@ -216,6 +216,83 @@ class AuditLog:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS audit_usage (
+                    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                    event_count INTEGER NOT NULL CHECK (event_count >= 0),
+                    logical_bytes INTEGER NOT NULL CHECK (logical_bytes >= 0)
+                )
+                """
+            )
+            usage = connection.execute(
+                "SELECT singleton FROM audit_usage WHERE singleton = 1"
+            ).fetchone()
+            if usage is None:
+                connection.execute(
+                    """
+                    INSERT INTO audit_usage (singleton, event_count, logical_bytes)
+                    SELECT 1,
+                           COUNT(*),
+                           COALESCE(SUM(LENGTH(CAST(event_json AS BLOB)) +
+                                        LENGTH(previous_hash) + LENGTH(event_hash) +
+                                        COALESCE(LENGTH(signature), 0)), 0)
+                    FROM audit_events
+                    """
+                )
+            connection.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS audit_usage_after_insert
+                AFTER INSERT ON audit_events
+                BEGIN
+                    UPDATE audit_usage
+                    SET event_count = event_count + 1,
+                        logical_bytes = logical_bytes +
+                            LENGTH(CAST(NEW.event_json AS BLOB)) +
+                            LENGTH(NEW.previous_hash) + LENGTH(NEW.event_hash) +
+                            COALESCE(LENGTH(NEW.signature), 0)
+                    WHERE singleton = 1;
+                END
+                """
+            )
+            connection.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS audit_usage_after_update
+                AFTER UPDATE OF event_json, previous_hash, event_hash, signature ON audit_events
+                BEGIN
+                    UPDATE audit_usage
+                    SET logical_bytes = MAX(
+                        0,
+                        logical_bytes -
+                            LENGTH(CAST(OLD.event_json AS BLOB)) -
+                            LENGTH(OLD.previous_hash) - LENGTH(OLD.event_hash) -
+                            COALESCE(LENGTH(OLD.signature), 0) +
+                            LENGTH(CAST(NEW.event_json AS BLOB)) +
+                            LENGTH(NEW.previous_hash) + LENGTH(NEW.event_hash) +
+                            COALESCE(LENGTH(NEW.signature), 0)
+                    )
+                    WHERE singleton = 1;
+                END
+                """
+            )
+            connection.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS audit_usage_after_delete
+                AFTER DELETE ON audit_events
+                BEGIN
+                    UPDATE audit_usage
+                    SET event_count = MAX(0, event_count - 1),
+                        logical_bytes = MAX(
+                            0,
+                            logical_bytes -
+                                LENGTH(CAST(OLD.event_json AS BLOB)) -
+                                LENGTH(OLD.previous_hash) - LENGTH(OLD.event_hash) -
+                                COALESCE(LENGTH(OLD.signature), 0)
+                        )
+                    WHERE singleton = 1;
+                END
+                """
+            )
 
     def _validate_existing_schema(self) -> None:
         try:
@@ -242,6 +319,10 @@ class AuditLog:
             separators=(",", ":"),
             ensure_ascii=False,
         ).encode("utf-8")
+        return AuditLog._hash_encoded(previous_hash, encoded)
+
+    @staticmethod
+    def _hash_encoded(previous_hash: str, encoded: bytes) -> str:
         return hashlib.sha256(previous_hash.encode("ascii") + b"\x00" + encoded).hexdigest()
 
     def append(self, event: AuditEvent) -> AuditRecord:
@@ -252,7 +333,7 @@ class AuditLog:
 
         if self._read_only:
             raise IntegrityError("cannot append to a read-only audit store")
-        prepared: list[tuple[dict[str, object], str]] = []
+        prepared: list[tuple[dict[str, object], str, bytes]] = []
         total_encoded_bytes = 0
         for index, event in enumerate(events):
             if index >= MAX_AUDIT_BATCH_EVENTS:
@@ -266,13 +347,14 @@ class AuditLog:
                 separators=(",", ":"),
                 ensure_ascii=False,
             )
-            encoded_size = len(encoded.encode("utf-8"))
+            encoded_bytes = encoded.encode("utf-8")
+            encoded_size = len(encoded_bytes)
             if encoded_size > MAX_AUDIT_EVENT_BYTES:
                 raise ValueError("audit event exceeds the encoded size limit")
             total_encoded_bytes += encoded_size
             if total_encoded_bytes > MAX_AUDIT_BATCH_BYTES:
                 raise ValueError("audit batch exceeds the encoded size limit")
-            prepared.append((payload, encoded))
+            prepared.append((payload, encoded, encoded_bytes))
         if not prepared:
             return ()
 
@@ -283,28 +365,25 @@ class AuditLog:
                 "SELECT sequence, event_hash FROM audit_events ORDER BY sequence DESC LIMIT 1"
             ).fetchone()
             usage = connection.execute(
-                """
-                SELECT COUNT(*) AS event_count,
-                       COALESCE(SUM(LENGTH(CAST(event_json AS BLOB)) + LENGTH(previous_hash) +
-                                    LENGTH(event_hash) + COALESCE(LENGTH(signature), 0)), 0)
-                           AS logical_bytes
-                FROM audit_events
-                """
+                "SELECT event_count, logical_bytes FROM audit_usage WHERE singleton = 1"
             ).fetchone()
-            assert usage is not None
+            if usage is None:
+                raise IntegrityError("audit usage metadata is missing")
+            initial_sequence = int(previous["sequence"]) if previous is not None else 0
+            if int(usage["event_count"]) != initial_sequence:
+                raise IntegrityError("audit usage metadata does not match the hash-chain tail")
             signature_bytes = 64 if self.signer is not None else 0
             additional_bytes = sum(
-                len(encoded.encode("utf-8")) + 128 + signature_bytes for _, encoded in prepared
+                len(encoded_bytes) + 128 + signature_bytes for _, _, encoded_bytes in prepared
             )
             if int(usage["event_count"]) + len(prepared) > self.max_events:
                 raise IntegrityError("audit event quota reached; archive before retrying")
             if int(usage["logical_bytes"]) + additional_bytes > self.max_logical_bytes:
                 raise IntegrityError("audit byte quota reached; archive before retrying")
-            initial_sequence = int(previous["sequence"]) if previous is not None else 0
             previous_hash = previous["event_hash"] if previous is not None else "0" * 64
             expected_rows: list[tuple[int, str, str, str, bytes | None]] = []
-            for payload, encoded in prepared:
-                event_hash = self._hash(previous_hash, payload)
+            for _payload, encoded, encoded_bytes in prepared:
+                event_hash = self._hash_encoded(previous_hash, encoded_bytes)
                 signature = self.signer.sign(bytes.fromhex(event_hash)) if self.signer else None
                 connection.execute(
                     """
@@ -345,6 +424,16 @@ class AuditLog:
             ]
             if actual_rows != expected_rows:
                 raise IntegrityError("audit append postcondition failed")
+            updated_usage = connection.execute(
+                "SELECT event_count, logical_bytes FROM audit_usage WHERE singleton = 1"
+            ).fetchone()
+            expected_event_count = initial_sequence + len(prepared)
+            expected_logical_bytes = int(usage["logical_bytes"]) + additional_bytes
+            if updated_usage is None or (
+                int(updated_usage["event_count"]) != expected_event_count
+                or int(updated_usage["logical_bytes"]) != expected_logical_bytes
+            ):
+                raise IntegrityError("audit usage metadata postcondition failed")
 
             records = [
                 AuditRecord(
@@ -354,7 +443,7 @@ class AuditLog:
                     event_hash,
                     signature,
                 )
-                for (payload, _), (
+                for (payload, _, _), (
                     sequence,
                     _,
                     previous_hash,
