@@ -391,3 +391,9 @@ Two post-fix GPU samples observed device-wide allocated VRAM staying at 2,788 Mi
 
 - [Download the current source as a ZIP](https://github.com/IamAngusU/polymorph/archive/refs/heads/main.zip)
 - [Download the tested v0.4.0a1 pre-release, wheel, sdist, and Polymorph Run 1.1.0 buddy](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a1)
+
+## Long-term run metrics
+
+![Polymorph Run performance history](docs/assets/performance-history.svg)
+
+Every supported buddy run refreshes the append-only local history under `.polymorph/metrics`. The tracked SVG and JSONL are published only after an explicit review with `python scripts/run_metrics.py --project "D:\polymorph" --export-public`; the command never commits or pushes. See [the metrics history contract](docs/METRICS_HISTORY.md).

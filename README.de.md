@@ -391,3 +391,9 @@ In zwei GPU-Samples nach den Fixes blieb der geraeteweit belegte VRAM exakt bei 
 
 - [Aktuellen Quellcode direkt als ZIP laden](https://github.com/IamAngusU/polymorph/archive/refs/heads/main.zip)
 - [Geprueftes v0.4.0a1-Pre-Release mit Wheel, sdist und Polymorph Run 1.1.0 Buddy laden](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a1)
+
+## Langfristige Run-Metriken
+
+![Polymorph Run Performance-Verlauf](docs/assets/performance-history.svg)
+
+Jeder unterstuetzte Buddy-Lauf aktualisiert die append-only lokale Historie unter `.polymorph/metrics`. Das getrackte SVG und JSONL werden erst nach ausdruecklicher Pruefung mit `python scripts/run_metrics.py --project "D:\polymorph" --export-public` aktualisiert; der Befehl committet und pusht nie selbst. Siehe [Vertrag der Metrik-Historie](docs/METRICS_HISTORY.md).
