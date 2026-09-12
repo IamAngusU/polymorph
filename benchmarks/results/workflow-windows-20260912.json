@@ -1,0 +1,68 @@
+{
+  "benchmark": "workflow",
+  "schema_version": 1,
+  "measured_at": "2026-09-12",
+  "base_commit": "7380d86565fd9c043f46502152e3c5caf391ab5e",
+  "product_version": "0.4.0a1",
+  "environment": {
+    "operating_system": "Windows",
+    "windows_build": 26200,
+    "machine": "AMD64",
+    "cpu": "12th Gen Intel(R) Core(TM) i9-12900K",
+    "logical_cpus": 24,
+    "python": "3.11.9",
+    "sqlite": "3.45.1",
+    "gpu": "NVIDIA GeForce RTX 3080",
+    "gpu_memory_total_mib": 10240,
+    "gpu_driver": "610.62"
+  },
+  "configuration": {
+    "records": 1000,
+    "fields_per_record": 5,
+    "batch_size": 100,
+    "signed_audit": true,
+    "sqlite_journal_mode": "delete",
+    "sqlite_synchronous": "full",
+    "measurement_mode": "standard",
+    "fresh_process_and_work_directory_per_run": true,
+    "warmed_host": true,
+    "models": "none"
+  },
+  "runs": [
+    {"throughput_records_per_second": 373.567053, "wall_seconds": 2.676896, "cpu_seconds": 2.437500, "peak_rss_mib": 80.843750},
+    {"throughput_records_per_second": 376.814853, "wall_seconds": 2.653823, "cpu_seconds": 2.468750, "peak_rss_mib": 80.761719},
+    {"throughput_records_per_second": 375.831155, "wall_seconds": 2.660769, "cpu_seconds": 2.453125, "peak_rss_mib": 81.332031},
+    {"throughput_records_per_second": 367.992552, "wall_seconds": 2.717446, "cpu_seconds": 2.390625, "peak_rss_mib": 88.457031},
+    {"throughput_records_per_second": 376.660673, "wall_seconds": 2.654910, "cpu_seconds": 2.453125, "peak_rss_mib": 88.734375}
+  ],
+  "summary": {
+    "successful_runs": 5,
+    "throughput_records_per_second": {"minimum": 367.992552, "median": 375.831155, "maximum": 376.814853},
+    "wall_seconds": {"minimum": 2.653823, "median": 2.660769, "maximum": 2.717446},
+    "cpu_seconds_median": 2.453125,
+    "peak_rss_mib": {"minimum": 80.761719, "median": 81.332031, "maximum": 88.734375},
+    "rss_growth_mib_median": 15.773438,
+    "retained_storage_mib_median": 3.013514,
+    "destination_delivery_wall_seconds_median": 0.623561,
+    "destination_batch_latency_ms_median": {"p50": 61.753800, "p95": 64.428295},
+    "seal_and_outbox_batch_latency_ms_median": {"p50": 88.483550, "p95": 90.180605},
+    "acknowledgement_batch_latency_ms_median": {"p50": 4.582400, "p95": 4.992125},
+    "events_per_run": 1039,
+    "destination_rows_per_run": 1000
+  },
+  "gpu_observation": {
+    "sampling_interval_ms": 500,
+    "observed_runs": 2,
+    "sample_count": 13,
+    "device_memory_used_start_mib": 2788,
+    "device_memory_used_peak_mib": 2788,
+    "device_wide_utilization_peak_percent": 36,
+    "interpretation": "No attributable Polymorph GPU allocation observed. Device-wide samples include other processes and cannot establish per-process GPU use."
+  },
+  "limitations": [
+    "Local engineering evidence, not a cross-platform performance guarantee.",
+    "Five observations are enough for a smoke baseline, not a tail-latency claim.",
+    "The workflow timer excludes interpreter startup, module imports and CLI parsing.",
+    "GPU sampling can miss short peaks and is not process-attributed."
+  ]
+}

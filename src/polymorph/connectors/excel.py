@@ -46,6 +46,8 @@ class _Worksheet(Protocol):
     max_row: int | None
     max_column: int | None
 
+    def calculate_dimension(self, force: bool = False) -> str: ...
+
     def iter_rows(
         self,
         *,
@@ -284,6 +286,19 @@ class ExcelConnector:
             workbook.close()
             source_handle.close()
             raise ConnectorError("selected Excel sheet is not a worksheet")
+        if worksheet.max_row is None or worksheet.max_column is None:
+            try:
+                worksheet.calculate_dimension(force=True)
+            except (OSError, ValueError) as exc:
+                workbook.close()
+                source_handle.close()
+                raise ConnectorError(
+                    "Excel connector could not determine worksheet dimensions"
+                ) from exc
+        if worksheet.max_row is None or worksheet.max_column is None:
+            workbook.close()
+            source_handle.close()
+            raise ConnectorError("Excel worksheet dimensions remain unavailable")
         return workbook, cast(_Worksheet, worksheet), source_handle
 
     def _close_workbook(self, workbook: Workbook, source_handle: BinaryIO) -> None:

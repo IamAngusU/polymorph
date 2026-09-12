@@ -15,7 +15,7 @@
 <p align="center">
   <a href="docs/PERFORMANCE_BASELINE.md#file-inspection"><img src="docs/assets/badges/fixture-rows.de.svg" height="42" alt="Datei-Fixtures mit je 50.000 Zeilen"></a>
   <a href="#gemessene-lokale-baseline"><img src="docs/assets/badges/workflow.de.svg" height="42" alt="Sicherer Workflow mit 1.000 Records"></a>
-  <a href="#gemessene-lokale-baseline"><img src="docs/assets/badges/throughput.de.svg" height="42" alt="Median 52,41 Records pro Sekunde lokal"></a>
+  <a href="#gemessene-lokale-baseline"><img src="docs/assets/badges/throughput.de.svg" height="42" alt="Median 375,83 Records pro Sekunde lokal"></a>
   <a href="#optionale-modell-evidenz"><img src="docs/assets/badges/auto-precision.de.svg" height="42" alt="17 von 17 beobachteten automatischen Entscheidungen korrekt"></a>
 </p>
 
@@ -176,14 +176,22 @@ Siehe [Authentizität und Rotation von Recipient Keys](docs/RECIPIENT_KEY_ROTATI
 
 Python 3.11 bis 3.14 wird in CI ausgeführt.
 
-Für einen Development-Checkout mit dem deterministischen modellfreien Pfad:
+Repository klonen oder auf GitHub **Code > Download ZIP** wählen und entpacken. Polymorph nutzt
+weder Git-Submodule noch Git-LFS-Assets. Der kürzeste modellfreie lokale Start ist für beide Wege
+gleich:
 
 ```bash
 git clone https://github.com/IamAngusU/polymorph.git
 cd polymorph
-python scripts/bootstrap.py
+python scripts/bootstrap.py --skip-checks
 python scripts/dev.py doctor
+python examples.py
 ```
+
+Beim ZIP zuerst mit `cd` in den entpackten Ordner `polymorph-main` wechseln und die letzten drei
+Befehle ausführen. Bootstrap erstellt `.venv`, installiert den lokalen Checkout und endet mit
+`doctor`; die virtuelle Umgebung muss nicht manuell aktiviert werden. Für die vollständige
+Development-Test-Suite `python scripts/bootstrap.py` ohne `--skip-checks` ausführen.
 
 Optionale Research-Modelle werden für den Core nicht benötigt:
 
@@ -292,13 +300,22 @@ Die Benchmark-Kommandos sind explizite Diagnostik. Normale Production-Pfade scha
 
 ## Gemessene lokale Baseline
 
-Der vollständig durable, signierte und auditierte lokale Transport bewegte 1.000 Records mit jeweils fünf String-Feldern bei einem Median von **52,41 Records/s** zu einer SQLite-Destination und **85,42 MiB** medianem Peak RSS auf der dokumentierten Windows-Entwicklungsmaschine.
+Am 12.09.2026 bewegten fünf Runs mit jeweils frischem Workflow-State über den vollständig
+durablen, signierten und auditierten lokalen Transport 1.000 Records mit fünf String-Feldern bei
+**367,99 bis 376,81 Records/s**, Median **375,83 Records/s**, zu einer SQLite-Destination mit
+100er-Batches. Die mediane gemessene Laufzeit betrug **2,661 s**, der mediane gesampelte Peak RSS
+**81,33 MiB** auf Windows Build 26200, Python 3.11.9 und einem Intel Core i9-12900K.
 
 Jeder Run enthielt Recipient-Certificate-Verifikation, X25519- und ChaCha20-Poly1305-Sealing, Ed25519-Source-Signaturen, durable Source Outbox, Relay-Validation und fenced Leases, Destination Authentication und Decryption, Contract Validation, SQLite-Writes, Sealed-spool-Cleanup, signiertes Hash-chain-Audit und Acknowledgements.
 
-In jedem aufbewahrten Run wurden alle 1.000 Records genau einmal zugestellt.
+In jedem aufbewahrten Run wurden alle 1.000 Records genau einmal zugestellt. Alle fünf Messwerte
+und die Methodik liegen unter
+[`benchmarks/results/workflow-windows-20260912.json`](benchmarks/results/workflow-windows-20260912.json).
 
-Separate durable SQLite-Commits dominieren dieses Profil. Sinnvolle Optimierungsziele sind Transaction Batching, Connection Reuse und Batch Acknowledgements. Durability abzuschalten würde den Benchmark ebenfalls schneller machen. Bremsen ausbauen macht ein Auto auch leichter.
+Der deterministische Workflow-Benchmark lädt keine optionalen Mapping-Modelle. Eine separate
+`nvidia-smi`-Messung im 500-ms-Takt beobachtete über zwei dieser Runs auf einer RTX 3080 mit
+10.240 MiB Gesamt-VRAM konstant 2.788 MiB, also **0 MiB beobachtete Änderung**. Die gemessene
+GPU-Auslastung galt für das ganze Gerät und ist keinem Prozess zugeordnet.
 
 Siehe [Performance baseline](docs/PERFORMANCE_BASELINE.md) für Maschine, Methodik und Einschränkungen.
 
@@ -363,3 +380,9 @@ Siehe [LICENSING.de.md](LICENSING.de.md) für die menschlich lesbare Einordnung,
 Copyright 2026 Angus Uelsmann · [angusu.de](https://angusu.de) · [NOTICE](NOTICE)
 
 Third-party-Komponenten behalten ihre jeweiligen Lizenzen; siehe [THIRD_PARTY.md](THIRD_PARTY.md).
+
+## Lokaler Abnahmesnapshot (12.09.2026)
+
+Auf einem Intel Core i9-12900K mit Windows und Python 3.11 hat der finale vollstaendige Polymorph-Run-Test drei integritaetsgepruefte Workflow-Samples mit je 1.000 Rows gemessen: 357,75-373,56 Rows/s (Median 373,29), 2,677-2,795 s Laufzeit (Median 2,679) und 80,88-81,23 MiB Peak-RSS. Die eigene Fuenf-Lauf-Baseline bleibt mit 367,99-376,81 Rows/s (Median 375,83) die weniger verrauschte Hauptmessung; Rohdaten und Grenzen stehen in `benchmarks/results/workflow-windows-20260912.json`.
+
+In zwei GPU-Samples nach den Fixes blieb der geraeteweit belegte VRAM exakt bei 2.788 MiB, also 0 MiB beobachtete Aenderung. Die Messung ist nicht prozessbezogen und beweist nicht, dass andere Anwendungen keine GPU nutzten. Der advisory Ranking-Vergleich auf der festen Validation verbesserte sich von 47/84 untrainiert auf 61/84 trainiert, mit 14 paarweisen Verbesserungen, 0 Regressionen, 0 unsicheren Auto-Entscheidungen und unveraenderter deterministischer Autoritaet. Das ist synthetische Validation, kein unabhaengiger Produktions-Holdout.

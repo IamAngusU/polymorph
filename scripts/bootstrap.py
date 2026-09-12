@@ -137,6 +137,16 @@ def main() -> int:
     home = args.home.expanduser().resolve()
     env = os.environ.copy()
     env["POLYMORPH_HOME"] = str(home)
+    env.update(
+        {
+            "OPENBLAS_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1",
+            "BLIS_NUM_THREADS": "1",
+        }
+    )
 
     if not _venv_executable("python").exists():
         _run([args.python, "-m", "venv", VENV], env=env)

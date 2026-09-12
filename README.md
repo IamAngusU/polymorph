@@ -15,7 +15,7 @@
 <p align="center">
   <a href="docs/PERFORMANCE_BASELINE.md#file-inspection"><img src="docs/assets/badges/fixture-rows.svg" height="42" alt="50k-row file fixtures"></a>
   <a href="#measured-local-baseline"><img src="docs/assets/badges/workflow.svg" height="42" alt="1,000-record secure workflow baseline"></a>
-  <a href="#measured-local-baseline"><img src="docs/assets/badges/throughput.svg" height="42" alt="52.41 records per second median local throughput"></a>
+  <a href="#measured-local-baseline"><img src="docs/assets/badges/throughput.svg" height="42" alt="375.83 records per second median local throughput"></a>
   <a href="#optional-model-evidence"><img src="docs/assets/badges/auto-precision.svg" height="42" alt="17 of 17 observed automatic decisions correct"></a>
 </p>
 
@@ -176,14 +176,21 @@ See [recipient key authenticity and rotation](docs/RECIPIENT_KEY_ROTATION.md).
 
 Python 3.11 through 3.14 is exercised in CI.
 
-For a development checkout with the deterministic model-free path:
+Clone the repository or use GitHub's **Code > Download ZIP** and extract it. Polymorph uses no Git
+submodules or Git LFS assets. The shortest model-free local setup is the same on either path:
 
 ```bash
 git clone https://github.com/IamAngusU/polymorph.git
 cd polymorph
-python scripts/bootstrap.py
+python scripts/bootstrap.py --skip-checks
 python scripts/dev.py doctor
+python examples.py
 ```
+
+When using the ZIP, start with `cd` in the extracted `polymorph-main` directory and run the final
+three commands. The bootstrap creates `.venv`, installs the local checkout and ends with `doctor`;
+manual virtual-environment activation is not required. Run `python scripts/bootstrap.py` without
+`--skip-checks` when you also want the complete development test suite.
 
 Optional research models are not required for the core:
 
@@ -292,13 +299,23 @@ The benchmark commands are explicit diagnostics. Normal production paths do not 
 
 ## Measured local baseline
 
-The fully durable, signed and audited local transport moved 1,000 five-field records at a median **52.41 records/s** with a SQLite destination and **85.42 MiB** median peak RSS on the documented Windows development machine.
+On 2026-09-12, five fresh-workflow-state runs of the fully durable, signed and audited local
+transport moved 1,000 five-field records at **367.99 to 376.81 records/s**, with a median of
+**375.83 records/s**, using a SQLite destination and batches of 100. Median measured wall time was
+**2.661 s** and median sampled peak RSS was **81.33 MiB** on Windows build 26200, Python 3.11.9 and
+an Intel Core i9-12900K.
 
 Each run included recipient-certificate verification, X25519 and ChaCha20-Poly1305 sealing, Ed25519 source signatures, durable source outbox, relay validation and fenced leases, destination authentication and decryption, contract validation, SQLite writes, sealed-spool cleanup, signed hash-chain audit and acknowledgements.
 
-All 1,000 records were delivered once in every retained run.
+All 1,000 records were delivered once in every retained run. The exact five observations and
+measurement metadata are checked in as
+[`benchmarks/results/workflow-windows-20260912.json`](benchmarks/results/workflow-windows-20260912.json).
 
-Separate durable SQLite commits dominate that profile. The useful optimization targets are transaction batching, connection reuse and batch acknowledgements. Turning durability off would also make the benchmark faster, in the same way removing brakes makes a car lighter.
+The deterministic workflow benchmark does not load the optional mapping models. A separate
+500 ms `nvidia-smi` sample over two of the same runs observed total device memory remain at
+2,788 MiB on an RTX 3080 with 10,240 MiB: **0 MiB observed change**. GPU utilization was
+device-wide and cannot be attributed to this process. Model benchmarks must report VRAM
+separately.
 
 See [Performance baseline](docs/PERFORMANCE_BASELINE.md) for the exact machine, methodology and caveats.
 
@@ -363,3 +380,9 @@ See [LICENSING.md](LICENSING.md) for the human-readable overview, [COMMERCIAL.md
 Copyright 2026 Angus Uelsmann · [angusu.de](https://angusu.de) · [NOTICE](NOTICE)
 
 Third-party components retain their own licenses; see [THIRD_PARTY.md](THIRD_PARTY.md).
+
+## Local acceptance snapshot (2026-09-12)
+
+On an Intel Core i9-12900K with Windows and Python 3.11, the final full Polymorph Run acceptance check measured three integrity-gated 1,000-row workflow samples at 357.75-373.56 records/s (median 373.29), 2.677-2.795 s wall time (median 2.679), and 80.88-81.23 MiB peak RSS. The dedicated five-run baseline remains the less noisy headline measurement at 367.99-376.81 records/s (median 375.83); raw results and limitations are in `benchmarks/results/workflow-windows-20260912.json`.
+
+Two post-fix GPU samples observed device-wide allocated VRAM staying at 2,788 MiB, an observed delta of 0 MiB. This is not process-attributed telemetry and does not prove that unrelated applications used no GPU. The fixed-validation advisory ranking comparison improved from 47/84 untrained to 61/84 trained, with 14 paired gains, zero paired regressions, zero unsafe automatic decisions, and unchanged deterministic authority. It is synthetic validation, not an independent production holdout.

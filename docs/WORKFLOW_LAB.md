@@ -92,31 +92,32 @@ real worker threads and separate Python processes:
 
 ## Measured result
 
-Three standard-mode runs on 2026-09-10 used the current Windows development machine, Python 3.11.9,
+Five standard-mode runs on 2026-09-12 used the current Windows development machine, Python 3.11.9,
 SQLite 3.45.1 with `DELETE` journal mode and `FULL` synchronous durability, a fresh Python process
 and new work directory per run, 1,000 records, batches of 100 and the default signed audit. The host
 was already warmed by earlier development runs.
 
 | Metric | Observed value |
 | --- | ---: |
-| Successful, content-correct, delivered and acknowledged | 3 of 3 runs, 1,000 of 1,000 each |
-| Total measured wall time | 19.074 / 19.079 / 19.769 s; median 19.079 s |
-| End-to-end throughput | 50.59 to 52.43 records/s; median 52.41 records/s |
-| Process CPU time | median 12.344 s |
-| Sampled peak RSS | median 85.42 MiB; maximum 85.49 MiB |
-| Sampled RSS growth | median 11.89 MiB |
-| Retained fixture and state files | median 2.702 MiB |
-| Destination delivery wall time | median 9.480 s |
-| Destination delivery p50 / p95 | median 9.34 / 10.59 ms |
-| Seal plus durable outbox p50 / p95 | median 3.92 / 4.43 ms |
-| Acknowledgement p50 / p95 | median 2.82 / 3.43 ms |
+| Successful, content-correct, delivered and acknowledged | 5 of 5 runs, 1,000 of 1,000 each |
+| Total measured wall time | 2.654 to 2.717 s; median 2.661 s |
+| End-to-end throughput | 367.99 to 376.81 records/s; median 375.83 records/s |
+| Process CPU time | median 2.453 s |
+| Sampled peak RSS | median 81.33 MiB; maximum 88.73 MiB |
+| Sampled RSS growth | median 15.77 MiB |
+| Retained fixture and state files | median 3.014 MiB |
+| Destination delivery wall time | median 0.624 s |
+| Destination batch p50 / p95 | median 61.75 / 64.43 ms |
+| Seal plus durable outbox batch p50 / p95 | median 88.48 / 90.18 ms |
+| Acknowledgement batch p50 / p95 | median 4.58 / 4.99 ms |
 | Destination rows / committed ledger rows / verified audit events | 1,000 / 1,000 / 1,000 in every run |
 | Final content mismatches / outbox / relay / quarantine | 0 / 0 / 0 / 0 in every run |
 
-Destination delivery remained the largest measured stage. The benchmark exposed repeated SQL table
-reflection in every destination write. Caching the immutable reflected table reduced one direct
-1,000-record comparison from 18.700 to 16.866 seconds, a 9.8 percent improvement. This is a local
-effect measurement, not a cross-platform promise or a formal confidence interval.
+The current path uses ten capability-gated atomic destination transactions and retains per-record
+authentication, ledger and audit evidence. Batch latency is therefore not comparable to the older
+per-record commit baseline. This is a local effect measurement, not a cross-platform promise or a
+formal confidence interval. The exact five observations are retained in
+[`benchmarks/results/workflow-windows-20260912.json`](../benchmarks/results/workflow-windows-20260912.json).
 
 The final expanded failure command collected 93 tests on 2026-09-10. It passed 92 and skipped the
 POSIX-only directory-fsync case on Windows, with no failures or errors in 11.839 seconds. That run

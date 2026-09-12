@@ -397,12 +397,21 @@ def test_internal_later_chunk_failure_keeps_completed_delivery_progress(
     batch_calls = 0
     secret = "internal-second-chunk-secret"
 
-    def fail_second_batch_boundary(self: DeliveryLedger, items) -> str:
+    def fail_second_batch_boundary(
+        self: DeliveryLedger,
+        items,
+        *,
+        idempotency_contract_id: str | None = None,
+    ) -> str:
         nonlocal batch_calls
         batch_calls += 1
         if batch_calls == 2:
             raise RuntimeError(secret)
-        return original_start(self, items)
+        return original_start(
+            self,
+            items,
+            idempotency_contract_id=idempotency_contract_id,
+        )
 
     monkeypatch.setattr(database_module, "DATABASE_ATOMIC_BATCH_MAX_RECORDS", 2)
     monkeypatch.setattr(DeliveryLedger, "start_write_many", fail_second_batch_boundary)

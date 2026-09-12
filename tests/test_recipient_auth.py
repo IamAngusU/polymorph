@@ -1220,7 +1220,7 @@ def test_blank_v3_recipient_key_id_requires_explicit_migration_at_every_boundary
     restored_spool = legacy_spool.get(entry.record_digest)
     assert restored_spool is not None
     assert restored_spool.allow_legacy_blank_recipient_key_id is True
-    with pytest.raises(ProtocolError, match="no authenticated recipient key id"):
+    with pytest.raises(IntegrityError, match="not valid canonical wire data"):
         SealedSpool(tmp_path / "legacy-spool.sqlite").get(entry.record_digest)
 
     legacy_relay = SealedRelayQueue(tmp_path / "legacy-relay.sqlite", legacy_policy)

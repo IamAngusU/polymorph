@@ -1,9 +1,24 @@
+import re
+import zipfile
+
 import pytest
 from openpyxl import Workbook
 
 from polymorph.connectors.excel import ExcelConnector
 from polymorph.errors import ConnectorError
 from polymorph.models.types import DataType, FieldRole, Sensitivity
+
+
+def _remove_worksheet_dimension(path) -> None:
+    rewritten = path.with_name("rewritten.xlsx")
+    with zipfile.ZipFile(path, "r") as source, zipfile.ZipFile(rewritten, "w") as target:
+        for info in source.infolist():
+            payload = source.read(info.filename)
+            if info.filename == "xl/worksheets/sheet1.xml":
+                payload, replacements = re.subn(rb"<dimension[^>]*/>", b"", payload, count=1)
+                assert replacements == 1
+            target.writestr(info, payload)
+    rewritten.replace(path)
 
 
 def test_excel_schema_and_records(tmp_path):
@@ -48,6 +63,29 @@ def test_excel_auto_detects_header_below_title_rows(tmp_path):
     ]
     assert schema.fields[0].data_type is DataType.INTEGER
     assert schema.fields[2].data_type is DataType.DECIMAL
+
+
+def test_excel_recovers_missing_dimensions_before_header_detection(tmp_path):
+    path = tmp_path / "unsized.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["Synthetic export"])
+    sheet.append([])
+    sheet.append([])
+    sheet.append(["Order", "Email", "Quantity", "Amount", "Token", "Note"])
+    sheet.append(["A-1", "a@example.invalid", 2, 199, "token-1", "first"])
+    sheet.append(["A-2", "b@example.invalid", 3, 299, "token-2", "second"])
+    workbook.save(path)
+    _remove_worksheet_dimension(path)
+
+    connector = ExcelConnector(path)
+    layout = connector.discover_layout()
+    records = list(connector.iter_records())
+
+    assert layout.header_row == 4
+    assert layout.width == 6
+    assert len(records) == 2
+    assert records[0]["c6"] == "first"
 
 
 def test_excel_preserves_fixed_width_numeric_identifiers(tmp_path):

@@ -1,9 +1,11 @@
 # Performance baseline
 
-Measured on 2026-09-09 and 2026-09-10 on the current Windows development machine:
+Measured on 2026-09-09, 2026-09-10 and 2026-09-12 on the current Windows development machine:
 
 - Python 3.11.9 on AMD64
 - Windows build 26200
+- Intel Core i9-12900K, 16 physical cores and 24 logical CPUs
+- NVIDIA GeForce RTX 3080 with 10,240 MiB VRAM; model-free workflow GPU use sampled separately
 - SQLite 3.45.1 using `DELETE` journal mode and `FULL` synchronous durability
 - local pinned models on the D drive
 - fresh CLI process per file run, warm filesystem cache, Magika enabled
@@ -97,8 +99,8 @@ because a process can exit between polling intervals.
 
 ## Full secure transport
 
-The current local path was measured in three fresh work directories over 1,000 records with five
-string fields and batches of 100. Each run included:
+The current local path was measured on 2026-09-12 in five fresh work directories over 1,000
+records with five string fields and batches of 100. Each run included:
 
 1. destination-signed recipient certificate verification and a persisted recipient trust head
 2. X25519 and ChaCha20-Poly1305 seal, then Ed25519 source signature
@@ -110,31 +112,37 @@ string fields and batches of 100. Each run included:
 
 | Metric | Result |
 | --- | ---: |
-| Successful runs | 3 of 3 |
-| Full wall time | 19.074 to 19.769 s; median 19.079 s |
-| Throughput | 50.59 to 52.43 records/s; median 52.41 records/s |
-| CPU time | median 12.344 s |
-| Peak RSS | 85.33 to 85.49 MiB; median 85.42 MiB |
-| Destination delivery wall time | median 9.480 s |
-| Destination delivery p50 / p95 | median 9.341 / 10.592 ms |
-| Seal and durable outbox stage p50 / p95 | median 3.917 / 4.425 ms |
-| Acknowledgement p50 / p95 | median 2.821 / 3.426 ms |
-| Retained fixture and state files | median 2.702 MiB |
+| Successful runs | 5 of 5 |
+| Full wall time | 2.654 to 2.717 s; median 2.661 s |
+| Throughput | 367.99 to 376.81 records/s; median 375.83 records/s |
+| CPU time | median 2.453 s |
+| Peak RSS | 80.76 to 88.73 MiB; median 81.33 MiB |
+| RSS growth | median 15.77 MiB |
+| Destination delivery wall time | median 0.624 s |
+| Destination batch p50 / p95 | median 61.75 / 64.43 ms |
+| Seal and durable outbox batch p50 / p95 | median 88.48 / 90.18 ms |
+| Acknowledgement batch p50 / p95 | median 4.58 / 4.99 ms |
+| Retained fixture and state files | median 3.014 MiB |
 
 All 1,000 records were delivered once in every run. The outbox, relay and quarantine ended empty,
 and all 1,000 signed audit events per run passed hash-chain and signature verification. The
 destination was a local SQLite database using `DELETE` journal mode and `FULL` synchronous
-durability. Every operational stream contained 1,029 contract-valid events with unique IDs, exact
-workflow counts, a closed lifecycle and no unhealthy status. The event reservation was 1,055,744
+durability. Every operational stream contained 1,039 contract-valid events with unique IDs, exact
+workflow counts, a closed lifecycle and no unhealthy status. The event reservation was 1,065,984
 bytes against the default 64 MiB stream budget. Each run atomically persisted a 1,015-byte
 recipient trust head, reopened it and verified its signature, route, generation and history before
 the source used it. A network database, HTTP service or file sink adds its own latency.
 
-Separate durable SQLite commits dominate this profile. The retained report measures sealing and
-the durable source-outbox append together at 3.917 ms p50; it does not isolate cryptographic CPU
-time. The useful optimization targets are transaction batching with the existing per-record
-fences, connection reuse and batch acknowledgements. Relaxing durability or deleting safety
-checks just to improve this number would make the benchmark prettier and the product worse.
+The current connector performs ten capability-gated atomic transactions of 100 records while
+retaining per-record ledger fences, authentication and audit evidence. Stage p50 and p95 values in
+this table are therefore per batch, not per record. Relaxing durability or deleting safety checks
+just to improve this number would make the benchmark prettier and the product worse.
+
+The exact five report-derived observations are retained in
+[`benchmarks/results/workflow-windows-20260912.json`](../benchmarks/results/workflow-windows-20260912.json).
+A separate 500 ms `nvidia-smi` sample over two runs observed total device memory remain at 2,788
+MiB across all 13 observations. GPU utilization is device-wide and not process-attributed; the
+observed VRAM change was 0 MiB. The workflow does not load optional mapping models.
 
 ## Measurement rules
 
