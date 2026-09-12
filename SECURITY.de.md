@@ -60,6 +60,9 @@ Das sind Design Constraints. Sie werden nicht optional, nur weil eine Funktion o
 22. CSV-Destinationen blockieren spreadsheet-formula-artige Werte standardmäßig. Freigabe ist explizite Connector Policy.
 23. Connector-Credentials werden bei Nutzung eines Secret Providers als Referenzen dargestellt und niemals in Mapping Plans serialisiert.
 24. Recipient-Private-Key-Dateien sind verschlüsselt, überschreiben keinen bestehenden Key und verwenden restriktive POSIX Permissions, wo unterstützt.
+25. Die eingebettete Convenience-API kann erst nach einer expliziten vollständigen Vorbereitung schreiben. Ihr lokaler Write-Pfad akzeptiert nur content-geprüfte unveränderliche Dateien, prüft Destination Schema und Capabilities erneut und verweigert Secret- oder Opaque-Forwarding.
+26. Produkt-Events sind begrenzte payload-freie Hinweise. Consumer-Fehler können ein Destination-Outcome weder unterbrechen noch stärker darstellen, und Produkt-Events ersetzen nicht die signierte Audit Chain.
+27. Third-Party-Connector-Entry-Points werden beim normalen Registry-Aufbau niemals importiert. Sie zu laden ist eine explizite Trusted-Code-Aktion; Destination-Ressourcen bleiben danach weiterhin explizit.
 
 Unbekannt heißt unbekannt. Das ist lästig. Es ist immer noch besser, als einen Write selbstbewusst zu replayen, der bereits committed sein könnte.
 
@@ -105,6 +108,9 @@ Polymorph ist Alpha. Folgende Lücken sind bekannt und absichtlich dokumentiert:
 - CLI-Database-URLs können über Shell History sichtbar werden. In Automation strukturierte Endpoints und Secret Providers verwenden.
 - Destination Audit bleibt optional.
 - Operational-Event-Coverage ist außerhalb des aktuell instrumentierten Workflows unvollständig.
+- Der eingebettete `execute()`-Convenience-Pfad läuft im selben Prozess und ist auf unveränderliche Datei-Sources begrenzt. Er ist nicht das ciphertext-only Relay und macht Database- oder HTTP-Source-Snapshots nicht atomar.
+- Produkt-Event-Delivery ist Best Effort. Third-Party-Event-Sinks verantworten Authentication, Transport-Durability, Backpressure und Access Control selbst.
+- Connector Conformance validiert den erklärten Python-Contract, beweist aber weder einen Third-Party-Service noch dessen Transaktionen, Idempotency-Implementierung oder Plugin-Paket als vertrauenswürdig.
 - Notification Service und Queue Metric Exporter existieren noch nicht.
 - Das Projekt hatte noch kein unabhängiges Security Assessment.
 

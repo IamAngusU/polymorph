@@ -60,6 +60,9 @@ These are design constraints, not suggestions that become optional when a featur
 22. CSV destinations reject spreadsheet formula-like values by default. Enabling them is an explicit connector policy.
 23. Connector credentials are represented by references when a secret provider is used and are never serialized into mapping plans.
 24. Recipient private-key files are encrypted, created without overwriting an existing key and use restrictive POSIX permissions where supported.
+25. The embedded convenience API cannot write until an explicit complete preparation succeeds. Its local write path accepts only content-inspected immutable files, rechecks destination schema and capabilities, and refuses secret or opaque forwarding.
+26. Product events are bounded, payload-free advisory notifications. Consumer failures cannot interrupt or strengthen a destination outcome, and product events are not a substitute for the signed audit chain.
+27. Third-party connector entry points are never imported during normal registry construction. Loading them is an explicit trusted-code action, and destination resources remain explicit after loading.
 
 Unknown means unknown. It is inconvenient. It is still better than confidently replaying a write that may already have committed.
 
@@ -105,6 +108,9 @@ Polymorph is an alpha. The following gaps are known and intentionally documented
 - CLI database URLs may be exposed by shell history. Use structured endpoints and secret providers in automation.
 - Destination audit remains optional.
 - Operational event coverage is incomplete outside the currently instrumented workflow.
+- The embedded `execute()` convenience path is same-process and limited to immutable file sources. It is not the ciphertext-only relay and does not make database or HTTP source snapshots atomic.
+- Product event delivery is best effort. Third-party event sinks own their authentication, transport durability, backpressure and access-control boundary.
+- Connector conformance validates the declared Python contract without proving a third-party service, transaction, idempotency implementation or plugin package trustworthy.
 - There is no notification service or queue metric exporter yet.
 - The project has not received an independent security assessment.
 

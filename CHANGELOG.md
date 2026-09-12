@@ -28,6 +28,8 @@ All notable changes to this alpha are documented here.
 - CSV, JSON, Excel, Parquet, database and HTTP source/destination capabilities are now exposed
   through one stable public discovery surface
 - public onboarding now starts with separate try, embed and security routes
+- security coverage now distinguishes the embedded same-process path, best-effort product events
+  and trusted-code connector plugins from the encrypted relay and signed audit boundaries
 
 ## 0.4.0a3 - 2026-09-12
 
