@@ -64,3 +64,13 @@ The target is to increase coverage **without adding an unsafe `AUTO` decision**.
 If an extra model makes the same decisions while consuming more time and memory, it has successfully converted additional electricity into heat. That is a benchmark result too.
 
 See [`docs/BENCHMARKING.md`](../docs/BENCHMARKING.md) for methodology and [`docs/PERFORMANCE_BASELINE.md`](../docs/PERFORMANCE_BASELINE.md) for retained measurements and caveats.
+
+## Growing independent evidence
+
+`community-corpus-template.json` is a shape for independently labelled contributions, not another
+release score. Keep each source family, export template and time period together when assigning
+train, development and holdout splits. Include explicit abstention labels and a provenance sidecar.
+
+The evidence levels, privacy rules and required metadata are defined in
+[`docs/WORLD_READINESS.md`](../docs/WORLD_READINESS.md). A useful corpus expands domains and failure
+modes; duplicating easy aliases only makes the chart greener.

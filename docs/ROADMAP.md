@@ -72,3 +72,18 @@
 - destination-native validation adapters where a true no-side-effect validation API exists
 - benchmark-derived thresholds per connector/domain
 - optional high-precision specialist model profile if it beats the CPU-first stack on the project corpus
+
+## Evidence and adoption gates
+
+These gates span versions and prevent feature count from replacing product usefulness:
+
+- clean-machine five-minute proof on Windows, Linux and macOS
+- source-, template- and time-separated public or customer-like holdout corpora
+- zero unsafe automatic decisions on every declared release corpus
+- operator studies for review time, abstention usefulness and recovery success
+- PostgreSQL and Parquet end-to-end evidence before broad connector claims
+- stable longitudinal JSON for correctness, latency, throughput, peak RSS and accelerator memory
+- public release evidence that includes machine, corpus, timestamp and limitations
+- local-first defaults with no telemetry, model activation or cloud workflow side effects
+
+See [`WORLD_READINESS.md`](WORLD_READINESS.md) for the product thesis and measurement priorities.

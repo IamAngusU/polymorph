@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "replace-with-source-group-and-case-id",
+      "source_schema": {
+        "id": "source:independent-group:template",
+        "fields": [
+          {
+            "id": "source_customer_number",
+            "name": "Replace with the original field label",
+            "data_type": "string"
+          }
+        ]
+      },
+      "target_schema": {
+        "id": "target:independent-group:template",
+        "fields": [
+          {
+            "id": "customer_number",
+            "name": "customer number",
+            "data_type": "string",
+            "aliases": ["Kundennummer", "numero client"]
+          },
+          {
+            "id": "account_number",
+            "name": "account number",
+            "data_type": "string"
+          }
+        ]
+      },
+      "expected": {
+        "source_customer_number": "customer_number"
+      },
+      "review_only": ["source_customer_number"]
+    }
+  ]
+}

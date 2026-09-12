@@ -2,6 +2,11 @@
 
 Benchmarking is opt-in. Normal production paths do not start `tracemalloc`, process-RSS polling or benchmark timers.
 
+For a timestamped local evidence bundle with process-tree RSS, CPU and best-effort NVIDIA VRAM, run
+`World-Benchmark.cmd` on Windows or `python scripts/evidence_bundle.py --project .` elsewhere. The
+observer schema and interpretation rules are documented in
+[`MEASUREMENT_SCHEMA.md`](MEASUREMENT_SCHEMA.md). Nothing is uploaded.
+
 The current development-machine measurements and exact test shape are recorded in
 [Performance baseline](PERFORMANCE_BASELINE.md).
 

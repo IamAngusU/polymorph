@@ -1,0 +1,35 @@
+# INACTIVE TEMPLATE: files outside .github/workflows are never loaded by GitHub Actions.
+# To activate later, review billing and permissions, then copy this file to
+# .github/workflows/quality-and-metrics.yml. It remains manual-only until its trigger is changed.
+name: Manual quality and metrics evidence
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: python -m pip install ".[dev,benchmark]"
+      - name: Validate
+        run: python scripts/validate_local.py --project .
+      - name: Create evidence
+        run: python scripts/evidence_bundle.py --project .
+      - name: Upload explicit evidence artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: polymorph-evidence-windows-py312
+          path: .polymorph/evidence/
+          if-no-files-found: warn
+          retention-days: 14
