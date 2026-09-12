@@ -6,6 +6,12 @@
   <strong>English</strong> · <a href="README.de.md">Deutsch</a>
 </p>
 
+<p align="center">
+  <strong>LOCAL-FIRST</strong> · <strong>FAIL-CLOSED AUTO</strong> · <strong>EXPLICIT WRITE OUTCOMES</strong><br>
+  Ship safe imports and integrations without rebuilding the dangerous edge cases.<br>
+  <a href="docs/TRUST_CENTER.md">Trust Center and two-minute own-data trial</a>
+</p>
+
 <h1 align="center">Polymorph</h1>
 
 <p align="center">
@@ -457,7 +463,7 @@ Two post-fix GPU samples observed device-wide allocated VRAM staying at 2,788 Mi
 ## Downloads
 
 - [Download the current source as a ZIP](https://github.com/IamAngusU/polymorph/archive/refs/heads/main.zip)
-- [Download the tested v0.4.0a7 pre-release, wheel, sdist, and Polymorph Run 1.1.0 buddy](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a7)
+- [Download the tested v0.4.0a8 pre-release, wheel, sdist, and Polymorph Run 1.1.0 buddy](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a8)
 
 ## Long-term run metrics
 

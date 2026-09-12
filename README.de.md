@@ -6,6 +6,12 @@
   <strong>Deutsch</strong> · <a href="README.md">English</a>
 </p>
 
+<p align="center">
+  <strong>LOCAL-FIRST</strong> · <strong>FAIL-CLOSED AUTO</strong> · <strong>EXPLIZITE WRITE-OUTCOMES</strong><br>
+  Sichere Importe und Integrationen, ohne die gefaehrlichen Randfaelle selbst neu zu bauen.<br>
+  <a href="docs/TRUST_CENTER.md">Trust Center und Zwei-Minuten-Test mit eigenen Daten</a>
+</p>
+
 <h1 align="center">Polymorph</h1>
 
 <p align="center">
@@ -461,7 +467,7 @@ In zwei GPU-Samples nach den Fixes blieb der geraeteweit belegte VRAM exakt bei 
 ## Downloads
 
 - [Aktuellen Quellcode direkt als ZIP laden](https://github.com/IamAngusU/polymorph/archive/refs/heads/main.zip)
-- [Geprueftes v0.4.0a7-Pre-Release mit Wheel, sdist und Polymorph Run 1.1.0 Buddy laden](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a7)
+- [Geprueftes v0.4.0a8-Pre-Release mit Wheel, sdist und Polymorph Run 1.1.0 Buddy laden](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a8)
 
 ## Langfristige Run-Metriken
 

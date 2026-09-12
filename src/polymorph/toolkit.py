@@ -7,8 +7,10 @@ from collections.abc import Callable
 def _commands() -> dict[str, Callable[[list[str] | None], int]]:
     from .connector_builder import main as connector_main
     from .data_quality import main as quality_main
+    from .own_data_trial import main as trial_main
     from .review_artifacts import main as review_main
     from .sync_state import main as sync_main
+    from .trust_center import main as trust_main
     from .ui_assets import main as ui_main
 
     return {
@@ -16,6 +18,8 @@ def _commands() -> dict[str, Callable[[list[str] | None], int]]:
         "quality": quality_main,
         "review": review_main,
         "sync": sync_main,
+        "trial": trial_main,
+        "trust": trust_main,
         "ui": ui_main,
     }
 
@@ -29,6 +33,8 @@ areas:
   quality     produce a bounded metadata-only quality report
   review      finalize or validate schema-bound review evidence
   sync        inspect commit-bound recurring-run checkpoints
+  trial       inspect your own local file without a destination write
+  trust       build a static release Trust Center from bound evidence
   ui          export the framework-neutral review component
 
 Run `polymorph-kit <area> --help` for area-specific options.

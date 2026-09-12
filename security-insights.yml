@@ -1,0 +1,68 @@
+header:
+  schema-version: 2.2.0
+  last-updated: '2026-09-12'
+  last-reviewed: '2026-09-12'
+  url: https://raw.githubusercontent.com/IamAngusU/polymorph/main/security-insights.yml
+  comment: |
+    Single-repository Security Insights declaration. Claims are self-reported;
+    the project has not received an independent security assessment.
+project:
+  name: Polymorph
+  homepage: https://github.com/IamAngusU/polymorph
+  administrators:
+  - name: Angus Uelsmann
+    affiliation: Independent maintainer
+    social: https://github.com/IamAngusU
+    primary: true
+  documentation:
+    quickstart-guide: https://github.com/IamAngusU/polymorph#quick-start
+    detailed-guide: https://github.com/IamAngusU/polymorph/tree/main/docs
+  repositories:
+  - name: polymorph
+    url: https://github.com/IamAngusU/polymorph
+    comment: Core source, documentation, local validation and release tooling.
+  vulnerability-reporting:
+    reports-accepted: true
+    bug-bounty-available: false
+    contact:
+      name: Polymorph security contact
+      email: hello@angusu.de
+      primary: true
+    policy: https://github.com/IamAngusU/polymorph/blob/main/SECURITY.md
+    in-scope:
+    - unsafe automatic mapping authorization
+    - parser and archive boundary bypasses
+    - write-outcome and replay-safety violations
+    - secret, payload or audit-chain exposure
+    comment: Please report suspected vulnerabilities privately; do not attach customer data.
+repository:
+  url: https://github.com/IamAngusU/polymorph
+  status: active
+  accepts-change-request: true
+  accepts-automated-change-request: true
+  no-third-party-packages: false
+  core-team:
+  - name: Angus Uelsmann
+    affiliation: Independent maintainer
+    social: https://github.com/IamAngusU
+    primary: true
+  documentation:
+    security-policy: https://github.com/IamAngusU/polymorph/blob/main/SECURITY.md
+  license:
+    url: https://github.com/IamAngusU/polymorph/blob/main/LICENSE
+    expression: AGPL-3.0-only
+  release:
+    automated-pipeline: false
+    changelog: https://github.com/IamAngusU/polymorph/blob/main/CHANGELOG.md
+    distribution-points:
+    - uri: https://github.com/IamAngusU/polymorph/releases
+      comment: Manually built and published GitHub release assets with SHA-256 manifests.
+  security:
+    assessments:
+      self:
+        name: Maintainer security coverage statement
+        evidence: https://github.com/IamAngusU/polymorph/blob/main/docs/SECURITY_COVERAGE.md
+        date: '2026-09-12'
+        comment: |
+          Self-reported boundaries, automated local evidence and known gaps.
+          This is not an independent audit.

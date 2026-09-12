@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0a8] - 2026-09-12
+
+- add a one-command, local-only own-data trial with no destination, network use or write authority
+- add a commit-bound static Trust Center generator with explicit provenance and non-coverage
+- publish an OpenSSF Security Insights 2.2.0 declaration validated against the official CUE schema
+- reposition the README around local-first, fail-closed mapping and explicit write outcomes
+
+
 All notable changes to this alpha are documented here.
 
 ## Unreleased
