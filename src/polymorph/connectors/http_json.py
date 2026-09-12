@@ -10,10 +10,17 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from polymorph.classification import classify_field_name, infer_role
-from polymorph.errors import ConnectorError, ConnectorWriteError, ProtocolError, WriteOutcome
+from polymorph.errors import (
+    ConnectorError,
+    ConnectorWriteError,
+    PartialConnectorWriteError,
+    ProtocolError,
+    WriteOutcome,
+)
 from polymorph.models.schema import FieldDescriptor, SchemaDescriptor
 from polymorph.models.types import Sensitivity
 from polymorph.secrets import SecretProvider
+from polymorph.work_budget import WorkBudget, WorkBudgetExceeded, WorkMeter
 
 from .base import ConnectorCapabilities, DeliveryContext
 from .inference import merge_types, runtime_type
@@ -78,12 +85,14 @@ class HttpJsonConnector:
         secret_provider: SecretProvider | None = None,
         timeout: float = 20.0,
         transport: httpx.BaseTransport | None = None,
+        work_budget: WorkBudget | None = None,
     ) -> None:
         self.endpoint = endpoint
         self._schema = schema
         self._secret_provider = secret_provider
         self._timeout = timeout
         self._transport = transport
+        self.work_budget = work_budget or WorkBudget()
         supports_idempotency = bool(
             endpoint.idempotency_header is not None and endpoint.idempotency_contract
         )
@@ -121,32 +130,95 @@ class HttpJsonConnector:
             headers[self.endpoint.idempotency_header] = context.idempotency_key
 
         count = 0
+        meter = WorkMeter(self.work_budget)
+
+        def fail(message: str, outcome: WriteOutcome, cause: Exception) -> None:
+            if count:
+                raise PartialConnectorWriteError(
+                    message,
+                    committed_count=count,
+                    next_record_outcome=outcome,
+                ) from cause
+            raise ConnectorWriteError(message, outcome=outcome) from cause
+
+        iterator = iter(records)
+        if self.endpoint.idempotency_header is not None:
+            try:
+                first = next(iterator)
+            except StopIteration:
+                return 0
+            except Exception as exc:
+                raise ConnectorWriteError(
+                    "HTTP destination input iteration failed",
+                    outcome=WriteOutcome.NOT_COMMITTED,
+                ) from exc
+            try:
+                next(iterator)
+            except StopIteration:
+                iterator = iter((first,))
+            except Exception as exc:
+                raise ConnectorWriteError(
+                    "HTTP destination input iteration failed",
+                    outcome=WriteOutcome.NOT_COMMITTED,
+                ) from exc
+            else:
+                raise ConnectorWriteError(
+                    "single-record HTTP idempotency contract rejects aggregate writes",
+                    outcome=WriteOutcome.NOT_COMMITTED,
+                )
         with httpx.Client(
             timeout=self._timeout,
             follow_redirects=False,
             trust_env=False,
             transport=self._transport,
         ) as client:
-            for record in records:
+            while True:
                 try:
-                    response = client.request(
+                    record = next(iterator)
+                except StopIteration:
+                    break
+                except Exception as exc:
+                    fail(
+                        "HTTP destination input iteration failed",
+                        WriteOutcome.NOT_COMMITTED,
+                        exc,
+                    )
+                try:
+                    meter.consume_records()
+                    meter.validate_structure(record)
+                    encoded = json.dumps(
+                        dict(record),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ).encode("utf-8")
+                    meter.consume_bytes(len(encoded))
+                except WorkBudgetExceeded as exc:
+                    fail(str(exc), WriteOutcome.NOT_COMMITTED, exc)
+                except (TypeError, ValueError) as exc:
+                    fail(
+                        "HTTP destination record is not canonical JSON",
+                        WriteOutcome.NOT_COMMITTED,
+                        exc,
+                    )
+                try:
+                    with client.stream(
                         self.endpoint.method.upper(),
                         self._url,
-                        json=dict(record),
+                        content=encoded,
                         headers=headers,
-                    )
+                    ) as response:
+                        status_code = response.status_code
                 except httpx.HTTPError as exc:
-                    raise ConnectorWriteError(
-                        "HTTP destination write outcome is unknown",
-                        outcome=WriteOutcome.UNKNOWN,
-                    ) from exc
-                if not 200 <= response.status_code < 300:
+                    fail("HTTP destination write outcome is unknown", WriteOutcome.UNKNOWN, exc)
+                if not 200 <= status_code < 300:
                     # A response status does not prove that a custom endpoint made no side
                     # effects. Treat it conservatively unless a future endpoint contract
                     # explicitly provides stronger semantics.
-                    raise ConnectorWriteError(
-                        f"HTTP destination rejected record with status {response.status_code}",
-                        outcome=WriteOutcome.UNKNOWN,
+                    fail(
+                        f"HTTP destination rejected record with status {status_code}",
+                        WriteOutcome.UNKNOWN,
+                        ConnectorError("HTTP destination returned a non-success status"),
                     )
                 count += 1
         return count
@@ -208,6 +280,7 @@ class HttpJsonSourceConnector:
         max_response_bytes: int = 16 * 1024 * 1024,
         schema_sample_records: int = 256,
         transport: httpx.BaseTransport | None = None,
+        work_budget: WorkBudget | None = None,
     ) -> None:
         if max_response_bytes < 1024:
             raise ValueError("HTTP response limit is too small")
@@ -221,6 +294,7 @@ class HttpJsonSourceConnector:
         self.max_response_bytes = max_response_bytes
         self.schema_sample_records = schema_sample_records
         self._transport = transport
+        self.work_budget = work_budget or WorkBudget()
         self._schema_cache: SchemaDescriptor | None = None
 
     def _headers(self) -> dict[str, str]:
@@ -232,6 +306,7 @@ class HttpJsonSourceConnector:
         self,
         client: httpx.Client,
         params: Mapping[str, str],
+        meter: WorkMeter,
     ) -> object:
         with client.stream(
             "GET", self._url, params=dict(params), headers=self._headers()
@@ -245,16 +320,24 @@ class HttpJsonSourceConnector:
                 raise ConnectorError("HTTP source response is not JSON")
             buffer = bytearray()
             for chunk in response.iter_bytes():
-                buffer.extend(chunk)
-                if len(buffer) > self.max_response_bytes:
+                if len(buffer) + len(chunk) > self.max_response_bytes:
                     raise ConnectorError("HTTP source response exceeds configured size limit")
+                try:
+                    meter.consume_bytes(len(chunk))
+                except WorkBudgetExceeded as exc:
+                    raise ConnectorError(str(exc)) from exc
+                buffer.extend(chunk)
         try:
-            return json.loads(
+            payload = json.loads(
                 buffer,
                 object_pairs_hook=_object_without_duplicate_keys,
                 parse_constant=_reject_nonfinite_constant,
             )
-        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            meter.validate_structure(payload)
+            return payload
+        except WorkBudgetExceeded as exc:
+            raise ConnectorError(str(exc)) from exc
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
             raise ConnectorError("HTTP source returned invalid JSON") from exc
 
     @staticmethod
@@ -273,6 +356,7 @@ class HttpJsonSourceConnector:
         cursor: str | None = None
         emitted = 0
         seen_cursors: set[str] = set()
+        meter = WorkMeter(self.work_budget)
 
         with httpx.Client(
             timeout=self._timeout,
@@ -287,11 +371,15 @@ class HttpJsonSourceConnector:
                 elif pagination.mode is PaginationMode.CURSOR and cursor is not None:
                     params[pagination.parameter] = cursor
 
-                payload = self._request_json(client, params)
+                payload = self._request_json(client, params, meter)
                 records = self._records_from(payload, self.endpoint.records_pointer)
                 if not records:
                     break
                 for record in records:
+                    try:
+                        meter.consume_records()
+                    except WorkBudgetExceeded as exc:
+                        raise ConnectorError(str(exc)) from exc
                     yield record
                     emitted += 1
                     if max_records is not None and emitted >= max_records:

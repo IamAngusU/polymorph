@@ -22,6 +22,7 @@ class ConnectorError(PolymorphError):
 class WriteOutcome(StrEnum):
     NOT_COMMITTED = "not_committed"
     UNKNOWN = "unknown"
+    PARTIAL = "partial"
 
 
 class ConnectorWriteError(ConnectorError):
@@ -30,6 +31,26 @@ class ConnectorWriteError(ConnectorError):
     def __init__(self, message: str, *, outcome: WriteOutcome) -> None:
         super().__init__(message)
         self.outcome = outcome
+
+
+class PartialConnectorWriteError(ConnectorWriteError):
+    """Aggregate write stopped after a proven committed prefix."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        committed_count: int,
+        next_record_outcome: WriteOutcome,
+    ) -> None:
+        if committed_count <= 0:
+            raise ValueError("partial write requires a positive committed_count")
+        if next_record_outcome is WriteOutcome.PARTIAL:
+            raise ValueError("partial write next_record_outcome must be terminal")
+        super().__init__(message, outcome=WriteOutcome.PARTIAL)
+        self.committed_count = committed_count
+        self.next_record_index = committed_count
+        self.next_record_outcome = next_record_outcome
 
 
 class IntegrityError(PolymorphError):

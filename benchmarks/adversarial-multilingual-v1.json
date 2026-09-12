@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "ambiguous-betrag-de",
+      "source_schema": {"id": "adversarial:de:amount", "fields": [{"id": "betrag", "name": "Betrag", "data_type": "decimal"}]},
+      "target_schema": {"id": "canonical:invoice", "fields": [{"id": "net_amount", "name": "Nettobetrag", "data_type": "decimal"}, {"id": "gross_amount", "name": "Bruttobetrag", "data_type": "decimal"}, {"id": "tax_amount", "name": "Steuerbetrag", "data_type": "decimal"}]},
+      "expected": {"betrag": null}
+    },
+    {
+      "id": "ambiguous-datum-de",
+      "source_schema": {"id": "adversarial:de:date", "fields": [{"id": "datum", "name": "Datum", "data_type": "date"}]},
+      "target_schema": {"id": "canonical:invoice", "fields": [{"id": "invoice_date", "name": "Rechnungsdatum", "data_type": "date"}, {"id": "due_date", "name": "Faelligkeitsdatum", "data_type": "date"}, {"id": "posting_date", "name": "Buchungsdatum", "data_type": "date"}]},
+      "expected": {"datum": null}
+    },
+    {
+      "id": "ambiguous-montant-fr",
+      "source_schema": {"id": "adversarial:fr:amount", "fields": [{"id": "montant", "name": "Montant", "data_type": "decimal"}]},
+      "target_schema": {"id": "canonical:invoice", "fields": [{"id": "net_amount", "name": "montant hors taxe", "data_type": "decimal"}, {"id": "gross_amount", "name": "montant toutes taxes comprises", "data_type": "decimal"}, {"id": "tax_amount", "name": "montant taxe", "data_type": "decimal"}]},
+      "expected": {"montant": null}
+    },
+    {
+      "id": "ambiguous-fecha-es",
+      "source_schema": {"id": "adversarial:es:date", "fields": [{"id": "fecha", "name": "Fecha", "data_type": "date"}]},
+      "target_schema": {"id": "canonical:invoice", "fields": [{"id": "invoice_date", "name": "fecha de factura", "data_type": "date"}, {"id": "due_date", "name": "fecha de vencimiento", "data_type": "date"}, {"id": "posting_date", "name": "fecha contable", "data_type": "date"}]},
+      "expected": {"fecha": null}
+    },
+    {
+      "id": "ambiguous-rate-en",
+      "source_schema": {"id": "adversarial:en:rate", "fields": [{"id": "rate", "name": "Rate", "data_type": "decimal"}]},
+      "target_schema": {"id": "canonical:finance", "fields": [{"id": "tax_rate", "name": "tax rate", "data_type": "decimal"}, {"id": "exchange_rate", "name": "exchange rate", "data_type": "decimal"}, {"id": "discount_rate", "name": "discount rate", "data_type": "decimal"}]},
+      "expected": {"rate": null}
+    },
+    {
+      "id": "ambiguous-numero-it",
+      "source_schema": {"id": "adversarial:it:number", "fields": [{"id": "numero", "name": "Numero", "data_type": "string"}]},
+      "target_schema": {"id": "canonical:business", "fields": [{"id": "invoice_number", "name": "numero fattura", "data_type": "string"}, {"id": "customer_number", "name": "numero cliente", "data_type": "string"}, {"id": "order_number", "name": "numero ordine", "data_type": "string"}]},
+      "expected": {"numero": null}
+    },
+    {
+      "id": "ambiguous-unidade-pt",
+      "source_schema": {"id": "adversarial:pt:unit", "fields": [{"id": "unidade", "name": "Unidade", "data_type": "string"}]},
+      "target_schema": {"id": "canonical:item", "fields": [{"id": "unit_code", "name": "codigo da unidade", "data_type": "string"}, {"id": "business_unit", "name": "unidade de negocio", "data_type": "string"}, {"id": "unit_price", "name": "preco unitario", "data_type": "decimal"}]},
+      "expected": {"unidade": null}
+    },
+    {
+      "id": "ambiguous-value-en",
+      "source_schema": {"id": "adversarial:en:value", "fields": [{"id": "value", "name": "Value", "data_type": "decimal"}]},
+      "target_schema": {"id": "canonical:measurement", "fields": [{"id": "quantity", "name": "measured quantity", "data_type": "decimal"}, {"id": "unit_price", "name": "unit price", "data_type": "decimal"}, {"id": "taxable_amount", "name": "taxable value", "data_type": "decimal"}]},
+      "expected": {"value": null}
+    }
+  ]
+}

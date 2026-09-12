@@ -105,6 +105,25 @@ reason code. It does not expose record IDs. `polymorph explain REASON_CODE` retu
 meaning, retry policy and next operator action for known reasons. CLI verification refuses a
 missing path instead of silently creating an empty audit database.
 
+Audit verification and summaries now fetch rows in bounded batches. `AuditLog.export_jsonl_to(path)`
+verifies the chain while atomically streaming the export. Admission has explicit event and logical-byte
+quotas and refuses new events without deleting old history. Operators must archive and externally
+witness a verified export before intentionally rotating a full audit store.
+
+## Connector work budgets
+
+Direct CSV, HTTP JSON and Parquet calls accept a `WorkBudget`. Defaults are finite; deployments should
+lower them to the largest expected trusted workload. A budget covers total records, aggregate bytes,
+wall time, nesting, nodes and individual values. Parquet adds row-group, metadata, uncompressed and
+decoded-batch boundaries. Crossing a boundary fails the operation instead of silently truncating data.
+
+HTTP destinations serialize each record exactly once before its request and charge those exact bytes
+to the budget. Responses are opened in streaming mode and their bodies are not read. If a budget stops
+an aggregate direct call after a committed prefix, `PartialConnectorWriteError` reports
+`committed_count`, `next_record_index` and the next record's terminal outcome. Resume from that index;
+never retry the complete iterable. The single-record idempotency contract rejects multi-record calls
+before request one because one delivery key cannot safely identify multiple records.
+
 The audit hook is optional and currently covers final destination delivery, replay and force-replay
 receipts only. `DeliveryReceipt.audit_status` distinguishes `disabled`, `recorded` and
 `append_failed`; an append failure cannot turn an already committed write into an apparent

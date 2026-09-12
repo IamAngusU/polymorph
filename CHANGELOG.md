@@ -4,6 +4,26 @@ All notable changes to this alpha are documented here.
 
 ## Unreleased
 
+## 0.4.0a3 - 2026-09-12
+
+### Added
+
+- one shared finite work-budget contract for direct CSV, HTTP JSON and Parquet connector calls
+- HTTP JSON depth, node, value, aggregate byte, wall-time and total-record limits
+- exact HTTP request-byte accounting, unread destination response bodies and structured committed-prefix
+  outcomes for non-atomic aggregate calls
+- Parquet row, row-group, metadata, uncompressed, nesting and decoded-batch limits
+- Windows Job Object CPU, memory, descendant-count and kill-on-close enforcement for parser workers
+- streaming audit verification, summaries and atomic JSONL exports with finite admission quotas
+- local CycloneDX SBOM and release-manifest generation plus offline hash verification
+- a multilingual adversarial ambiguity corpus that rewards abstention rather than guessed mappings
+
+### Changed
+
+- CSV destination updates now copy the committed source and append rows through an atomic streaming
+  rewrite instead of rebuilding the complete file in memory
+- release links now follow the latest tested pre-release instead of drifting to an older tag
+
 ## 0.4.0a2 - 2026-09-12
 
 ### Added

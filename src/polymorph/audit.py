@@ -6,19 +6,23 @@ import json
 import os
 import sqlite3
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from .errors import IntegrityError
+from .filesystem import atomic_text_writer
 from .signing import SigningKeyPair, verify_ed25519
 from .sqlite_safety import configure_sqlite_durability
 
 MAX_AUDIT_BATCH_EVENTS = 10_000
 MAX_AUDIT_EVENT_BYTES = 16 * 1024
 MAX_AUDIT_BATCH_BYTES = 64 * 1024 * 1024
+DEFAULT_MAX_AUDIT_EVENTS = 1_000_000
+DEFAULT_MAX_AUDIT_LOGICAL_BYTES = 2 * 1024 * 1024 * 1024
+AUDIT_READ_BATCH_ROWS = 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,9 +165,16 @@ class AuditLog:
         *,
         signer: SigningKeyPair | None = None,
         create: bool = True,
+        max_events: int = DEFAULT_MAX_AUDIT_EVENTS,
+        max_logical_bytes: int = DEFAULT_MAX_AUDIT_LOGICAL_BYTES,
     ) -> None:
+        for name, value in (("max_events", max_events), ("max_logical_bytes", max_logical_bytes)):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"audit {name} must be a positive integer")
         self.path = Path(path)
         self.signer = signer
+        self.max_events = max_events
+        self.max_logical_bytes = max_logical_bytes
         self._read_only = not create
         if create:
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -271,6 +282,24 @@ class AuditLog:
             previous = connection.execute(
                 "SELECT sequence, event_hash FROM audit_events ORDER BY sequence DESC LIMIT 1"
             ).fetchone()
+            usage = connection.execute(
+                """
+                SELECT COUNT(*) AS event_count,
+                       COALESCE(SUM(LENGTH(CAST(event_json AS BLOB)) + LENGTH(previous_hash) +
+                                    LENGTH(event_hash) + COALESCE(LENGTH(signature), 0)), 0)
+                           AS logical_bytes
+                FROM audit_events
+                """
+            ).fetchone()
+            assert usage is not None
+            signature_bytes = 64 if self.signer is not None else 0
+            additional_bytes = sum(
+                len(encoded.encode("utf-8")) + 128 + signature_bytes for _, encoded in prepared
+            )
+            if int(usage["event_count"]) + len(prepared) > self.max_events:
+                raise IntegrityError("audit event quota reached; archive before retrying")
+            if int(usage["logical_bytes"]) + additional_bytes > self.max_logical_bytes:
+                raise IntegrityError("audit byte quota reached; archive before retrying")
             initial_sequence = int(previous["sequence"]) if previous is not None else 0
             previous_hash = previous["event_hash"] if previous is not None else "0" * 64
             expected_rows: list[tuple[int, str, str, str, bytes | None]] = []
@@ -351,12 +380,21 @@ class AuditLog:
             ).fetchall()
         return rows
 
-    def _verify_rows(
+    @staticmethod
+    def _iter_rows(connection: sqlite3.Connection) -> Iterator[sqlite3.Row]:
+        cursor = connection.execute(
+            "SELECT sequence, event_json, previous_hash, event_hash, signature "
+            "FROM audit_events ORDER BY sequence"
+        )
+        while rows := cursor.fetchmany(AUDIT_READ_BATCH_ROWS):
+            yield from rows
+
+    def _verified_rows(
         self,
-        rows: list[sqlite3.Row],
+        rows: Iterable[sqlite3.Row],
         *,
         trusted_public_key: bytes | None = None,
-    ) -> int:
+    ) -> Iterator[tuple[sqlite3.Row, dict[str, object]]]:
         previous_hash = "0" * 64
         expected_sequence = 1
         for row in rows:
@@ -378,38 +416,53 @@ class AuditLog:
                 if signature is None:
                     raise IntegrityError("signed audit verification found an unsigned event")
                 verify_ed25519(trusted_public_key, bytes.fromhex(expected_hash), bytes(signature))
+            yield row, event
             previous_hash = expected_hash
             expected_sequence += 1
-        return len(rows)
+
+    def _verify_rows(
+        self,
+        rows: Iterable[sqlite3.Row],
+        *,
+        trusted_public_key: bytes | None = None,
+    ) -> int:
+        return sum(1 for _ in self._verified_rows(rows, trusted_public_key=trusted_public_key))
 
     def verify(self, *, trusted_public_key: bytes | None = None) -> int:
-        return self._verify_rows(
-            self._read_rows(),
-            trusted_public_key=trusted_public_key,
-        )
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN")
+            return self._verify_rows(
+                self._iter_rows(connection),
+                trusted_public_key=trusted_public_key,
+            )
 
     def summary(self, *, trusted_public_key: bytes | None = None) -> AuditSummary:
         """Verify the chain, then aggregate metadata without exposing event identifiers."""
 
-        rows = self._read_rows()
-        count = self._verify_rows(rows, trusted_public_key=trusted_public_key)
         event_types: Counter[str] = Counter()
         statuses: Counter[str] = Counter()
         reasons: Counter[str] = Counter()
-        timestamps: list[str] = []
+        first_timestamp: str | None = None
+        last_timestamp: str | None = None
         signature_fields_present = 0
-        for row in rows:
-            event = json.loads(row["event_json"])
-            event_types[str(event.get("event_type", "unknown"))] += 1
-            statuses[str(event.get("status", "unknown"))] += 1
-            reason = event.get("reason_code")
-            if reason is not None:
-                reasons[str(reason)] += 1
-            timestamp = event.get("timestamp")
-            if isinstance(timestamp, str):
-                timestamps.append(timestamp)
-            if row["signature"] is not None:
-                signature_fields_present += 1
+        count = 0
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN")
+            for row, event in self._verified_rows(
+                self._iter_rows(connection), trusted_public_key=trusted_public_key
+            ):
+                count += 1
+                event_types[str(event.get("event_type", "unknown"))] += 1
+                statuses[str(event.get("status", "unknown"))] += 1
+                reason = event.get("reason_code")
+                if reason is not None:
+                    reasons[str(reason)] += 1
+                timestamp = event.get("timestamp")
+                if isinstance(timestamp, str):
+                    first_timestamp = first_timestamp or timestamp
+                    last_timestamp = timestamp
+                if row["signature"] is not None:
+                    signature_fields_present += 1
         return AuditSummary(
             events=count,
             event_types=dict(sorted(event_types.items())),
@@ -418,33 +471,56 @@ class AuditLog:
             signature_fields_present=signature_fields_present,
             signature_fields_absent=count - signature_fields_present,
             signatures_verified=trusted_public_key is not None,
-            first_timestamp=timestamps[0] if timestamps else None,
-            last_timestamp=timestamps[-1] if timestamps else None,
+            first_timestamp=first_timestamp,
+            last_timestamp=last_timestamp,
         )
+
+    @staticmethod
+    def _jsonl_line(row: sqlite3.Row, event: dict[str, object]) -> str:
+        return json.dumps(
+            {
+                "sequence": row["sequence"],
+                "event": event,
+                "previous_hash": row["previous_hash"],
+                "event_hash": row["event_hash"],
+                "signature": (
+                    base64.urlsafe_b64encode(bytes(row["signature"])).decode("ascii")
+                    if row["signature"] is not None
+                    else None
+                ),
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+
+    def export_jsonl_to(
+        self,
+        path: str | Path,
+        *,
+        trusted_public_key: bytes | None = None,
+    ) -> int:
+        """Verify and atomically stream the complete chain to a JSONL file."""
+
+        count = 0
+        with (
+            closing(self._connect()) as connection,
+            connection,
+            atomic_text_writer(path, encoding="utf-8", private=True) as output,
+        ):
+            connection.execute("BEGIN")
+            for row, event in self._verified_rows(
+                self._iter_rows(connection), trusted_public_key=trusted_public_key
+            ):
+                output.write(self._jsonl_line(row, event))
+                output.write("\n")
+                count += 1
+        return count
 
     def export_jsonl(self) -> str:
         with closing(self._connect()) as connection, connection:
-            rows = connection.execute(
-                "SELECT sequence, event_json, previous_hash, event_hash, signature "
-                "FROM audit_events ORDER BY sequence"
-            ).fetchall()
-        lines = []
-        for row in rows:
-            lines.append(
-                json.dumps(
-                    {
-                        "sequence": row["sequence"],
-                        "event": json.loads(row["event_json"]),
-                        "previous_hash": row["previous_hash"],
-                        "event_hash": row["event_hash"],
-                        "signature": (
-                            base64.urlsafe_b64encode(bytes(row["signature"])).decode("ascii")
-                            if row["signature"] is not None
-                            else None
-                        ),
-                    },
-                    sort_keys=True,
-                    ensure_ascii=False,
-                )
-            )
-        return "\n".join(lines) + ("\n" if lines else "")
+            connection.execute("BEGIN")
+            lines = [
+                self._jsonl_line(row, event)
+                for row, event in self._verified_rows(self._iter_rows(connection))
+            ]
+            return "\n".join(lines) + ("\n" if lines else "")

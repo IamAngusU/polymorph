@@ -6,6 +6,7 @@ import math
 from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
+from itertools import chain
 from pathlib import Path
 from typing import Literal, TextIO
 
@@ -17,10 +18,11 @@ from polymorph.content import (
     require_matching_file_identity,
 )
 from polymorph.errors import ConnectorError, ConnectorWriteError, WriteOutcome
-from polymorph.filesystem import atomic_write_text, exclusive_path_lock
+from polymorph.filesystem import atomic_text_writer, exclusive_path_lock
 from polymorph.matching.deterministic import normalize_name
 from polymorph.models.schema import FieldDescriptor, SchemaDescriptor
 from polymorph.models.types import Sensitivity
+from polymorph.work_budget import WorkBudget, WorkBudgetExceeded, WorkMeter
 
 from .base import ConnectorCapabilities, DeliveryContext
 from .inference import merge_types, textual_type
@@ -53,11 +55,13 @@ def _dialect_score(sample: str, dialect: csv.Dialect) -> float:
         ]
     except (csv.Error, UnicodeError):
         return 0.0
-    if len(rows) < 2:
+    if not rows:
         return 0.0
     widths = [len(row) for row in rows]
     mode_width, mode_count = Counter(widths).most_common(1)[0]
     consistency = mode_count / len(widths)
+    if len(rows) == 1:
+        return 0.62 if mode_width > 1 else 0.0
     if mode_width == 1:
         # A true one-column file has no observable delimiter. Treat comma as a stable
         # convention but do not claim dialect evidence that does not exist.
@@ -101,6 +105,7 @@ class CsvConnector:
         allow_spreadsheet_formulas: bool = False,
         write_lock_timeout: float = 30.0,
         expected_source_identity: FileIdentity | None = None,
+        work_budget: WorkBudget | None = None,
     ) -> None:
         self.path = Path(path)
         self.encoding = encoding
@@ -118,6 +123,7 @@ class CsvConnector:
         self._content_inspector = ContentInspector()
         self._trusted_identity: FileIdentity | None = None
         self._expected_source_identity = expected_source_identity
+        self.work_budget = work_budget or WorkBudget()
 
     def _reset_cached_source(self) -> None:
         self._schema_cache = None
@@ -367,72 +373,87 @@ class CsvConnector:
         *,
         context: DeliveryContext | None = None,
     ) -> int:
-        rows = [dict(item) for item in records]
-        if not rows:
+        iterator = iter(records)
+        try:
+            first = dict(next(iterator))
+        except StopIteration:
             return 0
-        keys = list(rows[0])
+        meter = WorkMeter(self.work_budget)
+        meter.consume_records()
+        meter.validate_structure(first)
+        keys = list(first)
         if not keys:
             raise ValueError("CSV destination record has no fields")
-        if any(set(row) != set(keys) for row in rows):
-            raise ValueError("CSV destination records must have identical fields")
-
-        self._reject_spreadsheet_formulas(keys, rows)
+        self._reject_spreadsheet_formulas(keys, (first,))
 
         try:
             with exclusive_path_lock(self.path, timeout_seconds=self.write_lock_timeout):
                 # A destination is intentionally mutable. Once this writer owns the path lock,
                 # inspect the latest committed snapshot instead of trusting a startup cache.
                 self._reset_cached_source()
-                existing = ""
                 fieldnames = keys
                 target_existed = self.path.exists()
+                has_existing_content = False
+                positional: list[str] | None = None
                 if target_existed:
                     identity = self._ensure_source_safe()
                     if identity.size_bytes:
-                        with self._open_verified_text() as handle:
-                            existing = handle.read()
+                        has_existing_content = True
                         headers = list(self._headers())
                         positional = [f"c{index}" for index in range(1, len(headers) + 1)]
-                        if keys == positional:
-                            rows = [
-                                dict(
-                                    zip(
-                                        headers,
-                                        (row[key] for key in positional),
-                                        strict=True,
-                                    )
-                                )
-                                for row in rows
-                            ]
-                        elif set(keys) != set(headers):
+                        if keys != positional and set(keys) != set(headers):
                             raise ValueError(
                                 "CSV destination fields do not match the existing header"
                             )
                         fieldnames = headers
-                        self._reject_spreadsheet_formulas(fieldnames, rows)
-
-                buffer = io.StringIO(newline="")
-                if existing:
-                    buffer.write(existing)
-                    if not existing.endswith(("\n", "\r")):
-                        buffer.write(self._dialect().lineterminator)
                 dialect = self._dialect()
-                writer = csv.DictWriter(buffer, fieldnames=fieldnames, dialect=dialect)
-                if not existing:
-                    writer.writeheader()
-                writer.writerows(rows)
-                if target_existed:
-                    self._verify_cached_source()
-                atomic_write_text(
+                count = 0
+                with atomic_text_writer(
                     self.path,
-                    buffer.getvalue(),
                     encoding=self.encoding,
                     overwrite=target_existed,
-                )
+                ) as output:
+                    last_character = ""
+                    if has_existing_content:
+                        with self._open_verified_text() as source:
+                            while chunk := source.read(1024 * 1024):
+                                output.write(chunk)
+                                last_character = chunk[-1]
+                        if last_character not in {"\n", "\r"}:
+                            output.write(dialect.lineterminator)
+                    writer = csv.DictWriter(output, fieldnames=fieldnames, dialect=dialect)
+                    if not has_existing_content:
+                        writer.writeheader()
+
+                    pending: Iterable[Mapping[str, object]] = chain((first,), iterator)
+                    for source_row in pending:
+                        row = dict(source_row)
+                        if set(row) != set(keys):
+                            raise ValueError("CSV destination records must have identical fields")
+                        meter.consume_records(0 if count == 0 else 1)
+                        meter.validate_structure(row)
+                        if positional is not None and keys == positional:
+                            row = dict(
+                                zip(
+                                    fieldnames,
+                                    (row[key] for key in positional),
+                                    strict=True,
+                                )
+                            )
+                        self._reject_spreadsheet_formulas(fieldnames, (row,))
+                        writer.writerow(row)
+                        count += 1
+                    if target_existed:
+                        self._verify_cached_source()
+        except WorkBudgetExceeded as exc:
+            raise ConnectorWriteError(
+                str(exc),
+                outcome=WriteOutcome.NOT_COMMITTED,
+            ) from exc
         except (OSError, ConnectorError) as exc:
             raise ConnectorWriteError(
                 "CSV destination write did not commit",
                 outcome=WriteOutcome.NOT_COMMITTED,
             ) from exc
         self._reset_cached_source()
-        return len(rows)
+        return count

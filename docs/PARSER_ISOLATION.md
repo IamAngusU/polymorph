@@ -68,6 +68,12 @@ aggregate mount limit. This boundary reduces resource abuse but is not a complet
 kernel bugs or every multi-process denial-of-service strategy. There is no project-owned seccomp
 allowlist or cgroup-v2 aggregate quota yet.
 
+On Windows, the process backend now enters a Job Object before importing the parser worker. The job
+enforces aggregate memory, CPU time, active-process count and kill-on-close descendant cleanup, so the
+backend is reported as `RESOURCE_LIMITED_PROCESS`. This still does not deny network or filesystem
+access and therefore is not reported as `OS_SANDBOX`; AppContainer or an equivalent restricted-token
+boundary remains required for hostile structured parsing.
+
 ## Exact-byte snapshot
 
 The parent rejects links or Windows reparse points in the leaf and supplied parent path components,
@@ -96,8 +102,8 @@ unexpected output.
 
 The supervisor independently enforces wall time and output size, records only a digest of stderr on
 failure and tears down the worker before temporary files are removed. On POSIX, a separate process
-group supports descendant cleanup. Windows does not claim that guarantee until a Job Object backend
-exists.
+group supports descendant cleanup. On Windows, the Job Object process backend supplies descendant
+cleanup and aggregate resource limits, but not filesystem or network isolation.
 
 ## Operator commands
 

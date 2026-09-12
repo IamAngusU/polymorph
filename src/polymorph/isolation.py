@@ -756,6 +756,28 @@ def _posix_resource_capabilities() -> tuple[bool, tuple[str, ...], str]:
     )
 
 
+def _windows_job_capabilities() -> tuple[bool, tuple[str, ...], str]:
+    if os.name != "nt":
+        return False, (), "Windows Job Objects apply only on Windows"
+    try:
+        from .windows_job import available
+    except (ImportError, OSError):
+        return False, (), "Windows Job Object APIs are unavailable"
+    if not available():
+        return False, (), "Windows Job Object APIs are unavailable"
+    return (
+        True,
+        (
+            "windows_job_kill_on_close",
+            "windows_job_process_tree",
+            "windows_job_cpu_time",
+            "windows_job_memory",
+            "windows_job_process_count",
+        ),
+        "Windows Job Object resource and descendant limits are available",
+    )
+
+
 class _BoundedPipeReader:
     """Drain one child pipe without retaining more than limit plus one byte."""
 
@@ -1396,6 +1418,15 @@ class ProcessWorkerRunner(_WorkerRunner):
                 capabilities=(*base, "posix_process_group_termination", *resource_capabilities),
                 reason=reason,
             )
+        windows_supported, windows_capabilities, windows_reason = _windows_job_capabilities()
+        if windows_supported:
+            return SandboxBackendInfo(
+                name="process",
+                level=IsolationLevel.RESOURCE_LIMITED_PROCESS,
+                available=True,
+                capabilities=(*base, *windows_capabilities),
+                reason=windows_reason,
+            )
         windows_capability = ("main_process_termination_only",) if os.name == "nt" else ()
         return SandboxBackendInfo(
             name="process",
@@ -1407,12 +1438,23 @@ class ProcessWorkerRunner(_WorkerRunner):
 
     def command(self, snapshot: InputSnapshot, package_directory: Path) -> list[str]:
         package_parent = package_directory.parent
-        bootstrap = (
-            "import sys;"
-            f"sys.path.insert(0,{str(package_parent)!r});"
-            "from polymorph.parser_worker import main;"
-            "raise SystemExit(main())"
-        )
+        if os.name == "nt":
+            bootstrap = (
+                "import sys;"
+                f"sys.path.insert(0,{str(package_parent)!r});"
+                "from polymorph.windows_job import run_parser_worker;"
+                "raise SystemExit(run_parser_worker("
+                f"cpu_seconds={self.policy.cpu_seconds},"
+                f"max_memory_bytes={self.policy.max_memory_bytes},"
+                f"max_processes={self.policy.max_processes}))"
+            )
+        else:
+            bootstrap = (
+                "import sys;"
+                f"sys.path.insert(0,{str(package_parent)!r});"
+                "from polymorph.parser_worker import main;"
+                "raise SystemExit(main())"
+            )
         return [
             sys.executable,
             "-I",

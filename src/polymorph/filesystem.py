@@ -13,7 +13,7 @@ from _thread import LockType
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol, TextIO, cast
 
 
 class PathLockError(OSError):
@@ -244,15 +244,15 @@ def exclusive_path_lock(
         _release_thread_lock_reference(key, thread_lock)
 
 
-def atomic_write_text(
+@contextmanager
+def atomic_text_writer(
     path: str | Path,
-    text: str,
     *,
     encoding: str = "utf-8",
     private: bool = False,
     overwrite: bool = True,
-) -> None:
-    """Publish a complete text file atomically within its directory."""
+) -> Iterator[TextIO]:
+    """Yield a streaming writer and publish its complete file atomically."""
 
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -261,7 +261,8 @@ def atomic_write_text(
         if private and os.name == "posix":
             os.chmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding=encoding, newline="") as handle:
-            handle.write(text)
+            fd = -1
+            yield handle
             handle.flush()
             os.fsync(handle.fileno())
         if overwrite:
@@ -278,3 +279,25 @@ def atomic_write_text(
         with suppress(FileNotFoundError):
             os.unlink(temporary)
         raise
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def atomic_write_text(
+    path: str | Path,
+    text: str,
+    *,
+    encoding: str = "utf-8",
+    private: bool = False,
+    overwrite: bool = True,
+) -> None:
+    """Publish a complete text file atomically within its directory."""
+
+    with atomic_text_writer(
+        path,
+        encoding=encoding,
+        private=private,
+        overwrite=overwrite,
+    ) as handle:
+        handle.write(text)

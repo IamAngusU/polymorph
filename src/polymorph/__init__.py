@@ -7,6 +7,7 @@ from .models.schema import (
     SchemaDescriptor,
 )
 from .models.types import Sensitivity
+from .work_budget import WorkBudget, WorkBudgetExceeded
 
 __all__ = [
     "FieldDescriptor",
@@ -14,5 +15,7 @@ __all__ = [
     "RelationDescriptor",
     "SchemaDescriptor",
     "Sensitivity",
+    "WorkBudget",
+    "WorkBudgetExceeded",
 ]
-__version__ = "0.4.0a2"
+__version__ = "0.4.0a3"

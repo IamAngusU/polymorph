@@ -85,3 +85,15 @@ The initial `0.4.0a2` observation produced 14 correct suggestions, 13 review dec
 deterministic automatic decision and zero unsafe automatic decisions. The checked-in test requires
 perfect suggestion accuracy and zero unsafe automatic decisions on this exact small corpus. This is
 a regression gate, not a claim of universal accuracy.
+
+## `adversarial-multilingual-v1.json`
+
+This synthetic corpus contains deliberately ambiguous ERP, finance, date and unit headers across six
+languages. Every expected result is an abstention. Its purpose is to detect unsafe confidence growth:
+a better matcher may improve review suggestions, but it must not convert these underspecified fields
+into automatic decisions.
+
+The initial `0.4.0a3` observation produced zero automatic and zero unsafe decisions. Six of eight
+review suggestions still selected a candidate where the label required complete abstention, for 25%
+suggestion accuracy. That is safe because review remains mandatory, but it is an explicit product
+quality target rather than a result to hide behind the zero-AUTO gate.

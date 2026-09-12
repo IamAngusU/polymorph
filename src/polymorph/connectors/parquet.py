@@ -15,11 +15,27 @@ from polymorph.content import (
 from polymorph.errors import ConnectorError
 from polymorph.models.schema import FieldDescriptor, SchemaDescriptor
 from polymorph.models.types import DataType, Sensitivity
+from polymorph.work_budget import WorkBudget, WorkBudgetExceeded, WorkMeter
 
 from .base import ConnectorCapabilities
 
 MAX_PARQUET_COLUMNS = 4096
 MAX_PARQUET_BATCH_ROWS = 10_000
+
+
+def _type_depth(pa: Any, arrow_type: Any) -> int:
+    if pa.types.is_dictionary(arrow_type):
+        return 1 + _type_depth(pa, arrow_type.value_type)
+    if pa.types.is_list(arrow_type) or pa.types.is_large_list(arrow_type):
+        return 1 + _type_depth(pa, arrow_type.value_type)
+    if pa.types.is_map(arrow_type):
+        return 1 + max(
+            _type_depth(pa, arrow_type.key_type),
+            _type_depth(pa, arrow_type.item_type),
+        )
+    if pa.types.is_struct(arrow_type):
+        return 1 + max((_type_depth(pa, field.type) for field in arrow_type), default=0)
+    return 1
 
 
 def _pyarrow() -> tuple[Any, Any]:
@@ -72,6 +88,7 @@ class ParquetConnector:
         batch_rows: int = 1024,
         sensitivity_overrides: Mapping[str, Sensitivity] | None = None,
         expected_source_identity: FileIdentity | None = None,
+        work_budget: WorkBudget | None = None,
     ) -> None:
         if isinstance(batch_rows, bool) or not 1 <= batch_rows <= MAX_PARQUET_BATCH_ROWS:
             raise ValueError(f"Parquet batch_rows must be between 1 and {MAX_PARQUET_BATCH_ROWS}")
@@ -90,6 +107,7 @@ class ParquetConnector:
         self._expected_source_identity = expected_source_identity
         self._trusted_identity: FileIdentity | None = None
         self._content_inspector = ContentInspector()
+        self.work_budget = work_budget or WorkBudget()
 
     def _ensure_source_safe(self) -> FileIdentity:
         if self._trusted_identity is None:
@@ -123,7 +141,7 @@ class ParquetConnector:
             handle.close()
 
     def _file(self, handle: BinaryIO) -> Any:
-        _, pq = _pyarrow()
+        pa, pq = _pyarrow()
         try:
             parquet_file = pq.ParquetFile(handle)
         except Exception as exc:
@@ -137,6 +155,29 @@ class ParquetConnector:
             missing = sorted(set(self.columns) - set(names))
             if missing:
                 raise ConnectorError(f"Parquet selected columns are missing: {', '.join(missing)}")
+        metadata = parquet_file.metadata
+        if metadata.num_rows > self.work_budget.max_total_records:
+            raise ConnectorError("work budget exceeded: max_total_records")
+        if metadata.num_row_groups > self.work_budget.max_parquet_row_groups:
+            raise ConnectorError("work budget exceeded: max_parquet_row_groups")
+        serialized_size = int(getattr(metadata, "serialized_size", 0))
+        if serialized_size > self.work_budget.max_parquet_metadata_bytes:
+            raise ConnectorError("work budget exceeded: max_parquet_metadata_bytes")
+        total_uncompressed = 0
+        for index in range(metadata.num_row_groups):
+            row_group_bytes = int(metadata.row_group(index).total_byte_size)
+            if row_group_bytes > self.work_budget.max_parquet_row_group_uncompressed_bytes:
+                raise ConnectorError(
+                    "work budget exceeded: max_parquet_row_group_uncompressed_bytes"
+                )
+            total_uncompressed += row_group_bytes
+            if total_uncompressed > self.work_budget.max_total_bytes:
+                raise ConnectorError("work budget exceeded: max_total_bytes")
+        if any(
+            _type_depth(pa, field.type) > self.work_budget.max_structure_depth
+            for field in parquet_file.schema_arrow
+        ):
+            raise ConnectorError("work budget exceeded: max_structure_depth")
         return parquet_file
 
     def inspect_schema(self) -> SchemaDescriptor:
@@ -172,11 +213,24 @@ class ParquetConnector:
     def iter_records(self) -> Iterable[Mapping[str, object]]:
         with self._open_verified() as handle:
             parquet_file = self._file(handle)
+            meter = WorkMeter(self.work_budget)
             try:
                 for batch in parquet_file.iter_batches(
                     batch_size=self.batch_rows,
                     columns=list(self.columns) if self.columns is not None else None,
                 ):
-                    yield from batch.to_pylist()
+                    if batch.num_rows > self.batch_rows:
+                        raise ConnectorError("Parquet decoder exceeded the requested batch size")
+                    if batch.nbytes > self.work_budget.max_decoded_batch_bytes:
+                        raise ConnectorError("work budget exceeded: max_decoded_batch_bytes")
+                    meter.consume_bytes(batch.nbytes)
+                    for record in batch.to_pylist():
+                        meter.consume_records()
+                        meter.validate_structure(record)
+                        yield record
+            except WorkBudgetExceeded as exc:
+                raise ConnectorError(str(exc)) from exc
             except Exception as exc:
+                if isinstance(exc, ConnectorError):
+                    raise
                 raise ConnectorError("Parquet records could not be streamed safely") from exc

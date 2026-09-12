@@ -165,3 +165,11 @@ The independent public multilingual schema corpus scored 14 of 14 suggestions co
 review decisions, one deterministic automatic decision and zero unsafe automatic decisions. Its
 four source groups are too small for a universal accuracy claim. The sanitized report is retained
 at `benchmarks/results/mapping-independent-public-v1-windows-20260912.json`.
+
+## Streaming CSV rewrite evidence, 2026-09-12
+
+Polymorph 0.4.0a3 copied 500,000 existing rows and appended 500,000 generator-produced rows through
+an atomic temporary file. The resulting 23,277,791-byte CSV completed in 2.704 seconds at 184,939
+appended rows/second. Process RSS rose from 38,072,320 to 47,685,632 bytes, a 9,613,312-byte delta.
+This one local Windows run demonstrates practical bounded behavior for that input; it is not a
+cross-platform maximum or a substitute for adversarial filesystem testing.

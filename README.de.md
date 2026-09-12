@@ -385,12 +385,14 @@ Third-party-Komponenten behalten ihre jeweiligen Lizenzen; siehe [THIRD_PARTY.md
 
 Auf einem Intel Core i9-12900K mit Windows und Python 3.11 hat der finale vollstaendige Polymorph-Run-Test drei integritaetsgepruefte Workflow-Samples mit je 1.000 Rows gemessen: 357,75-373,56 Rows/s (Median 373,29), 2,677-2,795 s Laufzeit (Median 2,679) und 80,88-81,23 MiB Peak-RSS. Die eigene Fuenf-Lauf-Baseline bleibt mit 367,99-376,81 Rows/s (Median 375,83) die weniger verrauschte Hauptmessung; Rohdaten und Grenzen stehen in `benchmarks/results/workflow-windows-20260912.json`.
 
+Der `0.4.0a3`-Streaming-CSV-Rewrite kopierte 500.000 vorhandene Rows und haengte 500.000 generierte Rows in eine 23.277.791-Byte-Datei an. Gemessen wurden 2,704 s, 184.939 angehaengte Rows/s und 9.613.312 Byte RSS-Anstieg ueber der Baseline von 38.072.320 Byte. Das ist ein einzelner lokaler Windows-Lauf, keine plattformuebergreifende Speichergarantie.
+
 In zwei GPU-Samples nach den Fixes blieb der geraeteweit belegte VRAM exakt bei 2.788 MiB, also 0 MiB beobachtete Aenderung. Die Messung ist nicht prozessbezogen und beweist nicht, dass andere Anwendungen keine GPU nutzten. Der advisory Ranking-Vergleich auf der festen Validation verbesserte sich von 47/84 untrainiert auf 61/84 trainiert, mit 14 paarweisen Verbesserungen, 0 Regressionen, 0 unsicheren Auto-Entscheidungen und unveraenderter deterministischer Autoritaet. Das ist synthetische Validation, kein unabhaengiger Produktions-Holdout.
 
 ## Downloads
 
 - [Aktuellen Quellcode direkt als ZIP laden](https://github.com/IamAngusU/polymorph/archive/refs/heads/main.zip)
-- [Geprueftes v0.4.0a1-Pre-Release mit Wheel, sdist und Polymorph Run 1.1.0 Buddy laden](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a1)
+- [Geprueftes v0.4.0a3-Pre-Release mit Wheel, sdist und Polymorph Run 1.1.0 Buddy laden](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a3)
 
 ## Langfristige Run-Metriken
 

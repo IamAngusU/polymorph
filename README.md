@@ -385,12 +385,14 @@ Third-party components retain their own licenses; see [THIRD_PARTY.md](THIRD_PAR
 
 On an Intel Core i9-12900K with Windows and Python 3.11, the final full Polymorph Run acceptance check measured three integrity-gated 1,000-row workflow samples at 357.75-373.56 records/s (median 373.29), 2.677-2.795 s wall time (median 2.679), and 80.88-81.23 MiB peak RSS. The dedicated five-run baseline remains the less noisy headline measurement at 367.99-376.81 records/s (median 375.83); raw results and limitations are in `benchmarks/results/workflow-windows-20260912.json`.
 
+The `0.4.0a3` streaming CSV rewrite copied 500,000 existing rows and appended 500,000 generated rows into a 23,277,791-byte file in 2.704 s: 184,939 appended rows/s with a measured RSS increase of 9,613,312 bytes over the 38,072,320-byte baseline. This is a local single-run Windows measurement, not a cross-platform storage guarantee.
+
 Two post-fix GPU samples observed device-wide allocated VRAM staying at 2,788 MiB, an observed delta of 0 MiB. This is not process-attributed telemetry and does not prove that unrelated applications used no GPU. The fixed-validation advisory ranking comparison improved from 47/84 untrained to 61/84 trained, with 14 paired gains, zero paired regressions, zero unsafe automatic decisions, and unchanged deterministic authority. It is synthetic validation, not an independent production holdout.
 
 ## Downloads
 
 - [Download the current source as a ZIP](https://github.com/IamAngusU/polymorph/archive/refs/heads/main.zip)
-- [Download the tested v0.4.0a1 pre-release, wheel, sdist, and Polymorph Run 1.1.0 buddy](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a1)
+- [Download the tested v0.4.0a3 pre-release, wheel, sdist, and Polymorph Run 1.1.0 buddy](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a3)
 
 ## Long-term run metrics
 
