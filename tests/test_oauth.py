@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import traceback
+
 import pytest
 
 from polymorph.errors import ConnectorError
@@ -31,6 +33,8 @@ def test_refresh_failure_does_not_echo_provider_secret() -> None:
     with pytest.raises(ConnectorError, match="refresh failed") as captured:
         provider.get("api")
     assert "super-secret" not in str(captured.value)
+    assert captured.value.__cause__ is None
+    assert "super-secret" not in "".join(traceback.format_exception(captured.value))
 
 
 def test_access_token_rejects_header_injection() -> None:

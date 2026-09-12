@@ -104,7 +104,7 @@ If a high-confidence model result disagrees with the independently strongest det
 - GZIP members are validated with bounded streaming and member-count limits.
 - JSON and XML have explicit parse, depth, item, element and per-tag attribute budgets before expensive parser work.
 - Optional local Magika evidence can challenge deterministic detection. A strong conflict blocks automatic parser selection rather than starting a confidence popularity contest.
-- A fail-closed parser-worker foundation can inspect an exact-byte snapshot. Non-setid Linux Bubblewrap 0.12.0 or newer is the strict backend. A normal Windows child process is reported only as process separation.
+- A fail-closed parser-worker foundation can inspect an exact-byte snapshot. Non-setid Linux Bubblewrap 0.12.0 or newer is the strict backend. On Windows, the worker enters a Job Object for CPU, memory and process-tree containment. That is resource containment, not filesystem or network sandboxing.
 - Excel parsing requires XML hardening through `defusedxml`, then performs layout discovery for title rows, moved columns, repeated headers and fixed-width identifiers such as `000042`.
 - Spreadsheet formulas are detected separately. Cached formula results have unproven freshness and therefore block automatic recipe promotion.
 - CSV dialect selection uses a deterministic candidate ensemble and may include CleverCSV. A close tie is rejected instead of guessed. Revolutionary, apparently.
@@ -420,7 +420,7 @@ Important current limits:
 
 - Strict Linux containment currently covers the content-inspection worker only.
 - Structured schema parsing and record iteration still execute in the local process after the content gate accepts a file.
-- Windows process mode is process separation, not filesystem or network containment.
+- Windows workers use Job Object resource containment for CPU, memory and process-tree limits. They still provide no filesystem or network sandboxing.
 - There is no durable trust-bundle distribution yet.
 - There is no cumulative per-tenant relay queue quota yet.
 - There is no external audit checkpoint protecting against log-suffix truncation yet.
@@ -457,7 +457,7 @@ Two post-fix GPU samples observed device-wide allocated VRAM staying at 2,788 Mi
 ## Downloads
 
 - [Download the current source as a ZIP](https://github.com/IamAngusU/polymorph/archive/refs/heads/main.zip)
-- [Download the tested v0.4.0a5 pre-release, wheel, sdist, and Polymorph Run 1.1.0 buddy](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a5)
+- [Download the tested v0.4.0a6 pre-release, wheel, sdist, and Polymorph Run 1.1.0 buddy](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a6)
 
 ## Long-term run metrics
 

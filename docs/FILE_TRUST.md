@@ -90,8 +90,8 @@ The content trust gate reduces parser attack surface and resource abuse, but it 
 
 `polymorph inspect isolated-content` can run this gate in a short-lived worker against an exact-byte
 snapshot. Its default policy requires an OS sandbox and never silently downgrades. On Linux the
-strict backend uses Bubblewrap. On Windows a normal child process is available only through an
-explicit weaker policy and is not called a sandbox.
+strict backend uses Bubblewrap. On Windows, Job Object-backed resource containment is available
+only through an explicit weaker policy and is not called a filesystem or network sandbox.
 
 This first worker contains content identification only. CSV, JSON and Excel schema parsing and
 record iteration still run in-process. See [Parser isolation](PARSER_ISOLATION.md) for the exact

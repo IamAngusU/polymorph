@@ -4,6 +4,27 @@ All notable changes to this alpha are documented here.
 
 ## Unreleased
 
+## 0.4.0a6 - 2026-09-12
+
+- Fixed the portable review integration against the real `MoveSession`: preparations now expose
+  both schema fingerprints, helpers accept the actual `as_dict()` contract, and the artifact's
+  reviewer identity is propagated into every reviewed mapping.
+- Added a real file-to-destination integration regression covering prepare, review artifact,
+  execute, reviewer provenance, destination rows, and commit-receipt creation.
+- Added a bounded `RoutePreparation` to review-UI model adapter and matching toolkit command so
+  embedding hosts do not need to recreate the schema-only translation.
+- Suppressed OAuth refresh exception chaining so standard traceback logging cannot reveal a
+  callback exception containing credentials.
+- Made recurring checkpoints fail closed when a completed result has no stable run ID, and added
+  support for the real `MoveResult.as_dict()` contract without inventing identity.
+- Corrected quality CLI wording to promise local content-inspected files rather than unsupported
+  arbitrary connector specs.
+- Updated Windows documentation to reflect Job Object resource containment without implying
+  filesystem or network sandboxing.
+- Reworked the review component toward Polymorph's quiet cool-gray visual language. Evidence
+  classes are primary, numeric advisory scores are drilldown-only, and decorative gradients were
+  removed to reinforce that confidence is not authority.
+
 ## 0.4.0a5 - 2026-09-12
 
 - Added `polymorph-kit`, a local-first integration toolkit with no generated or activated GitHub

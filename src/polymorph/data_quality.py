@@ -400,7 +400,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command", required=True)
     inspect = commands.add_parser("inspect")
-    inspect.add_argument("source", help="source path or registered connector specification")
+    inspect.add_argument("source", help="local source file selected by content inspection")
     inspect.add_argument("--max-records", type=int, default=100_000)
     inspect.add_argument("--max-samples", type=int, default=8)
     inspect.add_argument("--max-groups", type=int, default=4096)

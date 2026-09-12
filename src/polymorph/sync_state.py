@@ -127,7 +127,9 @@ class CommitReceipt:
 
     @classmethod
     def from_result(cls, result: object, *, run_id: str | None = None) -> CommitReceipt:
-        serializer = getattr(result, "to_dict", None)
+        serializer = getattr(result, "as_dict", None)
+        if not callable(serializer):
+            serializer = getattr(result, "to_dict", None)
         if callable(serializer):
             payload = serializer()
         elif isinstance(result, Mapping):
@@ -143,9 +145,9 @@ class CommitReceipt:
         records = payload.get("records_written", payload.get("committed_records", 0))
         if not isinstance(records, int):
             raise SyncStateError("write result record count is malformed")
-        candidate_run_id = run_id or payload.get("session_id") or payload.get("run_id")
-        if not isinstance(candidate_run_id, str):
-            candidate_run_id = uuid.uuid4().hex
+        candidate_run_id = run_id if run_id is not None else payload.get("run_id")
+        if not isinstance(candidate_run_id, str) or not candidate_run_id:
+            raise SyncStateError("write result has no stable run id for checkpoint identity")
         return cls(
             run_id=candidate_run_id,
             committed_records=records,

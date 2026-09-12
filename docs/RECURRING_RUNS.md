@@ -16,7 +16,7 @@ with store.hold(route_id, ttl_seconds=900):
     cursor = None if before is None else before.cursor
 
     result, next_cursor = run_one_increment(cursor)
-    receipt = CommitReceipt.from_result(result, run_id=result.session_id)
+    receipt = CommitReceipt.from_result(result)
     store.advance(
         route_id,
         expected_generation=generation,

@@ -13,6 +13,9 @@ def test_review_ui_exports_offline_dependency_free_assets(tmp_path) -> None:
     assert "polymorph-review-submit" in script
     assert "https://" not in script
     assert "row_values" not in script
+    assert "Evidence class" in script
+    assert "linear-gradient" not in script
+    assert "radial-gradient" not in script
 
 
 def test_review_ui_does_not_overwrite_by_default(tmp_path) -> None:

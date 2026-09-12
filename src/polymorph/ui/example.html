@@ -17,9 +17,9 @@
       destination_schema_fingerprint: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       target_fields: ["customer_id", "invoice_total", "tax_rate", "currency_code"],
       suggestions: [
-        {source_field:"Kundennummer",target_field:"customer_id",confidence:.96,reasons:["alias","unique-key"]},
-        {source_field:"Bruttobetrag",target_field:"invoice_total",confidence:.74,reasons:["currency-shape","domain-term"]},
-        {source_field:"MwSt",target_field:"tax_rate",confidence:.62,reasons:["tax-vocabulary","percent-shape"]}
+        {source_field:"Kundennummer",target_field:"customer_id",confidence:.96,evidence_class:"multiple_signals",reasons:["alias","unique-key"]},
+        {source_field:"Bruttobetrag",target_field:"invoice_total",confidence:.74,evidence_class:"multiple_signals",reasons:["currency-shape","domain-term"]},
+        {source_field:"MwSt",target_field:"tax_rate",confidence:.62,evidence_class:"multiple_signals",reasons:["tax-vocabulary","percent-shape"]}
       ]
     };
   </script>

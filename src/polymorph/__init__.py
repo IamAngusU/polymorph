@@ -82,7 +82,7 @@ __all__ = [
     "default_connector_registry",
     "move",
 ]
-__version__ = "0.4.0a5"
+__version__ = "0.4.0a6"
 
 
 def __getattr__(name: str) -> object:

@@ -89,8 +89,8 @@ class RefreshingOAuthSecretProvider:
                 return token.access_token
             try:
                 refreshed = self._refresh(key)
-            except Exception as exc:
-                raise ConnectorError("OAuth token refresh failed") from exc
+            except Exception:
+                raise ConnectorError("OAuth token refresh failed") from None
             if not isinstance(refreshed, OAuthAccessToken):
                 raise ConnectorError("OAuth refresh callback returned an unsupported token")
             if refreshed.expires_at_epoch - now > MAX_TOKEN_LIFETIME_SECONDS:

@@ -10,6 +10,9 @@ and has no write authority.
 <polymorph-review locale="de"></polymorph-review>
 ```
 
-Assign the JSON model demonstrated in `example.html`. Send the downloaded draft through
+Generate the JSON model directly from `RoutePreparation` with
+`review_model_from_preparation(...)`, or assign the contract demonstrated in `example.html`.
+Evidence classes remain prominent while advisory numeric scores stay in a technical drilldown:
+confidence is never presented as write authority. Send the downloaded draft through
 `polymorph-kit review finalize DRAFT --output REVIEW.json`, then validate and apply the resulting
 schema-bound artifact in the trusted host process. A draft is not a signed authorization token.

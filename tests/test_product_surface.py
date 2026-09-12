@@ -26,6 +26,12 @@ from polymorph.embed import MoveSession, RouteStatus
 from polymorph.errors import PartialConnectorWriteError, WriteOutcome
 from polymorph.models.schema import FieldDescriptor, SchemaDescriptor
 from polymorph.models.types import DataType
+from polymorph.review_artifacts import (
+    ReviewArtifact,
+    apply_review_artifact,
+    review_model_from_preparation,
+)
+from polymorph.sync_state import CommitReceipt
 
 
 class _MemoryDestination:
@@ -220,6 +226,48 @@ def test_embedded_move_prepares_then_streams_only_after_execute(tmp_path) -> Non
     assert destination.rows == [{"customer_id": "C-1"}, {"customer_id": "C-2"}]
     assert "run.progress" in observed
     assert observed[-1] == "run.completed"
+
+
+def test_real_move_session_accepts_schema_bound_review_artifact(tmp_path) -> None:
+    source = tmp_path / "customers.upload"
+    _json_source(source)
+    destination = _MemoryDestination(_target_schema())
+    session = MoveSession(source, destination)
+    preparation = session.prepare()
+    payload = preparation.as_dict()
+
+    assert payload["source_schema_fingerprint"] == preparation.source_schema.fingerprint()
+    assert payload["destination_schema_fingerprint"] == preparation.destination_schema.fingerprint()
+    model = review_model_from_preparation(preparation)
+    assert model["write_authority"] is False
+    assert model["target_fields"] == ["customer_id"]
+
+    artifact = ReviewArtifact.from_review_draft(
+        {
+            "schema": "polymorph.review-draft",
+            "version": 1,
+            "session_id": session.run_id,
+            "source_schema_fingerprint": payload["source_schema_fingerprint"],
+            "destination_schema_fingerprint": payload["destination_schema_fingerprint"],
+            "reviewed_by": "integration-reviewer",
+            "reviewed_at": "2026-09-12T12:00:00Z",
+            "decisions": [
+                {
+                    "source_field": "customer_id",
+                    "target_field": "customer_id",
+                    "disposition": "accepted",
+                }
+            ],
+            "privacy": "schema_metadata_only_no_record_values",
+        }
+    )
+    prepared_again = apply_review_artifact(session, artifact)
+
+    assert prepared_again.reviewed_mappings[0].reviewed_by == "integration-reviewer"
+    result = session.execute()
+    assert result.status is RouteStatus.COMPLETED
+    assert CommitReceipt.from_result(result).run_id == result.run_id
+    assert destination.rows == [{"customer_id": "C-1"}, {"customer_id": "C-2"}]
 
 
 def test_embedded_move_preserves_partial_write_evidence(tmp_path) -> None:

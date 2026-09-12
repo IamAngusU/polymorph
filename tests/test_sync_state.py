@@ -44,6 +44,11 @@ def test_non_completed_result_cannot_create_commit_receipt() -> None:
         CommitReceipt.from_result({"status": "unknown", "records_written": 1})
 
 
+def test_completed_result_without_stable_run_id_fails_closed() -> None:
+    with pytest.raises(SyncStateError, match="stable run id"):
+        CommitReceipt.from_result({"status": "completed", "records_written": 1})
+
+
 def test_run_lease_is_fenced_and_cursor_is_redacted_by_default(tmp_path) -> None:
     store = SyncStateStore(tmp_path / "sync.sqlite3")
     lease = store.claim("route")

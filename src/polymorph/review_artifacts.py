@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import hmac
 import json
+import math
 import re
 import stat
 import uuid
@@ -32,7 +33,13 @@ class ReviewArtifactError(PolymorphError):
 class ReviewableSession(Protocol):
     def prepare(self) -> object: ...
 
-    def review_mapping(self, source_field: str, target_field: str) -> object: ...
+    def review_mapping(
+        self,
+        source_field: str,
+        target_field: str,
+        *,
+        reviewed_by: str,
+    ) -> object: ...
 
 
 def _now() -> str:
@@ -311,13 +318,22 @@ def _raise_decision_type() -> ReviewDecision:
     raise ReviewArtifactError("review decision must be an object")
 
 
-def _preparation_fingerprints(preparation: object) -> tuple[str, str]:
-    serializer = getattr(preparation, "to_dict", None)
+def _preparation_payload(preparation: object) -> Mapping[str, object]:
+    if isinstance(preparation, Mapping):
+        return preparation
+    serializer = getattr(preparation, "as_dict", None)
+    if not callable(serializer):
+        serializer = getattr(preparation, "to_dict", None)
     if not callable(serializer):
         raise ReviewArtifactError("session preparation does not expose structured evidence")
     payload = serializer()
     if not isinstance(payload, Mapping):
         raise ReviewArtifactError("session preparation evidence is malformed")
+    return payload
+
+
+def _preparation_fingerprints(preparation: object) -> tuple[str, str]:
+    payload = _preparation_payload(preparation)
     source = payload.get("source_schema_fingerprint") or payload.get("source_fingerprint")
     destination = payload.get("destination_schema_fingerprint") or payload.get(
         "target_schema_fingerprint"
@@ -325,6 +341,83 @@ def _preparation_fingerprints(preparation: object) -> tuple[str, str]:
     return _fingerprint("source_schema_fingerprint", source), _fingerprint(
         "destination_schema_fingerprint", destination
     )
+
+
+def review_model_from_preparation(preparation: object) -> dict[str, object]:
+    """Build the bounded, record-value-free JSON model consumed by the review component."""
+
+    payload = _preparation_payload(preparation)
+    source_fingerprint, destination_fingerprint = _preparation_fingerprints(payload)
+    destination_schema = payload.get("destination_schema")
+    raw_decisions = payload.get("decisions")
+    if not isinstance(destination_schema, Mapping) or not isinstance(raw_decisions, list):
+        raise ReviewArtifactError("preparation lacks destination schema or mapping decisions")
+    raw_fields = destination_schema.get("fields")
+    if not isinstance(raw_fields, list) or len(raw_fields) > MAX_REVIEW_DECISIONS:
+        raise ReviewArtifactError("destination schema fields exceed the review UI contract")
+    target_fields: list[str] = []
+    for raw_field in raw_fields:
+        if not isinstance(raw_field, Mapping):
+            raise ReviewArtifactError("destination schema field is malformed")
+        target_fields.append(_bounded_text("target field id", raw_field.get("id"), 256))
+
+    suggestions: list[dict[str, object]] = []
+    for raw_decision in raw_decisions:
+        if not isinstance(raw_decision, Mapping):
+            raise ReviewArtifactError("mapping decision is malformed")
+        status = _bounded_text("mapping status", raw_decision.get("status"), 16)
+        if status == "auto":
+            continue
+        source_field = _bounded_text("source field id", raw_decision.get("source_field_id"), 256)
+        target_value = raw_decision.get("target_field_id")
+        target_field = (
+            None if target_value is None else _bounded_text("target field id", target_value, 256)
+        )
+        raw_reasons = raw_decision.get("reasons", [])
+        if not isinstance(raw_reasons, list) or len(raw_reasons) > 32:
+            raise ReviewArtifactError("mapping reasons exceed the review UI contract")
+        reasons = [_bounded_text("mapping reason", reason, 512) for reason in raw_reasons]
+        score_value = raw_decision.get("score", 0.0)
+        if (
+            isinstance(score_value, bool)
+            or not isinstance(score_value, (int, float))
+            or not math.isfinite(float(score_value))
+        ):
+            raise ReviewArtifactError("mapping score is malformed")
+        evidence_class = (
+            "no_supported_match"
+            if status == "blocked"
+            else "multiple_signals"
+            if len(reasons) > 1
+            else "single_signal"
+            if reasons
+            else "unclassified"
+        )
+        suggestions.append(
+            {
+                "authority": "none",
+                "confidence": max(0.0, min(1.0, float(score_value))),
+                "decision_status": status,
+                "evidence_class": evidence_class,
+                "reasons": reasons,
+                "source_field": source_field,
+                "target_field": target_field,
+            }
+        )
+    if len(suggestions) > MAX_REVIEW_DECISIONS:
+        raise ReviewArtifactError("mapping decisions exceed the review UI contract")
+    run_id = payload.get("run_id")
+    return {
+        "destination_schema_fingerprint": destination_fingerprint,
+        "privacy": "schema_metadata_only_no_record_values",
+        "schema": "polymorph.review-ui-model",
+        "session_id": _bounded_text("run_id", run_id, 256),
+        "source_schema_fingerprint": source_fingerprint,
+        "suggestions": suggestions,
+        "target_fields": target_fields,
+        "version": 1,
+        "write_authority": False,
+    }
 
 
 def apply_review_artifact(session: ReviewableSession, artifact: ReviewArtifact) -> object:
@@ -337,7 +430,11 @@ def apply_review_artifact(session: ReviewableSession, artifact: ReviewArtifact) 
     for decision in artifact.decisions:
         if decision.target_field is None:
             raise ReviewArtifactError("complete review decision unexpectedly has no target")
-        session.review_mapping(decision.source_field, decision.target_field)
+        session.review_mapping(
+            decision.source_field,
+            decision.target_field,
+            reviewed_by=artifact.reviewed_by,
+        )
     return session.prepare()
 
 
@@ -377,6 +474,28 @@ def _validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _model(args: argparse.Namespace) -> int:
+    model = review_model_from_preparation(_load_json(args.preparation))
+    review_items = model["suggestions"]
+    if not isinstance(review_items, list):
+        raise ReviewArtifactError("generated review model contains malformed suggestions")
+    rendered = json.dumps(model, indent=2, ensure_ascii=True, sort_keys=True) + "\n"
+    atomic_write_text(args.output, rendered, private=True)
+    print(
+        json.dumps(
+            {
+                "output": str(Path(args.output)),
+                "review_items": len(review_items),
+                "status": "created",
+                "write_authority": False,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Finalize and validate portable, schema-bound Polymorph review evidence."
@@ -386,6 +505,10 @@ def build_parser() -> argparse.ArgumentParser:
     finalize.add_argument("draft")
     finalize.add_argument("--output", required=True)
     finalize.set_defaults(func=_finalize)
+    model = commands.add_parser("model", help="derive a review UI model from preparation JSON")
+    model.add_argument("preparation")
+    model.add_argument("--output", required=True)
+    model.set_defaults(func=_model)
     validate = commands.add_parser("validate", help="validate an artifact and its digest")
     validate.add_argument("artifact")
     validate.add_argument("--source-fingerprint")

@@ -104,7 +104,7 @@ Wenn ein hochkonfidentes Modellresultat einem unabhängig stärksten determinist
 - GZIP-Member werden bounded gestreamt und mit Member-Limits validiert.
 - JSON und XML haben explizite Budgets für Parse-Größe, Tiefe, Items, Elemente und Attribute je Tag, bevor teurere Verarbeitung beginnt.
 - Optionale lokale Magika-Evidenz kann die deterministische Erkennung challengen. Ein starker Konflikt blockiert automatische Parserauswahl, statt einen Confidence-Beliebtheitswettbewerb zu starten.
-- Eine fail-closed Parser-Worker-Basis kann einen Exact-byte-Snapshot prüfen. Unter Linux ist nicht-setid Bubblewrap 0.12.0 oder neuer das strikte Backend. Ein normaler Windows-Child-Process wird nur als Process Separation bezeichnet.
+- Eine fail-closed Parser-Worker-Basis kann einen Exact-byte-Snapshot pruefen. Unter Linux ist nicht-setid Bubblewrap 0.12.0 oder neuer das strikte Backend. Unter Windows tritt der Worker fuer CPU-, Speicher- und Prozessbaum-Containment einem Job Object bei. Das ist Resource Containment, kein Filesystem- oder Network-Sandboxing.
 - Excel-Parsing verlangt XML-Härtung über `defusedxml` und erkennt danach unter anderem Title Rows, verschobene Spalten, wiederholte Header und Fixed-width-Identifier wie `000042`.
 - Spreadsheet-Formeln werden separat erkannt. Cached Formula Results haben keine bewiesene Frische und blockieren daher automatische Recipe-Promotion.
 - CSV-Dialekte werden über ein deterministisches Candidate-Ensemble gewählt und können CleverCSV einbeziehen. Ein knappes Unentschieden wird abgelehnt statt geraten. Revolutionär, offenbar.
@@ -424,7 +424,7 @@ Wichtige aktuelle Grenzen:
 
 - Strikte Linux-Containment deckt derzeit nur den Content-Inspection-Worker ab.
 - Strukturierte Schema-Parser und Record-Iteration laufen nach akzeptiertem Content Gate weiterhin im lokalen Polymorph-Prozess.
-- Windows Process Mode ist Process Separation, keine Filesystem- oder Network-Containment.
+- Windows-Worker nutzen Job-Object-Resource-Containment fuer CPU-, Speicher- und Prozessbaum-Limits. Filesystem- oder Network-Sandboxing bieten sie weiterhin nicht.
 - Durable Trust-Bundle-Distribution existiert noch nicht.
 - Es gibt noch kein kumulatives per-Tenant Relay-Queue-Quota.
 - Es gibt noch keinen externen Audit-Checkpoint gegen Log-Suffix-Truncation.
@@ -461,7 +461,7 @@ In zwei GPU-Samples nach den Fixes blieb der geraeteweit belegte VRAM exakt bei 
 ## Downloads
 
 - [Aktuellen Quellcode direkt als ZIP laden](https://github.com/IamAngusU/polymorph/archive/refs/heads/main.zip)
-- [Geprueftes v0.4.0a5-Pre-Release mit Wheel, sdist und Polymorph Run 1.1.0 Buddy laden](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a5)
+- [Geprueftes v0.4.0a6-Pre-Release mit Wheel, sdist und Polymorph Run 1.1.0 Buddy laden](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a6)
 
 ## Langfristige Run-Metriken
 

@@ -8,6 +8,7 @@ from polymorph.review_artifacts import (
     ReviewArtifact,
     ReviewArtifactError,
     apply_review_artifact,
+    review_model_from_preparation,
 )
 
 
@@ -68,16 +69,55 @@ def test_apply_review_artifact_does_not_execute_write() -> None:
 
     class Session:
         def __init__(self) -> None:
-            self.reviews: list[tuple[str, str]] = []
+            self.reviews: list[tuple[str, str, str]] = []
             self.executed = False
 
         def prepare(self) -> Preparation:
             return Preparation()
 
-        def review_mapping(self, source: str, target: str) -> None:
-            self.reviews.append((source, target))
+        def review_mapping(self, source: str, target: str, *, reviewed_by: str) -> None:
+            self.reviews.append((source, target, reviewed_by))
 
     session = Session()
     apply_review_artifact(session, artifact)
-    assert session.reviews == [("Bruttobetrag", "invoice_total")]
+    assert session.reviews == [("Bruttobetrag", "invoice_total", "finance-team")]
     assert session.executed is False
+
+
+def test_review_ui_model_contains_only_non_auto_schema_evidence() -> None:
+    model = review_model_from_preparation(
+        {
+            "run_id": "run-1",
+            "source_schema_fingerprint": "a" * 64,
+            "destination_schema_fingerprint": "b" * 64,
+            "destination_schema": {"fields": [{"id": "invoice_total"}]},
+            "decisions": [
+                {
+                    "source_field_id": "Bruttobetrag",
+                    "target_field_id": "invoice_total",
+                    "status": "review",
+                    "score": 0.74,
+                    "reasons": ["currency-shape", "domain-term"],
+                },
+                {
+                    "source_field_id": "id",
+                    "target_field_id": "id",
+                    "status": "auto",
+                    "score": 1.0,
+                    "reasons": ["exact"],
+                },
+            ],
+        }
+    )
+    assert model["privacy"] == "schema_metadata_only_no_record_values"
+    assert model["suggestions"] == [
+        {
+            "authority": "none",
+            "confidence": 0.74,
+            "decision_status": "review",
+            "evidence_class": "multiple_signals",
+            "reasons": ["currency-shape", "domain-term"],
+            "source_field": "Bruttobetrag",
+            "target_field": "invoice_total",
+        }
+    ]

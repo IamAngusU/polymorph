@@ -129,6 +129,8 @@ class RoutePreparation:
             "content": self.content.as_dict() if self.content is not None else None,
             "source_schema": schema_to_dict(self.source_schema),
             "destination_schema": schema_to_dict(self.destination_schema),
+            "source_schema_fingerprint": self.source_schema.fingerprint(),
+            "destination_schema_fingerprint": self.destination_schema.fingerprint(),
             "decisions": [_decision_dict(item) for item in self.decisions],
             "reviewed_mappings": [item.as_dict() for item in self.reviewed_mappings],
             "plan": plan_to_dict(self.plan) if self.plan is not None else None,

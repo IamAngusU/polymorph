@@ -9,7 +9,10 @@ const TEXT = {
     abstained: "Abstained",
     all: "All",
     suggestion: "Suggested target",
-    confidence: "Evidence confidence",
+    evidenceClass: "Evidence class",
+    details: "Technical evidence",
+    scoreDetail: "Advisory score, not authority",
+    signals: "Signals",
     accept: "Accept suggestion",
     correct: "Use selected target",
     abstain: "Abstain",
@@ -32,7 +35,10 @@ const TEXT = {
     abstained: "Enthalten",
     all: "Alle",
     suggestion: "Vorgeschlagenes Ziel",
-    confidence: "Evidenz-Konfidenz",
+    evidenceClass: "Evidenzklasse",
+    details: "Technische Evidenz",
+    scoreDetail: "Advisory Score, keine Autoritaet",
+    signals: "Signale",
     accept: "Vorschlag akzeptieren",
     correct: "Ausgewaehltes Ziel nutzen",
     abstain: "Enthalten",
@@ -50,74 +56,77 @@ const TEXT = {
 const STATIC_TEMPLATE = `
   <style>
     :host {
-      --paper: #f5f0e4;
-      --paper-raised: #fffdf7;
-      --ink: #13231f;
-      --muted: #60716b;
-      --line: #d7d2c5;
-      --forest: #0d664f;
-      --mint: #d9eee5;
-      --amber: #d88716;
-      --coral: #ba4b35;
+      --paper: #f5f7f6;
+      --paper-raised: #ffffff;
+      --ink: #17201e;
+      --muted: #66716d;
+      --line: #dce2df;
+      --accent: #285d52;
+      --accent-soft: #edf3f1;
+      --review: #846a35;
+      --danger: #8c4f48;
       display: block;
       color: var(--ink);
-      font-family: "Aptos", "Trebuchet MS", sans-serif;
+      font-family: "Geist", "Sohne", "Aptos", sans-serif;
     }
     * { box-sizing: border-box; }
     .shell {
       overflow: hidden;
       border: 1px solid #cbc5b7;
-      border-radius: 28px;
-      background:
-        radial-gradient(circle at 94% 4%, rgba(216, 135, 22, .14), transparent 27rem),
-        linear-gradient(145deg, var(--paper-raised), var(--paper));
-      box-shadow: 0 28px 70px rgba(19, 35, 31, .13);
+      border-radius: 20px;
+      background: var(--paper);
+      box-shadow: 0 1px 2px rgba(23, 32, 30, .06);
     }
     header { padding: clamp(24px, 5vw, 54px); border-bottom: 1px solid var(--line); }
-    .eyebrow { color: var(--forest); font: 800 12px/1.2 "Bahnschrift", sans-serif; letter-spacing: .16em; }
-    h1 { max-width: 760px; margin: 12px 0 8px; font: 500 clamp(34px, 6vw, 70px)/.98 Georgia, serif; letter-spacing: -.045em; }
+    .eyebrow { color: var(--accent); font-size: 11px; font-weight: 750; letter-spacing: .15em; }
+    h1 { max-width: 760px; margin: 14px 0 10px; font-size: clamp(34px, 6vw, 64px); font-weight: 620; line-height: 1; letter-spacing: -.045em; }
     .subtitle { max-width: 690px; margin: 0; color: var(--muted); font-size: 17px; line-height: 1.55; }
     .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 28px; }
-    .metric { padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255, 253, 247, .72); }
-    .metric strong { display: block; font: 650 27px/1 Georgia, serif; }
+    .metric { padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper-raised); }
+    .metric strong { display: block; font-size: 25px; font-weight: 650; line-height: 1; }
     .metric span { color: var(--muted); font-size: 12px; }
     nav { display: flex; gap: 8px; overflow-x: auto; padding: 18px clamp(20px, 5vw, 54px); border-bottom: 1px solid var(--line); }
     nav button, .action, .export {
       appearance: none; border: 1px solid var(--line); border-radius: 999px; background: var(--paper-raised);
-      color: var(--ink); cursor: pointer; font: 700 13px/1 "Bahnschrift", sans-serif; padding: 11px 16px;
+      color: var(--ink); cursor: pointer; font: 680 13px/1 "Geist", "Aptos", sans-serif; padding: 11px 16px;
     }
-    nav button[aria-pressed="true"] { border-color: var(--forest); background: var(--forest); color: white; }
+    nav button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: white; }
     main { display: grid; gap: 14px; padding: clamp(20px, 5vw, 54px); }
-    .card { opacity: 0; transform: translateY(8px); animation: arrive .35s ease forwards; border: 1px solid var(--line); border-radius: 20px; background: rgba(255, 253, 247, .9); padding: 20px; }
+    .card { border: 1px solid var(--line); border-left: 3px solid transparent; border-radius: 14px; background: var(--paper-raised); padding: 20px; transition: border-color .22s ease, background-color .22s ease; }
+    .card[data-state="accepted"] { border-left-color: var(--accent); background: #fbfdfc; }
+    .card[data-state="corrected"] { border-left-color: var(--review); }
+    .card[data-state="abstained"] { border-left-color: var(--danger); }
     .route { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 16px; }
     .field small { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .1em; }
-    .field strong { display: block; margin-top: 5px; font: 600 21px/1.2 Georgia, serif; overflow-wrap: anywhere; }
-    .arrow { color: var(--amber); font-size: 24px; }
+    .field strong { display: block; margin-top: 5px; font-size: 20px; font-weight: 620; line-height: 1.2; overflow-wrap: anywhere; }
+    .arrow { color: var(--muted); font-size: 20px; }
     select, input { width: 100%; min-height: 44px; border: 1px solid var(--line); border-radius: 12px; background: white; color: var(--ink); padding: 9px 11px; font: inherit; }
-    .evidence { display: grid; grid-template-columns: minmax(130px, 220px) 1fr; gap: 16px; align-items: center; margin-top: 17px; }
-    .bar { height: 8px; overflow: hidden; border-radius: 99px; background: #e7e2d7; }
-    .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--amber), var(--forest)); }
+    .evidence { display: grid; grid-template-columns: minmax(145px, .65fr) 1fr auto; gap: 16px; align-items: center; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+    .evidence-class small { display: block; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; }
+    .evidence-class strong { display: block; margin-top: 4px; font-size: 13px; font-weight: 720; }
     .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-    .chip { border-radius: 99px; background: var(--mint); color: #194e3e; padding: 5px 9px; font-size: 11px; }
+    .chip { border-radius: 99px; background: var(--accent-soft); color: #315a51; padding: 5px 9px; font-size: 11px; }
+    details { color: var(--muted); font-size: 11px; }
+    details summary { cursor: pointer; white-space: nowrap; font-weight: 680; }
+    details p { max-width: 220px; margin: 8px 0 0; line-height: 1.4; }
     .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
-    .action[data-kind="accept"] { border-color: var(--forest); color: var(--forest); }
-    .action[data-kind="correct"] { border-color: var(--amber); color: #835008; }
-    .action[data-kind="abstain"] { color: var(--coral); }
+    .action[data-kind="accept"] { border-color: var(--accent); color: var(--accent); }
+    .action[data-kind="correct"] { border-color: var(--review); color: #725b2e; }
+    .action[data-kind="abstain"] { color: var(--danger); }
     .status { margin-left: auto; align-self: center; color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; }
-    footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: end; padding: 24px clamp(20px, 5vw, 54px) 34px; border-top: 1px solid var(--line); background: rgba(255,255,255,.35); }
+    footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: end; padding: 24px clamp(20px, 5vw, 54px) 34px; border-top: 1px solid var(--line); background: var(--paper-raised); }
     label { display: grid; gap: 7px; max-width: 440px; color: var(--muted); font-size: 12px; font-weight: 700; }
-    .export { border-color: var(--forest); background: var(--forest); color: white; padding: 14px 20px; }
+    .export { border-color: var(--accent); background: var(--accent); color: white; padding: 14px 20px; }
     .hint { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 12px; }
     .empty { color: var(--muted); text-align: center; padding: 35px; }
-    .notice { min-height: 18px; color: var(--coral); font-size: 12px; }
-    @keyframes arrive { to { opacity: 1; transform: translateY(0); } }
+    .notice { min-height: 18px; color: var(--danger); font-size: 12px; }
     @media (max-width: 680px) {
       .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .route, .evidence, footer { grid-template-columns: 1fr; }
       .arrow { transform: rotate(90deg); }
       .status { margin-left: 0; }
     }
-    @media (prefers-reduced-motion: reduce) { .card { animation: none; opacity: 1; transform: none; } }
+    @media (prefers-reduced-motion: reduce) { .card { transition: none; } }
   </style>
   <section class="shell">
     <header>
@@ -228,7 +237,7 @@ class PolymorphReview extends HTMLElement {
       visible += 1;
       const card = document.createElement("article");
       card.className = "card";
-      card.style.animationDelay = `${Math.min(index * 45, 360)}ms`;
+      card.dataset.state = state;
       const route = document.createElement("div"); route.className = "route";
       const sourceBox = this.fieldBox("Source", source);
       const arrow = document.createElement("div"); arrow.className = "arrow"; arrow.textContent = "→"; arrow.setAttribute("aria-hidden", "true");
@@ -243,12 +252,15 @@ class PolymorphReview extends HTMLElement {
       targetBox.append(targetLabel, select); route.append(sourceBox, arrow, targetBox);
       const evidence = document.createElement("div"); evidence.className = "evidence";
       const confidence = Math.max(0, Math.min(1, Number(item.confidence || 0)));
-      const meter = document.createElement("div");
-      const meterLabel = document.createElement("small"); meterLabel.textContent = `${t.confidence}: ${Math.round(confidence * 100)}%`;
-      const bar = document.createElement("div"); bar.className = "bar"; const fill = document.createElement("i"); fill.style.width = `${confidence * 100}%`; bar.append(fill); meter.append(meterLabel, bar);
-      const chips = document.createElement("div"); chips.className = "chips";
+      const classification = document.createElement("div"); classification.className = "evidence-class";
+      const classLabel = document.createElement("small"); classLabel.textContent = t.evidenceClass;
+      const classValue = document.createElement("strong"); classValue.textContent = String(item.evidence_class || "unclassified").replaceAll("_", " ").toUpperCase();
+      classification.append(classLabel, classValue);
+      const chips = document.createElement("div"); chips.className = "chips"; chips.setAttribute("aria-label", t.signals);
       for (const reason of (Array.isArray(item.reasons) ? item.reasons : []).slice(0, 12)) { const chip = document.createElement("span"); chip.className = "chip"; chip.textContent = String(reason); chips.append(chip); }
-      evidence.append(meter, chips);
+      const details = document.createElement("details"); const detailSummary = document.createElement("summary"); detailSummary.textContent = t.details;
+      const detailText = document.createElement("p"); detailText.textContent = `${t.scoreDetail}: ${Math.round(confidence * 100)}%.`;
+      details.append(detailSummary, detailText); evidence.append(classification, chips, details);
       const actions = document.createElement("div"); actions.className = "actions";
       actions.append(
         this.action(t.accept, "accept", () => this.decide(source, "accepted", String(item.target_field || ""))),

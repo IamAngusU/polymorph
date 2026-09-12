@@ -84,8 +84,9 @@ mapping quality.
 
 The content-inspection worker was measured against the repository's 68-byte quoted-CSV fixture.
 Each run created and hashed a new private snapshot and started a new Python process. The benchmark
-extra sampled the child process every 5 ms, which adds observer overhead. Windows provides process
-separation only, so these numbers are not Linux sandbox measurements.
+extra sampled the child process every 5 ms, which adds observer overhead. Windows uses Job Object
+resource containment here, so these numbers prove neither Linux sandbox behavior nor filesystem or
+network isolation.
 
 | Mode | Runs | End-to-end p50 / p95 | Worker p50 | Snapshot p50 | Observed child peak RSS | Maximum observed child CPU |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |

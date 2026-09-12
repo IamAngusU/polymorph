@@ -10,6 +10,18 @@ Open `example.html` or import `polymorph-review.js` into any browser application
 component's `model` property to schema metadata and evidence only. Listen for
 `polymorph-review-change` for host-managed state and `polymorph-review-submit` for a complete draft.
 
+Create that model directly from a real preparation object or its JSON representation:
+
+```python
+from polymorph.review_artifacts import review_model_from_preparation
+
+model = review_model_from_preparation(session.prepare())
+```
+
+```powershell
+polymorph-kit review model preparation.json --output review-model.json
+```
+
 ```javascript
 const review = document.querySelector("polymorph-review");
 review.model = modelFromTrustedBackend;
@@ -40,6 +52,10 @@ result = session.execute()
 `apply_review_artifact` only records mapping choices. `session.execute()` still rechecks schema,
 capabilities, preflight evidence, and write policy. Neither a draft nor an artifact grants write
 authority.
+
+The primary visual signal is an evidence class such as `multiple_signals` or
+`no_supported_match`. The numeric advisory score remains available only under technical details.
+Neither representation is authority, and no threshold in the browser can authorize execution.
 
 ## Privacy and collaboration boundary
 
