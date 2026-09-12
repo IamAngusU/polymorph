@@ -17,6 +17,8 @@ This roadmap uses evidence states instead of assigning unfinished promises to ol
 - atomic local file destinations, credential references and encrypted recipient keys
 - local product demo, own-data Trial, review UI export and commit-bound Trust Center
 - bounded workflow, mapping, quality, review-time and resource evidence formats
+- evidence-bound adaptive memory recommendations with explicit operator RAM budgets
+- metadata firewall policy, provenance and sanitizer contracts without format-coverage claims
 
 Implemented means code and repository tests exist. It does not imply every operating system, provider or workload has independent evidence.
 
@@ -39,6 +41,8 @@ Implemented means code and repository tests exist. It does not imply every opera
 - larger source-separated multilingual, ERP, finance, tax, currency and units corpora
 - operator measurement of review time saved and abstention usefulness
 - public static product and release-trust site without analytics
+- value-free JPEG metadata inspection and lossless, digest-bound sanitization evidence
+- finer secure-workflow profiling for serialization, crypto and durable persistence hot paths
 
 ## Planned
 

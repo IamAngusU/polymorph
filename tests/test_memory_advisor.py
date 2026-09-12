@@ -5,7 +5,9 @@ import json
 from polymorph.memory_advisor import (
     MIB,
     BatchProfile,
+    calibration_contract_mismatches,
     discover_latest_matrix,
+    matrix_minimum_authoritative_runs,
     recommend_batch,
 )
 
@@ -81,3 +83,53 @@ def test_matrix_discovery_prefers_publishable_evidence(tmp_path) -> None:
     preliminary.write_text(json.dumps(matrix(1)), encoding="utf-8")
 
     assert discover_latest_matrix(tmp_path) == publishable
+
+
+def test_matrix_discovery_prefers_exact_preliminary_over_stale_publishable(tmp_path) -> None:
+    root = tmp_path / ".polymorph" / "performance-matrix"
+    stale = root / "stale" / "matrix.json"
+    exact = root / "exact" / "matrix.json"
+    stale.parent.mkdir(parents=True)
+    exact.parent.mkdir(parents=True)
+    expected = {"schema_version": 2, "runtime_tree_sha256": "a" * 64}
+
+    def matrix(runs: int, contract: dict[str, object]) -> dict[str, object]:
+        return {
+            "calibration_contract": contract,
+            "summaries": [
+                {
+                    "batch_size": 100,
+                    "runs": runs,
+                    "throughput_rows_per_second_median": 375.0,
+                    "peak_rss_bytes_max": 96 * MIB,
+                }
+            ],
+        }
+
+    stale.write_text(
+        json.dumps(matrix(3, {**expected, "runtime_tree_sha256": "b" * 64})),
+        encoding="utf-8",
+    )
+    exact.write_text(json.dumps(matrix(1, expected)), encoding="utf-8")
+
+    assert discover_latest_matrix(tmp_path, expected_contract=expected) == exact
+
+
+def test_calibration_contract_reports_missing_and_mismatched_authority() -> None:
+    expected = {"schema_version": 2, "python_version": "3.11.9"}
+
+    assert calibration_contract_mismatches(
+        {"schema_version": 1},
+        expected,
+    ) == ("missing:python_version", "mismatch:schema_version")
+
+
+def test_rejected_probe_does_not_downgrade_authoritative_run_count() -> None:
+    profiles = [
+        BatchProfile(100, 380.0, 90 * MIB, 3),
+        BatchProfile(250, 410.0, 98 * MIB, 3),
+        BatchProfile(1000, 420.0, 130 * MIB, 1),
+    ]
+    document = {"measurement_policy": {"admitted_batch_sizes": [100, 250]}}
+
+    assert matrix_minimum_authoritative_runs(document, profiles) == 3

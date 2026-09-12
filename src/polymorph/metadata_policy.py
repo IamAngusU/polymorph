@@ -8,7 +8,11 @@ boundaries.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import os
 import re
+import stat
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -70,6 +74,10 @@ class RemovalImpact(StrEnum):
     RENDERING = "rendering"
     SIGNATURE = "signature"
     UNKNOWN = "unknown"
+
+
+class MetadataSourceChangedError(RuntimeError):
+    reason_code = "source_changed_after_metadata_inspection"
 
 
 _EVIDENCE_CLASSES: Mapping[MetadataCategory, MetadataEvidenceClass] = MappingProxyType(
@@ -297,6 +305,14 @@ class MetadataEvaluation:
             if decision.action is MetadataAction.PRESERVE
         )
 
+    @property
+    def requires_representation_change(self) -> bool:
+        return any(
+            decision.action is MetadataAction.STRIP
+            and decision.observation.removal_impact is RemovalImpact.REPRESENTATION
+            for decision in self.decisions
+        )
+
     def as_dict(self) -> dict[str, object]:
         counts = {action.value: 0 for action in MetadataAction}
         for decision in self.decisions:
@@ -329,6 +345,11 @@ class MetadataFirewall:
         has_strip = any(item.action is MetadataAction.STRIP for item in decisions)
         has_review = any(item.action is MetadataAction.REVIEW for item in decisions)
         has_block = any(item.action is MetadataAction.BLOCK for item in decisions)
+        strip_impacts = {
+            item.observation.removal_impact
+            for item in decisions
+            if item.action is MetadataAction.STRIP
+        }
 
         if has_block:
             status = MetadataDecisionStatus.BLOCKED
@@ -336,9 +357,15 @@ class MetadataFirewall:
         elif has_strip and inventory.integrity_state is ArtifactIntegrityState.SIGNED:
             status = MetadataDecisionStatus.BLOCKED
             reason_code = "signed_source_sanitization_would_invalidate_signature"
+        elif RemovalImpact.SIGNATURE in strip_impacts:
+            status = MetadataDecisionStatus.BLOCKED
+            reason_code = "metadata_removal_would_invalidate_signature"
         elif has_strip and inventory.integrity_state is ArtifactIntegrityState.UNKNOWN:
             status = MetadataDecisionStatus.REVIEW
             reason_code = "source_signature_state_unknown"
+        elif strip_impacts & {RemovalImpact.RENDERING, RemovalImpact.UNKNOWN}:
+            status = MetadataDecisionStatus.REVIEW
+            reason_code = "metadata_removal_impact_requires_review"
         elif has_review:
             status = MetadataDecisionStatus.REVIEW
             reason_code = "metadata_review_required"
@@ -412,6 +439,8 @@ def build_sanitization_receipt(
 ) -> MetadataSanitizationReceipt:
     if evaluation.status is not MetadataDecisionStatus.SANITIZE:
         raise ValueError("only an approved sanitize evaluation can produce a receipt")
+    if evaluation.requires_representation_change and content_representation_preserved:
+        raise ValueError("metadata removal impact contradicts representation-preserved claim")
     return MetadataSanitizationReceipt(
         source_digest=evaluation.inventory.source_digest,
         output_digest=output_digest,
@@ -422,6 +451,64 @@ def build_sanitization_receipt(
         content_representation_preserved=content_representation_preserved,
         rendered_content_may_change=rendered_content_may_change,
     )
+
+
+def require_source_digest(
+    source: Path,
+    expected_digest: str,
+    *,
+    max_file_bytes: int = 2 * 1024 * 1024 * 1024,
+) -> str:
+    """Fail closed unless the current regular file is the inspected exact-byte source."""
+
+    _require_digest(expected_digest, label="expected source digest")
+    if (
+        isinstance(max_file_bytes, bool)
+        or not isinstance(max_file_bytes, int)
+        or max_file_bytes <= 0
+    ):
+        raise ValueError("metadata source byte limit must be a positive integer")
+    expected_hex = expected_digest.removeprefix("sha256:")
+
+    def identity(metadata: os.stat_result) -> tuple[int, int, int, int]:
+        return (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+        )
+
+    try:
+        path_metadata = source.lstat()
+        if stat.S_ISLNK(path_metadata.st_mode) or not stat.S_ISREG(path_metadata.st_mode):
+            raise MetadataSourceChangedError("metadata source is not a direct regular file")
+        if path_metadata.st_size > max_file_bytes:
+            raise MetadataSourceChangedError("metadata source exceeds the byte limit")
+        digest = hashlib.sha256()
+        with source.open("rb") as handle:
+            opened_metadata = os.fstat(handle.fileno())
+            if not stat.S_ISREG(opened_metadata.st_mode) or identity(opened_metadata) != identity(
+                path_metadata
+            ):
+                raise MetadataSourceChangedError(
+                    "metadata source changed between inspection and open"
+                )
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+            final_open_metadata = os.fstat(handle.fileno())
+            if identity(final_open_metadata) != identity(opened_metadata):
+                raise MetadataSourceChangedError("metadata source changed while hashing")
+        final_path_metadata = source.stat()
+    except MetadataSourceChangedError:
+        raise
+    except OSError as exc:
+        raise MetadataSourceChangedError("metadata source could not be verified") from exc
+    if identity(final_path_metadata) != identity(path_metadata):
+        raise MetadataSourceChangedError("metadata source path changed after hashing")
+    observed_hex = digest.hexdigest()
+    if not hmac.compare_digest(observed_hex, expected_hex):
+        raise MetadataSourceChangedError("metadata source digest no longer matches inspection")
+    return f"sha256:{observed_hex}"
 
 
 class MetadataInspector(Protocol):

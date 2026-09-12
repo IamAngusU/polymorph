@@ -1,5 +1,25 @@
 # Changelog
 
+All notable changes to this alpha are documented here.
+
+## Unreleased
+
+### Added
+
+- Add an evidence-bound adaptive memory advisor with an installable `polymorph-memory` command,
+  explicit RAM headroom and preliminary versus publishable calibration levels.
+- Add metadata firewall policy and sanitization contracts with value-free provenance and exact
+  source-digest verification.
+
+### Changed
+
+- Bind memory recommendations to exact runtime bytes, host/runtime characteristics, connector,
+  durability, audit mode and benchmark record shape; stale evidence now requires explicit opt-in.
+- Make metadata removal impact authoritative for sanitize, review and block decisions.
+- Reuse canonical source-authentication bytes within an immutable signed record while retaining
+  independent signature verification at every trust boundary.
+- Advance development builds after the immutable a10 release to `0.4.0a11.dev0`.
+
 ## 0.4.0a10 - 2026-09-12
 
 ### Fixed
@@ -29,10 +49,6 @@
 - publish an OpenSSF Security Insights 2.2.0 declaration validated against the official CUE schema
 - reposition the README around local-first, fail-closed mapping and explicit write outcomes
 
-
-All notable changes to this alpha are documented here.
-
-## Unreleased
 
 ## 0.4.0a7 - 2026-09-12
 

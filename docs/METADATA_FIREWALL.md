@@ -42,6 +42,14 @@ blocked. If signature state is unknown, mutation requires review. Polymorph does
 not claim that privacy improvement is safe when it would silently invalidate a
 source signature.
 
+Removal impact is authoritative. `NONE` and `REPRESENTATION` may proceed to a
+sanitizer, but a representation-changing adapter cannot claim byte-preserved
+output. `RENDERING` and `UNKNOWN` require review. `SIGNATURE` blocks mutation.
+
+Before mutation, format adapters must call the exact-byte source digest guard.
+A changed path, identity, size, timestamp or SHA-256 digest fails with
+`source_changed_after_metadata_inspection`.
+
 A successful sanitizer must return both source and output SHA-256 digests, the
 exact policy version, removed and preserved metadata keys, and explicit claims
 about representation and rendering changes. A receipt cannot approve an

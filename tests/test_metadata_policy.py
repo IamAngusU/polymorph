@@ -10,7 +10,10 @@ from polymorph.metadata_policy import (
     MetadataInventory,
     MetadataObservation,
     MetadataPolicy,
+    MetadataSourceChangedError,
+    RemovalImpact,
     build_sanitization_receipt,
+    require_source_digest,
 )
 
 SOURCE_DIGEST = "sha256:" + ("a" * 64)
@@ -33,8 +36,14 @@ def test_privacy_policy_preserves_rendering_metadata_and_strips_location() -> No
     inventory = _inventory(
         MetadataObservation("image.orientation", MetadataCategory.ORIENTATION),
         MetadataObservation("image.icc-profile", MetadataCategory.COLOR_PROFILE),
-        MetadataObservation("image.gps", MetadataCategory.LOCATION),
-        MetadataObservation("image.camera-serial", MetadataCategory.DEVICE_IDENTIFIER),
+        MetadataObservation(
+            "image.gps", MetadataCategory.LOCATION, removal_impact=RemovalImpact.NONE
+        ),
+        MetadataObservation(
+            "image.camera-serial",
+            MetadataCategory.DEVICE_IDENTIFIER,
+            removal_impact=RemovalImpact.NONE,
+        ),
     )
 
     result = MetadataFirewall().evaluate(inventory, MetadataPolicy.privacy())
@@ -57,7 +66,11 @@ def test_ambiguous_business_metadata_requires_review() -> None:
 
 def test_signed_source_blocks_a_policy_that_would_strip_metadata() -> None:
     inventory = _inventory(
-        MetadataObservation("document.author", MetadataCategory.PERSON_IDENTITY),
+        MetadataObservation(
+            "document.author",
+            MetadataCategory.PERSON_IDENTITY,
+            removal_impact=RemovalImpact.NONE,
+        ),
         integrity=ArtifactIntegrityState.SIGNED,
     )
 
@@ -69,7 +82,11 @@ def test_signed_source_blocks_a_policy_that_would_strip_metadata() -> None:
 
 def test_unknown_signature_state_requires_review_before_mutation() -> None:
     inventory = _inventory(
-        MetadataObservation("document.author", MetadataCategory.PERSON_IDENTITY),
+        MetadataObservation(
+            "document.author",
+            MetadataCategory.PERSON_IDENTITY,
+            removal_impact=RemovalImpact.NONE,
+        ),
         integrity=ArtifactIntegrityState.UNKNOWN,
     )
 
@@ -92,7 +109,12 @@ def test_preserve_policy_accepts_signed_source_without_mutation() -> None:
 
 def test_receipt_contains_only_value_free_provenance() -> None:
     inventory = _inventory(
-        MetadataObservation("image.gps", MetadataCategory.LOCATION, encoded_bytes=96),
+        MetadataObservation(
+            "image.gps",
+            MetadataCategory.LOCATION,
+            encoded_bytes=96,
+            removal_impact=RemovalImpact.NONE,
+        ),
     )
     evaluation = MetadataFirewall().evaluate(inventory, MetadataPolicy.privacy())
 
@@ -109,7 +131,9 @@ def test_receipt_contains_only_value_free_provenance() -> None:
 
 def test_receipt_rejects_claimed_removal_without_byte_change() -> None:
     inventory = _inventory(
-        MetadataObservation("image.gps", MetadataCategory.LOCATION),
+        MetadataObservation(
+            "image.gps", MetadataCategory.LOCATION, removal_impact=RemovalImpact.NONE
+        ),
     )
     evaluation = MetadataFirewall().evaluate(inventory, MetadataPolicy.privacy())
 
@@ -120,3 +144,69 @@ def test_receipt_rejects_claimed_removal_without_byte_change() -> None:
             content_representation_preserved=True,
             rendered_content_may_change=False,
         )
+
+
+@pytest.mark.parametrize(
+    ("impact", "status", "reason_code"),
+    (
+        (
+            RemovalImpact.RENDERING,
+            MetadataDecisionStatus.REVIEW,
+            "metadata_removal_impact_requires_review",
+        ),
+        (
+            RemovalImpact.UNKNOWN,
+            MetadataDecisionStatus.REVIEW,
+            "metadata_removal_impact_requires_review",
+        ),
+        (
+            RemovalImpact.SIGNATURE,
+            MetadataDecisionStatus.BLOCKED,
+            "metadata_removal_would_invalidate_signature",
+        ),
+    ),
+)
+def test_removal_impact_has_policy_authority(
+    impact: RemovalImpact,
+    status: MetadataDecisionStatus,
+    reason_code: str,
+) -> None:
+    inventory = _inventory(
+        MetadataObservation("image.gps", MetadataCategory.LOCATION, removal_impact=impact)
+    )
+
+    result = MetadataFirewall().evaluate(inventory, MetadataPolicy.privacy())
+
+    assert result.status is status
+    assert result.reason_code == reason_code
+
+
+def test_representation_impact_cannot_claim_representation_preserved() -> None:
+    inventory = _inventory(
+        MetadataObservation(
+            "image.editor-history",
+            MetadataCategory.EDITOR_HISTORY,
+            removal_impact=RemovalImpact.REPRESENTATION,
+        )
+    )
+    evaluation = MetadataFirewall().evaluate(inventory, MetadataPolicy.privacy())
+
+    with pytest.raises(ValueError, match="representation-preserved"):
+        build_sanitization_receipt(
+            evaluation,
+            output_digest=OUTPUT_DIGEST,
+            content_representation_preserved=True,
+            rendered_content_may_change=False,
+        )
+
+
+def test_source_digest_guard_rejects_replaced_content(tmp_path) -> None:
+    source = tmp_path / "photo.jpg"
+    source.write_bytes(b"inspected bytes")
+    expected = "sha256:" + __import__("hashlib").sha256(source.read_bytes()).hexdigest()
+    assert require_source_digest(source, expected) == expected
+
+    source.write_bytes(b"replaced bytes")
+
+    with pytest.raises(MetadataSourceChangedError, match="digest"):
+        require_source_digest(source, expected)

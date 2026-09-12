@@ -114,6 +114,18 @@ def test_v3_wire_without_authentication_is_rejected() -> None:
         BlindTransportRecord.from_wire(wire)
 
 
+def test_signed_record_reuses_canonical_authentication_bytes(monkeypatch) -> None:
+    recipient = RecipientKeyPair.generate()
+    signer = SigningKeyPair.generate()
+    record = _record(recipient, signer)
+
+    def unexpected_serialization(*args, **kwargs):
+        raise AssertionError("signed immutable record should reuse authentication bytes")
+
+    monkeypatch.setattr("polymorph.agents.json.dumps", unexpected_serialization)
+    _trust(signer).verify_record(record)
+
+
 def test_ciphertext_tamper_invalidates_source_signature() -> None:
     recipient = RecipientKeyPair.generate()
     signer = SigningKeyPair.generate()

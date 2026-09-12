@@ -11,8 +11,10 @@ No model, network service or GPU is used by the advisor.
 Use the newest local performance matrix and a user-selected 128 MiB budget:
 
 ```powershell
-python -m polymorph.memory_advisor recommend --max-ram-mib 128
+polymorph-memory recommend --max-ram-mib 128
 ```
+
+`python -m polymorph.memory_advisor` remains an equivalent portable fallback.
 
 If `--max-ram-mib` is omitted, Polymorph makes a conservative first estimate
 from currently available system memory. The detected memory, budget source and
@@ -22,19 +24,26 @@ Automatic discovery prefers the newest matrix with at least three runs per
 profile. If no such publishable matrix exists, it uses the newest preliminary
 matrix and labels that evidence level explicitly.
 
+Recommendations require an exact calibration contract match. The contract binds
+the evidence to Polymorph version and runtime bytes, Python, OS, architecture,
+CPU fingerprint, installed RAM, SQLite, connector, durability, signed-audit
+mode, event budget and synthetic record shape. A mismatch returns `stale` and
+requires recalibration. `--allow-stale` exists only as an explicit diagnostic
+override and is never selected automatically.
+
 ## Calibrate this machine
 
 Run the secure local SQLite workflow for the standard candidate batches and
 store machine-readable evidence:
 
 ```powershell
-python -m polymorph.memory_advisor calibrate --max-ram-mib 128
+polymorph-memory calibrate --max-ram-mib 128
 ```
 
 Use three repetitions when publishing or comparing performance evidence:
 
 ```powershell
-python -m polymorph.memory_advisor calibrate `
+polymorph-memory calibrate `
   --max-ram-mib 128 `
   --records 5000 `
   --runs 3

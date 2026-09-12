@@ -8,10 +8,14 @@ it does not claim to be a hard process limit.
 from __future__ import annotations
 
 import argparse
+import ctypes
+import hashlib
 import importlib
 import json
 import math
 import os
+import platform
+import sqlite3
 import statistics
 import subprocess
 import sys
@@ -20,14 +24,24 @@ from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import cast
+
+from . import __version__
 
 MIB = 1024 * 1024
 DEFAULT_BATCH_SIZES = (100, 250, 500, 1000)
 DEFAULT_HEADROOM_PERCENT = 15.0
 DEFAULT_NEAR_OPTIMAL_PERCENT = 2.0
 DEFAULT_RECORDS = 5000
+CALIBRATION_CONTRACT_SCHEMA_VERSION = 2
+CALIBRATION_MATRIX_SCHEMA_VERSION = 2
+WORKFLOW_RECORD_SHAPE_ID = "workflow-v1-five-field-customer-record"
+WORKFLOW_BENCHMARK_REPORT_VERSION = 1
+WORKFLOW_EVENT_STREAM_MAX_BYTES = 64 * MIB
+_MAX_RUNTIME_TREE_FILES = 8192
+_MAX_RUNTIME_TREE_BYTES = 128 * MIB
 
 
 class MemoryAdvisorError(ValueError):
@@ -46,6 +60,20 @@ class SystemMemory:
             "available_bytes": self.available_bytes,
             "source": self.source,
         }
+
+
+class _MemoryStatusEx(ctypes.Structure):
+    _fields_ = [
+        ("dwLength", ctypes.c_ulong),
+        ("dwMemoryLoad", ctypes.c_ulong),
+        ("ullTotalPhys", ctypes.c_ulonglong),
+        ("ullAvailPhys", ctypes.c_ulonglong),
+        ("ullTotalPageFile", ctypes.c_ulonglong),
+        ("ullAvailPageFile", ctypes.c_ulonglong),
+        ("ullTotalVirtual", ctypes.c_ulonglong),
+        ("ullAvailVirtual", ctypes.c_ulonglong),
+        ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +137,21 @@ def detect_system_memory() -> SystemMemory:
     except (AttributeError, ImportError, OSError, TypeError, ValueError):
         pass
 
+    if os.name == "nt":
+        windows_loader = vars(ctypes).get("WinDLL")
+        if callable(windows_loader):
+            try:
+                kernel32 = windows_loader("kernel32", use_last_error=True)
+                status = _MemoryStatusEx()
+                status.dwLength = ctypes.sizeof(status)
+                if kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                    total = int(status.ullTotalPhys)
+                    available = int(status.ullAvailPhys)
+                    if total > 0 and available > 0:
+                        return SystemMemory(total, available, "windows.GlobalMemoryStatusEx")
+            except (AttributeError, OSError, TypeError, ValueError):
+                pass
+
     system_configuration = vars(os).get("sysconf")
     if callable(system_configuration):
         try:
@@ -138,6 +181,93 @@ def suggest_memory_budget(memory: SystemMemory) -> tuple[int, str]:
     return rounded, "ten_percent_available_capped_at_512_mib"
 
 
+@lru_cache(maxsize=1)
+def runtime_tree_sha256() -> str:
+    """Bind calibration evidence to the package bytes actually executing it."""
+
+    root = Path(__file__).resolve().parent
+    candidates: list[Path] = []
+    for candidate in root.rglob("*"):
+        if "__pycache__" in candidate.parts or candidate.suffix in {".pyc", ".pyo"}:
+            continue
+        if candidate.is_symlink():
+            raise MemoryAdvisorError("runtime package tree contains a symbolic link")
+        if candidate.is_file():
+            candidates.append(candidate)
+    if len(candidates) > _MAX_RUNTIME_TREE_FILES:
+        raise MemoryAdvisorError("runtime package tree exceeds the file-count limit")
+
+    digest = hashlib.sha256()
+    total_bytes = 0
+    for candidate in sorted(candidates, key=lambda path: path.relative_to(root).as_posix()):
+        relative = candidate.relative_to(root).as_posix().encode("utf-8")
+        try:
+            size = candidate.stat().st_size
+        except OSError as exc:
+            raise MemoryAdvisorError(f"cannot inspect runtime package file: {candidate}") from exc
+        total_bytes += size
+        if total_bytes > _MAX_RUNTIME_TREE_BYTES:
+            raise MemoryAdvisorError("runtime package tree exceeds the byte limit")
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative)
+        digest.update(size.to_bytes(8, "big"))
+        try:
+            with candidate.open("rb") as handle:
+                while chunk := handle.read(1024 * 1024):
+                    digest.update(chunk)
+        except OSError as exc:
+            raise MemoryAdvisorError(f"cannot hash runtime package file: {candidate}") from exc
+    return digest.hexdigest()
+
+
+def current_calibration_contract() -> dict[str, object]:
+    memory = detect_system_memory()
+    cpu_identity = "|".join(
+        (
+            platform.processor(),
+            os.environ.get("PROCESSOR_IDENTIFIER", ""),
+            platform.machine(),
+            str(os.cpu_count() or 0),
+        )
+    ).casefold()
+    return {
+        "schema_version": CALIBRATION_CONTRACT_SCHEMA_VERSION,
+        "polymorph_version": __version__,
+        "runtime_tree_sha256": runtime_tree_sha256(),
+        "python_version": platform.python_version(),
+        "python_implementation": platform.python_implementation(),
+        "operating_system": platform.system(),
+        "operating_system_release": platform.release(),
+        "architecture": platform.machine(),
+        "cpu_fingerprint_sha256": hashlib.sha256(cpu_identity.encode("utf-8")).hexdigest(),
+        "logical_cpus": os.cpu_count(),
+        "total_memory_bytes": memory.total_bytes,
+        "connector_id": "sqlite",
+        "sqlite_version": sqlite3.sqlite_version,
+        "durability_contract": "sqlite-selected-journal-full-sync-v1",
+        "signed_audit": True,
+        "record_shape_id": WORKFLOW_RECORD_SHAPE_ID,
+        "benchmark_report_version": WORKFLOW_BENCHMARK_REPORT_VERSION,
+        "event_stream_max_bytes": WORKFLOW_EVENT_STREAM_MAX_BYTES,
+    }
+
+
+def calibration_contract_mismatches(
+    observed: object,
+    expected: Mapping[str, object],
+) -> tuple[str, ...]:
+    if not isinstance(observed, dict):
+        return ("missing:calibration_contract",)
+    observed_contract = cast(Mapping[str, object], observed)
+    mismatches: list[str] = []
+    for key, expected_value in sorted(expected.items()):
+        if key not in observed_contract:
+            mismatches.append(f"missing:{key}")
+        elif observed_contract[key] != expected_value:
+            mismatches.append(f"mismatch:{key}")
+    return tuple(mismatches)
+
+
 def profiles_from_matrix(document: Mapping[str, object]) -> list[BatchProfile]:
     summaries = _sequence(document.get("summaries"), "summaries")
     profiles: list[BatchProfile] = []
@@ -165,12 +295,37 @@ def profiles_from_matrix(document: Mapping[str, object]) -> list[BatchProfile]:
     return sorted(profiles, key=lambda profile: profile.batch_size)
 
 
-def load_profiles(path: Path) -> list[BatchProfile]:
+def load_matrix_document(path: Path) -> Mapping[str, object]:
     try:
         raw: object = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise MemoryAdvisorError(f"cannot read matrix {path}: {exc}") from exc
-    return profiles_from_matrix(_mapping(raw, "matrix"))
+    return _mapping(raw, "matrix")
+
+
+def load_profiles(path: Path) -> list[BatchProfile]:
+    return profiles_from_matrix(load_matrix_document(path))
+
+
+def matrix_minimum_authoritative_runs(
+    document: Mapping[str, object],
+    profiles: Sequence[BatchProfile],
+) -> int:
+    if not profiles:
+        raise MemoryAdvisorError("matrix contains no batch profiles")
+    policy = document.get("measurement_policy")
+    if isinstance(policy, dict):
+        admitted = policy.get("admitted_batch_sizes")
+        if isinstance(admitted, list) and admitted:
+            admitted_sizes = {
+                item for item in admitted if isinstance(item, int) and not isinstance(item, bool)
+            }
+            authoritative = [
+                profile.runs for profile in profiles if profile.batch_size in admitted_sizes
+            ]
+            if authoritative:
+                return min(authoritative)
+    return min(profile.runs for profile in profiles)
 
 
 def recommend_batch(
@@ -264,25 +419,37 @@ def recommend_batch(
     }
 
 
-def discover_latest_matrix(root: Path) -> Path:
+def discover_latest_matrix(
+    root: Path,
+    expected_contract: Mapping[str, object] | None = None,
+) -> Path:
     candidates = list((root / ".polymorph" / "performance-matrix").glob("*/matrix.json"))
     if not candidates:
         raise MemoryAdvisorError(
             "no local performance matrix found; run the calibrate command first"
         )
-    usable: list[tuple[Path, int, int]] = []
+    usable: list[tuple[Path, int, int, bool]] = []
     for candidate in candidates:
         try:
-            profiles = load_profiles(candidate)
+            document = load_matrix_document(candidate)
+            profiles = profiles_from_matrix(document)
             modified = candidate.stat().st_mtime_ns
         except (MemoryAdvisorError, OSError):
             continue
-        usable.append((candidate, min(profile.runs for profile in profiles), modified))
+        exact = expected_contract is None or not calibration_contract_mismatches(
+            document.get("calibration_contract"), expected_contract
+        )
+        usable.append(
+            (
+                candidate,
+                matrix_minimum_authoritative_runs(document, profiles),
+                modified,
+                exact,
+            )
+        )
     if not usable:
         raise MemoryAdvisorError("no valid local performance matrix found")
-    publishable = [item for item in usable if item[1] >= 3]
-    pool = publishable or usable
-    return max(pool, key=lambda item: item[2])[0]
+    return max(usable, key=lambda item: (item[3], item[1] >= 3, item[2]))[0]
 
 
 def atomic_write_json(path: Path, document: Mapping[str, object]) -> None:
@@ -558,10 +725,11 @@ def calibrate(
     )
     first_report = _mapping(runs[0].get("raw_report"), "run.raw_report")
     return {
-        "schema_version": 1,
+        "schema_version": CALIBRATION_MATRIX_SCHEMA_VERSION,
         "generated_at_utc": _utc_now(),
         "benchmark": "secure_e2e_memory_calibration",
         "evidence_level": "publishable" if repetitions >= 3 else "preliminary",
+        "calibration_contract": current_calibration_contract(),
         "measurement_policy": {
             "records_per_run": records,
             "requested_repetitions_per_batch_size": repetitions,
@@ -622,8 +790,14 @@ def _percentage(value: str) -> float:
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    executable = Path(sys.argv[0]).stem.casefold()
+    program = (
+        Path(sys.argv[0]).name
+        if executable in {"polymorph-memory", "polymorph-memory.exe"}
+        else "python -m polymorph.memory_advisor"
+    )
     parser = argparse.ArgumentParser(
-        prog="python -m polymorph.memory_advisor",
+        prog=program,
         description=(
             "Recommend a secure workflow batch size from local evidence and an "
             "advisory RAM budget. No model, network service or GPU is used."
@@ -636,6 +810,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     recommend.add_argument("--matrix", type=Path)
     recommend.add_argument("--max-ram-mib", type=_positive_float)
+    recommend.add_argument(
+        "--allow-stale",
+        action="store_true",
+        help="use mismatched calibration evidence explicitly; never enabled by default",
+    )
     recommend.add_argument("--headroom-percent", type=_percentage, default=DEFAULT_HEADROOM_PERCENT)
     recommend.add_argument(
         "--near-optimal-percent",
@@ -687,15 +866,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         max_ram_bytes, budget_source, memory = _resolve_budget(args.max_ram_mib)
         if args.command == "recommend":
-            matrix_path = args.matrix or discover_latest_matrix(Path.cwd())
-            profiles = load_profiles(matrix_path)
-            minimum_profile_runs = min(profile.runs for profile in profiles)
-            recommendation = recommend_batch(
-                profiles,
-                max_ram_bytes=max_ram_bytes,
-                headroom_percent=args.headroom_percent,
-                near_optimal_percent=args.near_optimal_percent,
+            expected_contract = current_calibration_contract()
+            matrix_path = args.matrix or discover_latest_matrix(
+                Path.cwd(), expected_contract=expected_contract
             )
+            matrix_document = load_matrix_document(matrix_path)
+            profiles = profiles_from_matrix(matrix_document)
+            minimum_profile_runs = matrix_minimum_authoritative_runs(matrix_document, profiles)
+            mismatches = calibration_contract_mismatches(
+                matrix_document.get("calibration_contract"), expected_contract
+            )
+            recommendation: dict[str, object]
+            if mismatches and not args.allow_stale:
+                recommendation = {
+                    "status": "stale",
+                    "reason_code": "calibration_contract_mismatch",
+                    "recommended_batch_size": None,
+                    "advisory_only": True,
+                    "hard_limit_enforced": False,
+                }
+                binding_status = "stale"
+            else:
+                recommendation = recommend_batch(
+                    profiles,
+                    max_ram_bytes=max_ram_bytes,
+                    headroom_percent=args.headroom_percent,
+                    near_optimal_percent=args.near_optimal_percent,
+                )
+                binding_status = "stale_allowed" if mismatches else "exact"
             report: dict[str, object] = {
                 "schema_version": 1,
                 "generated_at_utc": _utc_now(),
@@ -704,6 +902,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "matrix_evidence": {
                     "level": "publishable" if minimum_profile_runs >= 3 else "preliminary",
                     "minimum_runs_per_profile": minimum_profile_runs,
+                },
+                "calibration_binding": {
+                    "status": binding_status,
+                    "mismatches": list(mismatches),
                 },
                 "memory_budget": {
                     "bytes": max_ram_bytes,

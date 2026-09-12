@@ -215,6 +215,9 @@ class BlindTransportRecord:
     allow_legacy_blank_recipient_key_id: bool = False
     _wire_cache: bytes | None = dataclass_field(default=None, init=False, repr=False, compare=False)
     _digest_cache: str | None = dataclass_field(default=None, init=False, repr=False, compare=False)
+    _source_authentication_cache: tuple[str, str, bytes] | None = dataclass_field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if not self.fields:
@@ -303,6 +306,9 @@ class BlindTransportRecord:
     def source_authentication_bytes(self, key_id: str, algorithm: str = "ed25519") -> bytes:
         if self.protocol_version != 3:
             raise ProtocolError("source authentication is supported only for record protocol v3")
+        cached = self._source_authentication_cache
+        if cached is not None and cached[:2] == (key_id, algorithm):
+            return cached[2]
         payload = {
             **self._content_wire(),
             "authentication": {"algorithm": algorithm, "key_id": key_id},
@@ -313,7 +319,13 @@ class BlindTransportRecord:
             separators=(",", ":"),
             ensure_ascii=False,
         ).encode("utf-8")
-        return b"angusu.bridge/opaque-record/source-auth/v3\x00" + canonical
+        encoded = b"angusu.bridge/opaque-record/source-auth/v3\x00" + canonical
+        object.__setattr__(
+            self,
+            "_source_authentication_cache",
+            (key_id, algorithm, encoded),
+        )
+        return encoded
 
     def signed(self, signer: SigningKeyPair) -> BlindTransportRecord:
         if self.protocol_version != 3:
@@ -323,13 +335,20 @@ class BlindTransportRecord:
         for field in self.fields:
             field.context.validate_new_metadata()
         key_id = signing_key_id(signer.public_bytes())
-        signature = signer.sign(self.source_authentication_bytes(key_id))
-        return BlindTransportRecord(
+        authentication_bytes = self.source_authentication_bytes(key_id)
+        signature = signer.sign(authentication_bytes)
+        signed_record = BlindTransportRecord(
             self.record_id,
             self.fields,
             RecordAuthentication(key_id=key_id, signature=signature),
             self.allow_legacy_blank_recipient_key_id,
         )
+        object.__setattr__(
+            signed_record,
+            "_source_authentication_cache",
+            (key_id, "ed25519", authentication_bytes),
+        )
+        return signed_record
 
     def to_wire(self) -> dict[str, object]:
         payload = self._content_wire()
