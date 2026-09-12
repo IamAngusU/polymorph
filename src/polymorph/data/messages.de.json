@@ -1,0 +1,19 @@
+{
+  "destination.write_not_committed": "Der Connector hat bewiesen, dass der Ziel-Write nicht committed wurde.",
+  "destination.write_partial": "Der Write stoppte nach einem nachweislich committed Prefix.",
+  "destination.write_started": "Die explizite Ziel-Write-Grenze wurde betreten.",
+  "destination.write_unknown": "Das Ergebnis des Ziel-Writes ist nicht vollstaendig bewiesen.",
+  "mapping.blocked": "Mindestens ein Mapping ist durch Contract- oder Policy-Evidenz blockiert.",
+  "mapping.ready": "Jede Mapping-Regel ist automatisch oder explizit geprueft.",
+  "mapping.review_required": "Mindestens ein Mapping braucht eine explizite Entscheidung eines Operators.",
+  "mapping.started": "Polymorph vergleicht Source- und Destination-Contracts.",
+  "preflight.completed": "Preflight hat {records_checked} Record(s) geprueft; promotable ist {promotable}.",
+  "preflight.started": "Ein vollstaendiger No-write-Preflight prueft den Source-Stream.",
+  "run.blocked": "Der Run stoppte vor einem unsicheren oder unbelegten Write.",
+  "run.completed": "Der Connector meldete {records_written} geschriebene Record(s).",
+  "run.progress": "{records_prepared} von {records_total} Record(s) wurden fuer den Ziel-Stream vorbereitet.",
+  "run.ready": "Die Route hat die Vorbereitung bestanden und wartet auf einen expliziten Execute-Aufruf.",
+  "run.started": "Eine neue lokale Routenvorbereitung wurde gestartet.",
+  "source.accepted": "Der Source-Contract enthaelt {fields} Feld(er); unveraenderlicher Snapshot bewiesen: {snapshot_proven}.",
+  "source.inspecting": "Polymorph prueft die Source, bevor ein Connector ausgewaehlt wird."
+}

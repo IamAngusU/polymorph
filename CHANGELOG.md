@@ -4,6 +4,31 @@ All notable changes to this alpha are documented here.
 
 ## Unreleased
 
+## 0.4.0a4 - 2026-09-12
+
+### Added
+
+- a public connector registry with content-based source resolution, explicit destinations,
+  machine-readable manifests and opt-in Python entry-point discovery
+- a connector contract conformance kit that checks capability and method consistency without
+  opening user endpoints
+- a versioned, payload-free product event contract with stable reason, next-action, retry and
+  presentation metadata plus English and German message catalogs
+- callback, composite and bounded asynchronous queue event sinks whose failures cannot change
+  destination write semantics
+- an explicit two-phase `polymorph.move(...)` embedded API for mapping, complete no-write
+  preflight and immutable-file local streaming execution
+- structured embedded outcomes for review, block, not-committed, committed-prefix partial and
+  unknown destination states
+- `polymorph connectors` for local connector discovery and `polymorph demo` for a responsive,
+  self-contained, synthetic no-account/no-network/no-write product walkthrough
+
+### Changed
+
+- CSV, JSON, Excel, Parquet, database and HTTP source/destination capabilities are now exposed
+  through one stable public discovery surface
+- public onboarding now starts with separate try, embed and security routes
+
 ## 0.4.0a3 - 2026-09-12
 
 ### Added

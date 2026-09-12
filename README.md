@@ -42,6 +42,17 @@ Automatic promotion requires independently strong deterministic evidence, an imm
 
 Stable protocol and persisted-state namespaces are intentionally decoupled from the product name so a later rename does not invalidate encrypted envelopes, delivery state or recipe history. Branding is allowed to have a midlife crisis. Persisted cryptographic state is not.
 
+## Start here
+
+| I want to... | Start with | What happens |
+| --- | --- | --- |
+| **Try Polymorph locally** | `python scripts/dev.py demo --open` | Builds a self-contained synthetic HTML walkthrough. No account, network, model or destination write. |
+| **Embed Polymorph** | [`docs/PRODUCT_API.md`](docs/PRODUCT_API.md) | Use the explicit `move(...).prepare()` then `execute()` API, product events and structured outcomes. |
+| **Evaluate the security model** | [`SECURITY.md`](SECURITY.md) | Review trust boundaries, honest limitations, failure semantics and hardening status before deployment. |
+
+Connector authors can start at [`docs/CONNECTORS.md`](docs/CONNECTORS.md). Installed third-party
+connector code is never discovered or imported unless the host explicitly opts in.
+
 ## Why Polymorph exists
 
 Another AI column mapper is not much of a product. It is a feature, and several vendors already have one.
@@ -184,6 +195,8 @@ git clone https://github.com/IamAngusU/polymorph.git
 cd polymorph
 python scripts/bootstrap.py --skip-checks
 python scripts/dev.py doctor
+python scripts/dev.py connectors
+python scripts/dev.py demo --open
 python examples.py
 ```
 
@@ -201,6 +214,39 @@ python scripts/bootstrap.py --skip-models
 `python examples.py` runs a tiny deterministic mapping example without models or external services.
 
 See [Development setup](docs/DEVELOPMENT.md) for the deliberately local data layout.
+
+## Embed in an application
+
+The convenience API remains deliberately two-phase. Creating and preparing a session never writes:
+
+```python
+from polymorph import ConnectorSpec, move
+
+run = move(
+    source="./incoming/customers.csv",
+    destination=ConnectorSpec.destination(
+        "database",
+        url="sqlite:///application.sqlite",
+        table="customers",
+    ),
+    max_input_records=10_000,
+)
+run.on("review_required", review_ui.open)
+run.on("progress", progress_view.update)
+
+prepared = run.prepare()
+if prepared.ready:
+    outcome = run.execute()
+```
+
+`execute()` is a same-process local convenience path, not the ciphertext-only relay. It currently
+requires a content-inspected immutable file source and refuses secret or opaque forwarding. Database,
+HTTP and custom sources can still be inspected and prepared; use the separately authorized secure
+agent workflow when source snapshot identity or endpoint separation matters. Destinations are always
+explicit. Polymorph never guesses a database table or remote resource from a URL.
+
+See [Embedding and product events](docs/PRODUCT_API.md) for review handling, event localization and
+every structured outcome.
 
 ## The easiest safe workflow
 
@@ -392,7 +438,7 @@ Two post-fix GPU samples observed device-wide allocated VRAM staying at 2,788 Mi
 ## Downloads
 
 - [Download the current source as a ZIP](https://github.com/IamAngusU/polymorph/archive/refs/heads/main.zip)
-- [Download the tested v0.4.0a3 pre-release, wheel, sdist, and Polymorph Run 1.1.0 buddy](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a3)
+- [Download the tested v0.4.0a4 pre-release, wheel, sdist, and Polymorph Run 1.1.0 buddy](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a4)
 
 ## Long-term run metrics
 

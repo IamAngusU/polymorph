@@ -1,0 +1,19 @@
+{
+  "destination.write_not_committed": "The connector proved that the destination write did not commit.",
+  "destination.write_partial": "The write stopped after a proven committed prefix.",
+  "destination.write_started": "The explicit destination write boundary has been entered.",
+  "destination.write_unknown": "The destination write outcome is not fully proven.",
+  "mapping.blocked": "At least one mapping is blocked by contract or policy evidence.",
+  "mapping.ready": "Every mapping rule is automatic or explicitly reviewed.",
+  "mapping.review_required": "At least one mapping requires an explicit operator decision.",
+  "mapping.started": "Polymorph is comparing source and destination contracts.",
+  "preflight.completed": "Preflight checked {records_checked} record(s); promotable is {promotable}.",
+  "preflight.started": "A complete no-write preflight is checking the source stream.",
+  "run.blocked": "The run stopped before an unsafe or unproven write.",
+  "run.completed": "The connector reported {records_written} written record(s).",
+  "run.progress": "Prepared {records_prepared} of {records_total} record(s) for the destination stream.",
+  "run.ready": "The route passed preparation and is waiting for an explicit execute call.",
+  "run.started": "A new local route preparation started.",
+  "source.accepted": "The source contract contains {fields} field(s); immutable snapshot proven is {snapshot_proven}.",
+  "source.inspecting": "Polymorph is inspecting the source before selecting a connector."
+}

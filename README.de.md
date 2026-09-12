@@ -42,6 +42,17 @@ Automatische Freigabe braucht unabhängig starke deterministische Evidenz, einen
 
 Stabile Protocol- und Persistenz-Namespaces sind absichtlich vom Produktnamen getrennt. Ein späteres Rebranding darf verschlüsselte Envelopes, Delivery-State oder Recipe-Historie nicht ungültig machen. Branding darf eine Midlife-Crisis haben. Persistierter kryptografischer Zustand eher nicht.
 
+## Hier anfangen
+
+| Ich moechte... | Einstieg | Was passiert |
+| --- | --- | --- |
+| **Polymorph lokal ausprobieren** | `python scripts/dev.py demo --locale de --open` | Erstellt eine eigenstaendige synthetische HTML-Demo. Kein Account, Netzwerk, Modell oder Ziel-Write. |
+| **Polymorph einbetten** | [`docs/PRODUCT_API.md`](docs/PRODUCT_API.md) | Explizite `move(...).prepare()`- und `execute()`-API, Produkt-Events und strukturierte Outcomes. |
+| **Das Security-Modell bewerten** | [`SECURITY.md`](SECURITY.md) | Trust Boundaries, ehrliche Grenzen, Failure-Semantik und Hardening-Status vor einem Einsatz pruefen. |
+
+Connector-Autoren beginnen bei [`docs/CONNECTORS.md`](docs/CONNECTORS.md). Installierter
+Third-Party-Connector-Code wird nur nach einem expliziten Opt-in gesucht und importiert.
+
 ## Warum Polymorph existiert
 
 Noch ein AI-Column-Mapper ist kein besonders interessantes Produkt. Das ist eine Funktion, und mehrere Anbieter haben sie bereits.
@@ -185,6 +196,8 @@ git clone https://github.com/IamAngusU/polymorph.git
 cd polymorph
 python scripts/bootstrap.py --skip-checks
 python scripts/dev.py doctor
+python scripts/dev.py connectors
+python scripts/dev.py demo --locale de --open
 python examples.py
 ```
 
@@ -202,6 +215,41 @@ python scripts/bootstrap.py --skip-models
 `python examples.py` startet ein kleines deterministisches Mapping-Beispiel ohne Modelle oder externe Services.
 
 Siehe [Development setup](docs/DEVELOPMENT.md) für das absichtlich lokale Datenlayout.
+
+## In eine Anwendung einbetten
+
+Die Convenience-API bleibt absichtlich zweiphasig. Eine Session anzulegen und vorzubereiten schreibt
+niemals:
+
+```python
+from polymorph import ConnectorSpec, move
+
+run = move(
+    source="./incoming/customers.csv",
+    destination=ConnectorSpec.destination(
+        "database",
+        url="sqlite:///application.sqlite",
+        table="customers",
+    ),
+    max_input_records=10_000,
+)
+run.on("review_required", review_ui.open)
+run.on("progress", progress_view.update)
+
+prepared = run.prepare()
+if prepared.ready:
+    outcome = run.execute()
+```
+
+`execute()` ist ein lokaler Same-Process-Convenience-Pfad und nicht das ciphertext-only Relay. Er
+verlangt aktuell eine content-gepruefte unveraenderliche Datei-Source und verweigert Secret- oder
+Opaque-Forwarding. Database-, HTTP- und Custom-Sources koennen weiterhin inspiziert und vorbereitet
+werden; wenn Snapshot-Identitaet oder getrennte Endpunkte wichtig sind, ist der separat autorisierte
+Secure-Agent-Workflow richtig. Destinations sind immer explizit. Polymorph errät niemals eine
+Datenbanktabelle oder Remote-Ressource aus einer URL.
+
+Siehe [Embedding und Produkt-Events](docs/PRODUCT_API.md) fuer Review-Handling, Event-Lokalisierung
+und alle strukturierten Outcomes.
 
 ## Der einfachste sichere Workflow
 
@@ -392,7 +440,7 @@ In zwei GPU-Samples nach den Fixes blieb der geraeteweit belegte VRAM exakt bei 
 ## Downloads
 
 - [Aktuellen Quellcode direkt als ZIP laden](https://github.com/IamAngusU/polymorph/archive/refs/heads/main.zip)
-- [Geprueftes v0.4.0a3-Pre-Release mit Wheel, sdist und Polymorph Run 1.1.0 Buddy laden](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a3)
+- [Geprueftes v0.4.0a4-Pre-Release mit Wheel, sdist und Polymorph Run 1.1.0 Buddy laden](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a4)
 
 ## Langfristige Run-Metriken
 

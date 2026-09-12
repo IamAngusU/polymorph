@@ -26,6 +26,7 @@ from .benchmark import (
     benchmark_call,
     benchmark_mapping_cases,
 )
+from .connector_registry import CONNECTOR_PLUGIN_API_VERSION, default_connector_registry
 from .connectors.base import SourceConnector
 from .connectors.csv_file import CsvConnector
 from .connectors.database import DatabaseConnector
@@ -33,6 +34,7 @@ from .connectors.excel import ExcelConnector
 from .connectors.json_file import JsonFileConnector
 from .connectors.parquet import ParquetConnector
 from .content import ContentInspector, ContentKind, FileInspection, MagikaClassifier
+from .demo import write_demo
 from .diagnostics import explain_reason
 from .errors import PolymorphError
 from .isolation import (
@@ -1796,6 +1798,26 @@ def _benchmark_workflow(args: argparse.Namespace) -> None:
         raise SystemExit(7)
 
 
+def _connectors(args: argparse.Namespace) -> None:
+    registry = default_connector_registry()
+    plugins_loaded: tuple[str, ...] = ()
+    if args.plugins:
+        plugins_loaded = registry.load_entry_points()
+    _emit(
+        {
+            "connector_plugin_api_version": CONNECTOR_PLUGIN_API_VERSION,
+            "third_party_loading": "explicit" if args.plugins else "disabled",
+            "plugins_loaded": list(plugins_loaded),
+            "connectors": [item.as_dict() for item in registry.manifests()],
+        },
+        output=args.output,
+    )
+
+
+def _demo(args: argparse.Namespace) -> None:
+    _emit(write_demo(args.output, locale=args.locale, open_browser=args.open))
+
+
 def _add_output(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output", "-o")
 
@@ -1868,6 +1890,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    connectors = sub.add_parser(
+        "connectors",
+        help="list built-in connector contracts; third-party code stays opt-in",
+    )
+    connectors.add_argument(
+        "--plugins",
+        action="store_true",
+        help="explicitly load installed polymorph.connectors entry points",
+    )
+    _add_output(connectors)
+    connectors.set_defaults(func=_connectors)
+
+    demo = sub.add_parser(
+        "demo",
+        help="build a local no-account, no-network, no-write HTML product demo",
+    )
+    demo.add_argument("--output", "-o", default="polymorph-demo.html")
+    demo.add_argument("--locale", choices=("en", "de"), default="en")
+    demo.add_argument("--open", action="store_true", help="open the generated local HTML")
+    demo.set_defaults(func=_demo)
 
     inspect_parser = sub.add_parser("inspect", help="inspect a source schema locally")
     inspect_sub = inspect_parser.add_subparsers(dest="kind", required=True)
