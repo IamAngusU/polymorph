@@ -6,24 +6,33 @@
   <strong>English</strong> · <a href="README.de.md">Deutsch</a>
 </p>
 
-<p align="center">
-  <strong>LOCAL-FIRST</strong> · <strong>FAIL-CLOSED AUTO</strong> · <strong>EXPLICIT WRITE OUTCOMES</strong><br>
-  Ship safe imports and integrations without rebuilding the dangerous edge cases.<br>
-  <a href="docs/TRUST_CENTER.md">Trust Center and two-minute own-data trial</a>
-</p>
-
-<h1 align="center">Polymorph</h1>
+<h1 align="center">Polymorph Bridge</h1>
 
 <p align="center">
   <strong>Move data between incompatible systems. Prove the route before writing.<br>Keep plaintext at the endpoints. Stop cleanly when the evidence is not good enough.</strong>
 </p>
 
 <p align="center">
+  <strong>LOCAL-FIRST</strong> · <strong>FAIL-CLOSED AUTO</strong> · <strong>EXPLICIT WRITE OUTCOMES</strong><br>
+  Ship safe imports and integrations without rebuilding the dangerous edge cases.<br>
+  <a href="docs/TRUST_CENTER.md">Trust Center and two-minute own-data trial</a>
+</p>
+
+<p align="center">
   <a href="docs/PERFORMANCE_BASELINE.md#file-inspection"><img src="docs/assets/badges/fixture-rows.svg" height="42" alt="50k-row file fixtures"></a>
   <a href="#measured-local-baseline"><img src="docs/assets/badges/workflow.svg" height="42" alt="1,000-record secure workflow baseline"></a>
-  <a href="#measured-local-baseline"><img src="docs/assets/badges/throughput.svg" height="42" alt="375.83 records per second median local throughput"></a>
-  <a href="#optional-model-evidence"><img src="docs/assets/badges/auto-precision.svg" height="42" alt="17 of 17 observed automatic decisions correct"></a>
 </p>
+
+<p align="center">
+  <img src="docs/assets/polymorph-trial.webp" width="1120" alt="Polymorph local own-data Trial showing schema, bounded scan metrics and the no-write boundary">
+</p>
+
+```powershell
+python -m pip install "https://github.com/IamAngusU/polymorph/releases/download/v0.4.0a9/polymorph_bridge-0.4.0a9-py3-none-any.whl"
+polymorph trial C:\path\to\customers.xlsx --open
+```
+
+<p align="center"><sub>No account, no cloud, no destination credentials and no write authority.</sub></p>
 
 <p align="center"><sub>Measured baselines, not universal promises. Click a metric for context.</sub></p>
 <p align="center"><sub>Open source under AGPL-3.0-only · alternative commercial licensing available.</sub></p>
@@ -48,7 +57,7 @@ Automatic promotion requires independently strong deterministic evidence, an imm
 
 Stable protocol and persisted-state namespaces are intentionally decoupled from the product name so a later rename does not invalidate encrypted envelopes, delivery state or recipe history. Branding is allowed to have a midlife crisis. Persisted cryptographic state is not.
 
-## Start here
+## More ways to start
 
 | I want to... | Start with | What happens |
 | --- | --- | --- |
@@ -463,7 +472,7 @@ Two post-fix GPU samples observed device-wide allocated VRAM staying at 2,788 Mi
 ## Downloads
 
 - [Download the current source as a ZIP](https://github.com/IamAngusU/polymorph/archive/refs/heads/main.zip)
-- [Download the tested v0.4.0a8 pre-release, wheel, sdist, and Polymorph Run 1.1.0 buddy](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a8)
+- [Download the tested v0.4.0a9 pre-release, wheel, sdist, and Polymorph Run 1.1.0 buddy](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a9)
 
 ## Long-term run metrics
 

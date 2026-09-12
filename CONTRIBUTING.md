@@ -84,7 +84,7 @@ python scripts/bootstrap.py --skip-models
 
 That command installs the development stack and runs compile checks, Ruff lint and formatting, strict mypy, pytest with warnings as errors, the mapping safety smoke and `pip check`.
 
-CI also runs the supported Python-version matrix and package release gates on pushes and pull requests.
+The repository contains a prepared Python-version matrix and package release gates, but GitHub Actions are currently disabled repository-wide. Published alpha evidence is produced by the documented local validation and manual release process. Do not interpret a workflow file as proof that a public run occurred.
 
 Before opening a PR, the expectation is simple: the relevant tests pass, new behavior is covered, and the documentation still tells the truth.
 

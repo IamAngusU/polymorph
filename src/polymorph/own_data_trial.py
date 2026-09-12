@@ -30,7 +30,7 @@ def _positive_int(value: str) -> int:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="polymorph-kit trial",
+        prog="polymorph trial",
         description=(
             "Inspect one supported local file and build a metadata-only, no-write report."
         ),

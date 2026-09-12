@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.0a9] - 2026-09-12
+
+- expose own-data Trial and release Trust Center through the primary polymorph CLI while preserving toolkit aliases
+- move the no-clone own-data command and a real WebP product screenshot into the README hero
+- replace stale version-based roadmap promises with implemented, evidence-needed, in-progress and planned states
+- state clearly that GitHub Actions are prepared but repository-wide disabled
+- add structured bug, connector-request and evidence-contribution issue forms
+
+
 ## [0.4.0a8] - 2026-09-12
 
 - add a one-command, local-only own-data trial with no destination, network use or write authority

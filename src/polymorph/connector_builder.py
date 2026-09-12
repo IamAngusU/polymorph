@@ -31,7 +31,7 @@ def _identity(name: str) -> tuple[str, str, str]:
 
 
 def _files(name: str, slug: str, package: str, class_name: str) -> dict[str, str]:
-    dependency = "polymorph-bridge>=0.4.0a8,<0.5"
+    dependency = "polymorph-bridge>=0.4.0a9,<0.5"
     manifest = {
         "capabilities": {
             "incremental_read": False,

@@ -6,24 +6,33 @@
   <strong>Deutsch</strong> · <a href="README.md">English</a>
 </p>
 
-<p align="center">
-  <strong>LOCAL-FIRST</strong> · <strong>FAIL-CLOSED AUTO</strong> · <strong>EXPLIZITE WRITE-OUTCOMES</strong><br>
-  Sichere Importe und Integrationen, ohne die gefaehrlichen Randfaelle selbst neu zu bauen.<br>
-  <a href="docs/TRUST_CENTER.md">Trust Center und Zwei-Minuten-Test mit eigenen Daten</a>
-</p>
-
-<h1 align="center">Polymorph</h1>
+<h1 align="center">Polymorph Bridge</h1>
 
 <p align="center">
   <strong>Daten zwischen inkompatiblen Systemen bewegen. Die Route beweisen, bevor geschrieben wird.<br>Plaintext bleibt an den Endpunkten. Wenn die Evidenz nicht reicht, wird sauber gestoppt.</strong>
 </p>
 
 <p align="center">
+  <strong>LOCAL-FIRST</strong> · <strong>FAIL-CLOSED AUTO</strong> · <strong>EXPLIZITE WRITE-OUTCOMES</strong><br>
+  Sichere Importe und Integrationen, ohne die gefaehrlichen Randfaelle selbst neu zu bauen.<br>
+  <a href="docs/TRUST_CENTER.md">Trust Center und Zwei-Minuten-Test mit eigenen Daten</a>
+</p>
+
+<p align="center">
   <a href="docs/PERFORMANCE_BASELINE.md#file-inspection"><img src="docs/assets/badges/fixture-rows.de.svg" height="42" alt="Datei-Fixtures mit je 50.000 Zeilen"></a>
   <a href="#gemessene-lokale-baseline"><img src="docs/assets/badges/workflow.de.svg" height="42" alt="Sicherer Workflow mit 1.000 Records"></a>
-  <a href="#gemessene-lokale-baseline"><img src="docs/assets/badges/throughput.de.svg" height="42" alt="Median 375,83 Records pro Sekunde lokal"></a>
-  <a href="#optionale-modell-evidenz"><img src="docs/assets/badges/auto-precision.de.svg" height="42" alt="17 von 17 beobachteten automatischen Entscheidungen korrekt"></a>
 </p>
+
+<p align="center">
+  <img src="docs/assets/polymorph-trial.webp" width="1120" alt="Lokaler Polymorph Own-data-Trial mit Schema, begrenzten Scan-Metriken und No-write-Grenze">
+</p>
+
+```powershell
+python -m pip install "https://github.com/IamAngusU/polymorph/releases/download/v0.4.0a9/polymorph_bridge-0.4.0a9-py3-none-any.whl"
+polymorph trial C:\Pfad\zu\kunden.xlsx --open
+```
+
+<p align="center"><sub>Kein Account, keine Cloud, keine Destination-Credentials und kein Schreibrecht.</sub></p>
 
 <p align="center"><sub>Gemessene Baselines, keine universellen Versprechen. Ein Klick führt zum Kontext.</sub></p>
 <p align="center"><sub>Open Source unter AGPL-3.0-only · alternative kommerzielle Lizenzierung verfügbar.</sub></p>
@@ -48,7 +57,7 @@ Automatische Freigabe braucht unabhängig starke deterministische Evidenz, einen
 
 Stabile Protocol- und Persistenz-Namespaces sind absichtlich vom Produktnamen getrennt. Ein späteres Rebranding darf verschlüsselte Envelopes, Delivery-State oder Recipe-Historie nicht ungültig machen. Branding darf eine Midlife-Crisis haben. Persistierter kryptografischer Zustand eher nicht.
 
-## Hier anfangen
+## Weitere Einstiege
 
 | Ich moechte... | Einstieg | Was passiert |
 | --- | --- | --- |
@@ -467,7 +476,7 @@ In zwei GPU-Samples nach den Fixes blieb der geraeteweit belegte VRAM exakt bei 
 ## Downloads
 
 - [Aktuellen Quellcode direkt als ZIP laden](https://github.com/IamAngusU/polymorph/archive/refs/heads/main.zip)
-- [Geprueftes v0.4.0a8-Pre-Release mit Wheel, sdist und Polymorph Run 1.1.0 Buddy laden](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a8)
+- [Geprueftes v0.4.0a9-Pre-Release mit Wheel, sdist und Polymorph Run 1.1.0 Buddy laden](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a9)
 
 ## Langfristige Run-Metriken
 

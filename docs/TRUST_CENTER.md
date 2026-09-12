@@ -4,7 +4,7 @@ Polymorph publishes evidence with boundaries instead of turning a green checkmar
 
 ## What a release Trust Center proves
 
-`polymorph-kit trust` accepts a release manifest and a local validation summary. It creates `index.html` and `evidence.json` only when all of these statements are true:
+`polymorph trust` accepts a release manifest and a local validation summary. It creates `index.html` and `evidence.json` only when all of these statements are true:
 
 - the release manifest says the source tree was clean
 - validation passed
@@ -17,7 +17,7 @@ Polymorph publishes evidence with boundaries instead of turning a green checkmar
 The output strips local paths and labels provenance as maintainer-controlled local evidence. It explicitly does **not** claim an independent audit, external witness, GitHub Actions run or cross-platform certification.
 
 ```powershell
-polymorph-kit trust `
+polymorph trust `
   .polymorph\release\assets\release-manifest.json `
   .polymorph\validation\RUN\summary.json `
   --output .polymorph\trust\RELEASE `
@@ -31,23 +31,22 @@ An output directory is never overwritten. Use a new path for every evidence set.
 The shortest useful Polymorph evaluation does not need credentials, a destination or a cloud account:
 
 ```powershell
-polymorph-kit trial C:\path\to\your-file.csv --open
+polymorph trial C:\path\to\your-file.csv --open
 ```
 
 The trial uses the existing content inspection and bounded quality scanner, then creates a local static report. The report contains schema descriptors and metadata-only quality evidence. It does not configure a destination connector, obtain write authority or make a network request. Unsupported or unsafe input fails closed.
 
 The default report directory is `.polymorph/trials/<UTC timestamp>-<source name>`. Pass `--output` to select a new directory and tune the bounded scan with `--max-records`, `--max-samples` and `--max-groups`.
 
-## Current public evidence
+## Public release evidence
 
-Release `0.4.0a7` was locally validated on Windows / AMD64 / Python 3.11.9 at commit `8ea3edd401a116138e41638c9c6befdadb55a082`:
+Every evidenced release publishes two deliberately separate artifacts:
 
-- 1,246 tests passed
-- 8 tests were explicitly skipped
-- 0 failures and 0 errors
-- three SQLite workflow measurements: 188.07 to 190.64 rows/s
-- maximum measured peak RSS: 79.73 MiB
+- `release-manifest.json` is the SHA-256 authority for downloadable assets.
+- `polymorph-trust-center.zip` is the human-readable static view plus a sanitized `evidence.json`.
 
-These figures came from one maintainer-controlled machine while the host was under material unrelated load. They are useful run evidence, not a hardware-independent performance guarantee. The validation did not cover other operating systems, live PostgreSQL, release-package installation or full parser OS isolation.
+Use the [GitHub releases page](https://github.com/IamAngusU/polymorph/releases) rather than a version copied into this document. Each Trust Center names its exact release, commit, host, tests, measurements and non-coverage, so this page cannot silently become stale when a newer alpha is published.
 
-Release asset hashes remain the verification authority. See the matching `release-manifest.json` attached to the GitHub release.
+Release `0.4.0a8` is the first release carrying the Trust Center bundle. Its clean local validation bound commit `a4f58dd02ec4cc996d91c588290d6ab1b3cf08db`, recorded 1,250 passing tests and measured a three-run SQLite workflow median of 197.75 rows/s with 79.75 MiB maximum peak RSS. A separate clean-venv wheel installation and installed Trial smoke also passed. These are maintainer-controlled local observations, not an independent audit or hardware-independent performance guarantee.
+
+The main `polymorph` command is now the primary interface. `polymorph-kit trial` and `polymorph-kit trust` remain compatible aliases for existing scripts.

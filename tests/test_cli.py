@@ -40,6 +40,27 @@ def test_cli_supports_csv_and_plan_commands() -> None:
     assert prepare_args.max_input_records == 5000
 
 
+def test_cli_exposes_primary_trial_and_trust_commands() -> None:
+    parser = build_parser()
+    trial = parser.parse_args(["trial", "customers.xlsx", "--max-records", "5000", "--open"])
+    assert trial.source == "customers.xlsx"
+    assert trial.max_records == 5000
+    assert trial.open is True
+
+    trust = parser.parse_args(
+        [
+            "trust",
+            "release-manifest.json",
+            "validation-summary.json",
+            "--output",
+            "trust-center",
+        ]
+    )
+    assert trust.release_manifest == "release-manifest.json"
+    assert trust.validation_summary == "validation-summary.json"
+    assert trust.output == "trust-center"
+
+
 def test_event_commands_accept_the_writer_stream_budget() -> None:
     parser = build_parser()
     summary = parser.parse_args(

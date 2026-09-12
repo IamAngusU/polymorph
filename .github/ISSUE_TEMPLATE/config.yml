@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Private security report
+    url: https://angusu.de
+    about: Do not publish suspected vulnerabilities, credentials or customer data in an issue.
+  - name: Questions and design discussion
+    url: https://github.com/IamAngusU/polymorph/discussions
+    about: Ask integration questions and discuss product or connector designs.

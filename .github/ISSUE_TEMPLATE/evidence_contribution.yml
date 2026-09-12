@@ -1,0 +1,54 @@
+name: Evidence or corpus contribution
+description: Propose independently sourced fixtures, benchmarks or provider observations.
+title: "[Evidence] "
+body:
+  - type: dropdown
+    id: evidence_type
+    attributes:
+      label: Evidence type
+      options:
+        - Multilingual mapping corpus
+        - Parser or format corpus
+        - Connector provider test
+        - Fault or recovery observation
+        - Performance measurement
+        - Review-time study
+    validations:
+      required: true
+  - type: textarea
+    id: provenance
+    attributes:
+      label: Provenance and source separation
+      description: Explain who produced the material and how organizations, templates and time periods remain separated.
+    validations:
+      required: true
+  - type: textarea
+    id: license
+    attributes:
+      label: License and redistribution rights
+      description: Link the applicable terms. Do not contribute material that cannot be redistributed or audited.
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy treatment
+      description: Explain how customer values, identifiers, credentials and personal data were excluded or irreversibly sanitized.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected observation
+      description: State the frozen oracle or measurement method before Polymorph output is inspected.
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: This contribution contains no credentials, customer payloads or undisclosed personal data.
+          required: true
+        - label: Synthetic variants, if any, are identified and cannot cross the evaluation split of their source.
+          required: true

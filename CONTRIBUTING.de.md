@@ -84,7 +84,7 @@ python scripts/bootstrap.py --skip-models
 
 Der Befehl installiert den Development-Stack und führt Compile Checks, Ruff Lint und Formatting, strict mypy, pytest mit Warnings als Errors, den Mapping Safety Smoke und `pip check` aus.
 
-CI führt zusätzlich die unterstützte Python-Version-Matrix und Package-Release-Gates bei Pushes und Pull Requests aus.
+Das Repository enthält eine vorbereitete Python-Version-Matrix und Package-Release-Gates, aber GitHub Actions sind derzeit repositoryweit deaktiviert. Veröffentlichte Alpha-Evidenz entsteht durch die dokumentierte lokale Validierung und den manuellen Release-Prozess. Eine Workflow-Datei ist kein Beweis für einen öffentlichen Lauf.
 
 Vor einem PR ist die Erwartung ziemlich simpel: relevante Tests bestehen, neues Verhalten ist abgedeckt und die Dokumentation erzählt weiterhin die Wahrheit.
 

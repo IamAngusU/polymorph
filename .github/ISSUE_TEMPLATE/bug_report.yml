@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a reproducible Polymorph defect without sharing secrets or customer data.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Polymorph. Suspected security vulnerabilities belong in the private channel described in SECURITY.md, not in a public issue.
+  - type: input
+    id: version
+    attributes:
+      label: Polymorph version or commit
+      placeholder: 0.4.0a9 or a full commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - File inspection or parser
+        - Mapping or policy
+        - Preflight or review
+        - Destination write or retry
+        - Audit, events or evidence
+        - Packaging or installation
+        - Documentation or UI
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include commands and synthetic data only. Remove credentials, payloads and local personal paths.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior and write outcome
+      description: If a destination was involved, state COMMITTED, NOT_COMMITTED, PARTIAL or UNKNOWN when known.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Public-data safety
+      options:
+        - label: I removed credentials, access tokens, private keys, customer data and plaintext production payloads.
+          required: true
+        - label: This is not a privately reportable security vulnerability.
+          required: true

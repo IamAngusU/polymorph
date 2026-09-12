@@ -22,7 +22,7 @@ class TrustCenterError(RuntimeError):
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="polymorph-kit trust",
+        prog="polymorph trust",
         description="Build a static Trust Center from commit-bound local evidence.",
     )
     parser.add_argument("release_manifest", type=Path)

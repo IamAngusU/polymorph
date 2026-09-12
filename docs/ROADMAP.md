@@ -1,89 +1,66 @@
 # Roadmap
 
-## v0.1 foundation
+This roadmap uses evidence states instead of assigning unfinished promises to old version numbers.
 
-- typed schema descriptors and fingerprints
-- deterministic and optional local semantic matching
-- information-flow policy engine
-- opaque field transport
-- Excel, JSON/JSON5, database and constrained HTTP destinations
+## Implemented and locally evidenced
 
-## v0.2 blind delivery runtime
-
-- full-record opaque transport
-- authenticated plan digests and protocol limits
-- ciphertext-only relay queue with leases
-- delivery ledger, sealed quarantine and replay safety
-- signed capabilities and tamper-evident audit
-- natural-key to foreign-key resolution through unique constraints
-- adaptive Excel layout discovery and conservative drift repair
-- CSV and paginated HTTP JSON sources
-- encrypted recipient key files and credential references
-- atomic local file writes
-- pinned optional descriptor encoder
-
-## v0.3 reliability gate
-
-- content-first file trust gate independent of filename/extension
-- archive traversal, expansion, macro and external-link checks
-- optional Magika classifier evidence
-- CSV dialect candidate ensemble with optional CleverCSV
-- optional multilingual cross-encoder reranker
-- deterministic-only automatic-approval authority
+- typed schema descriptors, fingerprints and immutable plan digests
+- deterministic mapping authority with optional local semantic retrieval and reranking
+- fail-closed information-flow policy and explicit `AUTO`, `REVIEW` and `BLOCKED` decisions
+- content-first file trust independent of names, extensions and caller MIME labels
+- bounded CSV, JSON/JSON5, Excel and Parquet inspection and record iteration
+- archive traversal, expansion, macro, formula-cache and external-link defenses
 - complete no-write preflight before automatic promotion
-- recipe memory with exact rebind and revalidation
-- formula-cache uncertainty detection
-- one-command `prepare` workflow
-- opt-in file resource benchmarks
-- labelled mapping-corpus precision/coverage benchmark
+- exact recipe rebind, revalidation and conservative outcome health
+- explicit `COMMITTED`, `NOT_COMMITTED`, `PARTIAL` and `UNKNOWN` write semantics
+- authenticated opaque transport, replay ledger, sealed quarantine and audit chain
+- atomic local file destinations, credential references and encrypted recipient keys
+- local product demo, own-data Trial, review UI export and commit-bound Trust Center
+- bounded workflow, mapping, quality, review-time and resource evidence formats
 
-## v0.4 deployable agents
+Implemented means code and repository tests exist. It does not imply every operating system, provider or workload has independent evidence.
 
-- long-running source, relay and destination services
-- mutually authenticated agent control channel
-- durable authenticated distribution of public-key registration, rotation and revocation state
-- external checkpoints or hardware counters for recipient trust-state rollback detection
-- destination identity-key rotation and emergency recipient-key revocation ceremonies
-- OS/HSM-backed key-provider interfaces
-- extend the exact-snapshot content worker to schema parsing and bounded record streaming
-- connector-account least-privilege policy checks
-- metadata-only recipe outcome health with conservative suspension after repeated rejected runs
-- verified audit summaries and stable reason-code explanations
-- backpressure, health/readiness and metrics without payload labels
-- complete source-to-relay-to-destination operational journal and alerts
-- optional distributed relay backend after SQLite/spool benchmarks establish the need
+## Implemented, stronger evidence needed
 
-## v0.5 contract ingestion
+- PostgreSQL connector and lab tooling: live provider fault evidence is still required
+- Parquet source and destination: local round-trip evidence exists; broader engine interoperability is still required
+- constrained HTTP JSON delivery: local TLS acknowledgement-loss evidence exists; provider-specific idempotency claims remain external contracts
+- parser worker: content inspection has enforceable backends, while full schema parsing and record streaming are not completely OS-contained
+- connector plugin API: contract conformance does not prove a third-party package or service trustworthy
+- optional semantic models: release corpora remain too small for broad accuracy claims
+- Windows resource boundaries: Job Object support exists; cross-host policy evidence remains incomplete
 
-- OpenAPI 3.1 ingestion
-- request/response schema graph
-- OpenAPI-ingested and independently verified API idempotency and retry contracts
-- bounded rate-limit handling
-- richer nested JSON path mapping
-- XML and document-format adapters behind parser containment
-- Parquet/Arrow high-throughput adapter
-- scanned/image table extraction as an optional specialist path
+## In progress
 
-## v0.6 adaptive operations
+- local Polymorph Studio for source, schema, quality, mapping, review, preflight and evidence
+- user-facing Failure Lab for acknowledgement loss, drift, replay and hostile-file cases
+- complete customer-onboarding, ERP-migration and recurring-sync Golden Paths
+- machine-readable connector verification catalog with dated evidence levels
+- larger source-separated multilingual, ERP, finance, tax, currency and units corpora
+- operator measurement of review time saved and abstention usefulness
+- public static product and release-trust site without analytics
 
-- signed plan promotion workflow
-- tenant-scoped recipe approval history
-- safe staged schema-drift rollout
-- destination-native validation adapters where a true no-side-effect validation API exists
-- benchmark-derived thresholds per connector/domain
-- optional high-precision specialist model profile if it beats the CPU-first stack on the project corpus
+## Planned
 
-## Evidence and adoption gates
+- local REST/OpenAPI control service with SSE events and a TypeScript SDK
+- S3-compatible object storage, SFTP, MySQL and SQL Server connectors driven by demand
+- long-running source, relay and destination agents with mutually authenticated control
+- durable trust-bundle distribution, identity rotation and emergency revocation ceremonies
+- OS keystore and HSM-backed key-provider integrations
+- OpenAPI 3.1 contract ingestion and independently verified retry/idempotency declarations
+- richer nested JSON paths and declarative schema-bound validation/transform rules
+- safe staged drift rollout and destination-native validation where a true no-write API exists
 
-These gates span versions and prevent feature count from replacing product usefulness:
+## External evidence and adoption needed
 
-- clean-machine five-minute proof on Windows, Linux and macOS
-- source-, template- and time-separated public or customer-like holdout corpora
+- clean-machine proof on Windows, Linux and macOS
+- real PostgreSQL and MySQL disconnect-before/after-commit fault labs
+- hundreds to thousands of source-, organization-, template- and time-separated fields
 - zero unsafe automatic decisions on every declared release corpus
-- operator studies for review time, abstention usefulness and recovery success
-- PostgreSQL and Parquet end-to-end evidence before broad connector claims
-- stable longitudinal JSON for correctness, latency, throughput, peak RSS and accelerator memory
-- public release evidence that includes machine, corpus, timestamp and limitations
-- local-first defaults with no telemetry, model activation or cloud workflow side effects
+- independent security review and externally witnessed release evidence
+- design partners using real workflows with privacy-safe published outcomes
+- provider-tested and production-observed connector levels
+
+GitHub Actions are intentionally disabled at present. Workflow definitions are preparation, not evidence of public CI runs.
 
 See [`WORLD_READINESS.md`](WORLD_READINESS.md) for the product thesis and measurement priorities.

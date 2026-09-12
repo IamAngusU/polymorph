@@ -57,6 +57,7 @@ from .matching.semantic import (
 from .models.mapping import MappingDecision
 from .models.schema import SchemaDescriptor
 from .observability import DEFAULT_EVENT_STREAM_BYTES, MAX_EVENT_STREAM_BYTES, EventStream
+from .own_data_trial import main as trial_main
 from .paths import model_home, recipe_store_path
 from .planning import build_plan
 from .preflight import PreflightReport, PreflightRunner
@@ -79,6 +80,7 @@ from .serialization import (
 )
 from .spool import SealedSpool
 from .sqlite_safety import selected_journal_mode, sqlite_wal_is_safe
+from .trust_center import main as trust_main
 from .validation import PlanValidator
 from .workflow_benchmark import run_workflow_benchmark
 
@@ -1883,6 +1885,39 @@ def _benchmark_resource_payload(metrics: BenchmarkResult) -> dict[str, object]:
     return payload
 
 
+def _trial(args: argparse.Namespace) -> None:
+    arguments = [
+        str(args.source),
+        "--max-records",
+        str(args.max_records),
+        "--max-samples",
+        str(args.max_samples),
+        "--max-groups",
+        str(args.max_groups),
+    ]
+    if args.output is not None:
+        arguments.extend(("--output", str(args.output)))
+    if args.open:
+        arguments.append("--open")
+    status = trial_main(arguments)
+    if status:
+        raise SystemExit(status)
+
+
+def _trust(args: argparse.Namespace) -> None:
+    arguments = [
+        str(args.release_manifest),
+        str(args.validation_summary),
+        "--output",
+        str(args.output),
+    ]
+    if args.open:
+        arguments.append("--open")
+    status = trust_main(arguments)
+    if status:
+        raise SystemExit(status)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="polymorph",
@@ -1911,6 +1946,28 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--locale", choices=("en", "de"), default="en")
     demo.add_argument("--open", action="store_true", help="open the generated local HTML")
     demo.set_defaults(func=_demo)
+
+    trial = sub.add_parser(
+        "trial",
+        help="inspect your own local file without a destination write",
+    )
+    trial.add_argument("source")
+    trial.add_argument("--output", "-o")
+    trial.add_argument("--max-records", type=int, default=10_000)
+    trial.add_argument("--max-samples", type=int, default=32)
+    trial.add_argument("--max-groups", type=int, default=128)
+    trial.add_argument("--open", action="store_true", help="open the local HTML report")
+    trial.set_defaults(func=_trial)
+
+    trust = sub.add_parser(
+        "trust",
+        help="build a static Trust Center from commit-bound release evidence",
+    )
+    trust.add_argument("release_manifest")
+    trust.add_argument("validation_summary")
+    trust.add_argument("--output", "-o", required=True)
+    trust.add_argument("--open", action="store_true", help="open the local Trust Center")
+    trust.set_defaults(func=_trust)
 
     inspect_parser = sub.add_parser("inspect", help="inspect a source schema locally")
     inspect_sub = inspect_parser.add_subparsers(dest="kind", required=True)

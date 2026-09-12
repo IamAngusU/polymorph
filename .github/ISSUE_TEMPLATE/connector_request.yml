@@ -1,0 +1,56 @@
+name: Connector request
+description: Propose a connector with its contracts, evidence needs and least-privilege boundary.
+title: "[Connector] "
+body:
+  - type: input
+    id: provider
+    attributes:
+      label: System or provider
+      placeholder: MySQL, S3-compatible storage, Salesforce
+    validations:
+      required: true
+  - type: dropdown
+    id: direction
+    attributes:
+      label: Direction
+      options:
+        - Source
+        - Destination
+        - Source and destination
+    validations:
+      required: true
+  - type: input
+    id: documentation
+    attributes:
+      label: Authoritative API or protocol documentation
+      placeholder: https://...
+    validations:
+      required: true
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Real workflow
+      description: Describe the recurring import or integration and why existing CSV, JSON, Parquet, database or HTTP connectors are insufficient.
+    validations:
+      required: true
+  - type: textarea
+    id: write_contract
+    attributes:
+      label: Write, idempotency and reconciliation contract
+      description: For destinations, explain how commit, acknowledgement loss, duplicate prevention and reconciliation work. Use "unknown" when unknown.
+    validations:
+      required: true
+  - type: textarea
+    id: access
+    attributes:
+      label: Test access and evidence
+      description: State whether a disposable account, emulator or public test endpoint is available. Do not post credentials.
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundary
+    attributes:
+      label: Boundary acknowledgement
+      options:
+        - label: I understand that contract-tested does not automatically mean provider-tested or production-observed.
+          required: true
