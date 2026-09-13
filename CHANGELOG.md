@@ -2,6 +2,12 @@
 
 All notable changes to this alpha are documented here.
 
+## Unreleased
+
+### Fixed
+
+- Correct the GitHub wheel example so the separately packaged NSFW Guard CPU runtime is installed.
+
 ## 0.4.0a11 - 2026-09-13
 
 ### Added
