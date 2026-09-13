@@ -1817,6 +1817,41 @@ def _benchmark_workflow(args: argparse.Namespace) -> None:
         raise SystemExit(7)
 
 
+def _guard(args: argparse.Namespace) -> None:
+    from .external_guard import BRIDGE_PROTOCOL, discover_guard_command, scan_images
+
+    if args.doctor:
+        command = discover_guard_command(args.executable)
+        print(
+            json.dumps(
+                {
+                    "available": True,
+                    "command": list(command),
+                    "protocol": BRIDGE_PROTOCOL,
+                    "process_isolation": True,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+    if not args.images:
+        raise ValueError("polymorph guard requires at least one image unless --doctor is used")
+    responses = scan_images(
+        args.images,
+        executable=args.executable,
+        policy=args.policy,
+        provider=args.provider,
+        threads=args.threads,
+        cuda_arena_limit_mib=args.cuda_arena_limit_mib,
+        model_path=args.model_path,
+        no_download=args.no_download,
+        timeout_seconds=args.timeout_seconds,
+    )
+    for response in responses:
+        print(json.dumps(response, sort_keys=True, separators=(",", ":")))
+
+
 def _connectors(args: argparse.Namespace) -> None:
     registry = default_connector_registry()
     plugins_loaded: tuple[str, ...] = ()
@@ -1954,6 +1989,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_output(connectors)
     connectors.set_defaults(func=_connectors)
+
+    guard = sub.add_parser(
+        "guard",
+        help="scan images through an installed NSFW Guard process without importing it",
+    )
+    guard.add_argument("images", nargs="*")
+    guard.add_argument("--doctor", action="store_true", help="only verify tool discovery")
+    guard.add_argument("--executable", help="explicit nsfw-guard executable path")
+    guard.add_argument(
+        "--policy",
+        choices=("balanced-v1", "high-precision-v1", "safety-first-v1"),
+        default="balanced-v1",
+    )
+    guard.add_argument("--provider", choices=("cpu", "cuda", "directml"), default="cpu")
+    guard.add_argument("--threads", type=int, default=0)
+    guard.add_argument("--cuda-arena-limit-mib", type=int)
+    guard.add_argument("--model-path")
+    guard.add_argument("--no-download", action="store_true")
+    guard.add_argument("--timeout-seconds", type=float, default=120.0)
+    guard.set_defaults(func=_guard)
 
     demo = sub.add_parser(
         "demo",

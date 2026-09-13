@@ -28,7 +28,7 @@
 </p>
 
 ```powershell
-python -m pip install "https://github.com/IamAngusU/polymorph/releases/download/v0.4.0a10/polymorph_bridge-0.4.0a10-py3-none-any.whl"
+python -m pip install "https://github.com/IamAngusU/polymorph/releases/download/v0.4.0a11/polymorph_bridge-0.4.0a11-py3-none-any.whl"
 polymorph trial C:\Pfad\zu\kunden.xlsx --open
 ```
 
@@ -476,7 +476,7 @@ In zwei GPU-Samples nach den Fixes blieb der geraeteweit belegte VRAM exakt bei 
 ## Downloads
 
 - [Aktuellen Quellcode direkt als ZIP laden](https://github.com/IamAngusU/polymorph/archive/refs/heads/main.zip)
-- [Geprueftes v0.4.0a10-Pre-Release mit Wheel, sdist und Polymorph Run 1.1.0 Buddy laden](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a10)
+- [Geprueftes v0.4.0a11-Pre-Release mit Wheel, sdist und Polymorph Run 1.1.0 Buddy laden](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a11)
 
 ## Langfristige Run-Metriken
 
@@ -498,3 +498,24 @@ World-Benchmark.cmd
 
 Der Nachweis laedt keine Daten hoch, aktiviert kein Modell, pusht nichts und startet keine GitHub
 Action. Parquet, PostgreSQL und die datensparsame Review-Zeitmessung stehen in der Startanleitung.
+
+## Polymorph, ohne Adapter-Theater
+
+Sind beide Befehle in derselben Umgebung installiert, findet Polymorph den Guard automatisch ueber
+`PATH`:
+
+```powershell
+python -m pip install "https://github.com/IamAngusU/polymorph/releases/download/v0.4.0a11/polymorph_bridge-0.4.0a11-py3-none-any.whl" "https://github.com/IamAngusU/nsfw-guard/releases/download/v0.1.0a3/nsfw_guard-0.1.0a3-py3-none-any.whl"
+polymorph guard --doctor
+polymorph guard C:\Bilder\beispiel.jpg
+```
+
+Ein warmer Child-Prozess verarbeitet den Stream. Pfade werden automatisch begrenzt freigegeben,
+jede Anfrage wird an einen SHA-256 gebunden, Antworten bleiben begrenzt und kaputtes Protokoll
+stoppt den Lauf. CPU ist Standard. Eine GPU wird nur auf ausdruecklichen Wunsch benutzt, weil
+ueberraschend belegter VRAM keine Onboarding-Hilfe ist.
+
+Die Produkte bleiben getrennt. NSFW Guard liefert Image-Policy-Evidenz; Polymorph validiert den
+Prozessvertrag. Keines der beiden verwechselt einen Klassifikator-Score mit Schreibrecht.
+
+Siehe [`docs/IMAGE_SAFETY_BRIDGE.md`](docs/IMAGE_SAFETY_BRIDGE.md).

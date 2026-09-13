@@ -2,7 +2,7 @@
 
 All notable changes to this alpha are documented here.
 
-## Unreleased
+## 0.4.0a11 - 2026-09-13
 
 ### Added
 
@@ -10,6 +10,8 @@ All notable changes to this alpha are documented here.
   explicit RAM headroom and preliminary versus publishable calibration levels.
 - Add metadata firewall policy and sanitization contracts with value-free provenance and exact
   source-digest verification.
+- Add an optional, bounded `safety-bridge/v1` process client that auto-discovers NSFW Guard,
+  SHA-256-binds image requests and keeps one inference process warm.
 
 ### Changed
 
@@ -18,7 +20,7 @@ All notable changes to this alpha are documented here.
 - Make metadata removal impact authoritative for sanitize, review and block decisions.
 - Reuse canonical source-authentication bytes within an immutable signed record while retaining
   independent signature verification at every trust boundary.
-- Advance development builds after the immutable a10 release to `0.4.0a11.dev0`.
+- Release the accumulated memory, metadata and optional image-safety integration work as a11.
 
 ## 0.4.0a10 - 2026-09-12
 

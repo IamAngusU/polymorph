@@ -28,7 +28,7 @@
 </p>
 
 ```powershell
-python -m pip install "https://github.com/IamAngusU/polymorph/releases/download/v0.4.0a10/polymorph_bridge-0.4.0a10-py3-none-any.whl"
+python -m pip install "https://github.com/IamAngusU/polymorph/releases/download/v0.4.0a11/polymorph_bridge-0.4.0a11-py3-none-any.whl"
 polymorph trial C:\path\to\customers.xlsx --open
 ```
 
@@ -472,7 +472,7 @@ Two post-fix GPU samples observed device-wide allocated VRAM staying at 2,788 Mi
 ## Downloads
 
 - [Download the current source as a ZIP](https://github.com/IamAngusU/polymorph/archive/refs/heads/main.zip)
-- [Download the tested v0.4.0a10 pre-release, wheel, sdist, and Polymorph Run 1.1.0 buddy](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a10)
+- [Download the tested v0.4.0a11 pre-release, wheel, sdist, and Polymorph Run 1.1.0 buddy](https://github.com/IamAngusU/polymorph/releases/tag/v0.4.0a11)
 
 ## Long-term run metrics
 
@@ -494,3 +494,22 @@ World-Benchmark.cmd
 
 The proof does not upload data, activate a model, push to GitHub or start GitHub Actions. Parquet,
 PostgreSQL and metadata-only review timing are documented in the start guide.
+
+## Polymorph, without adapter theatre
+
+Install both commands into the same environment and Polymorph finds the guard on `PATH`:
+
+```powershell
+python -m pip install "https://github.com/IamAngusU/polymorph/releases/download/v0.4.0a11/polymorph_bridge-0.4.0a11-py3-none-any.whl" "https://github.com/IamAngusU/nsfw-guard/releases/download/v0.1.0a3/nsfw_guard-0.1.0a3-py3-none-any.whl"
+polymorph guard --doctor
+polymorph guard C:\images\sample.jpg
+```
+
+One warm child process handles the stream. Paths are allow-listed automatically, every request is
+SHA-256-bound, responses are bounded and malformed protocol output stops the run. CPU is the default.
+A GPU is used only when requested, because surprise VRAM allocation is not an onboarding feature.
+
+The products remain separate. NSFW Guard provides image-policy evidence; Polymorph validates the
+process contract. Neither mistakes a classifier score for permission to write anything.
+
+See [`docs/IMAGE_SAFETY_BRIDGE.md`](docs/IMAGE_SAFETY_BRIDGE.md).
