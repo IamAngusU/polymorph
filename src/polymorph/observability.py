@@ -580,6 +580,8 @@ class EventStream:
                 raise IntegrityError(
                     f"operational event line {line_number} is invalid JSON"
                 ) from exc
+            if not isinstance(payload, dict):
+                raise IntegrityError(f"operational event line {line_number} is invalid JSON")
             yield OperationalEvent.from_dict(payload)
 
     def _open_for_read(self) -> int:

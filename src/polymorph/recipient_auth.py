@@ -114,12 +114,21 @@ def _is_reparse_point(metadata: os.stat_result) -> bool:
 def _file_fingerprint(metadata: os.stat_result) -> _StateFingerprint:
     """Identify one published trust-state file without reading its verified contents again."""
 
+    # Python 3.12 deprecates Windows ``st_ctime`` as creation time. Under active file
+    # instrumentation, ``lstat`` can expose the creation time while ``fstat`` exposes a
+    # slightly newer metadata-change time for the same open inode. ``st_birthtime_ns`` is the
+    # stable creation-time field on Windows; POSIX keeps the stronger change-time check.
+    stable_change_time = (
+        int(getattr(metadata, "st_birthtime_ns", metadata.st_ctime_ns))
+        if os.name == "nt"
+        else int(metadata.st_ctime_ns)
+    )
     return (
         int(metadata.st_dev),
         int(metadata.st_ino),
         int(metadata.st_size),
         int(metadata.st_mtime_ns),
-        int(metadata.st_ctime_ns),
+        stable_change_time,
     )
 
 

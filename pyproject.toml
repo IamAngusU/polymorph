@@ -36,13 +36,13 @@ dependencies = [
 [project.optional-dependencies]
 keyring = ["keyring>=25.0"]
 postgres = ["psycopg[binary]>=3.2"]
-fileid = ["magika>=1.0"]
+fileid = ["magika>=1.0", "numpy>=1.26,<2.5"]
 csv-detection = ["clevercsv>=0.8"]
 benchmark = ["psutil>=6.0"]
 parquet = ["pyarrow>=18.0"]
 semantic = [
   "huggingface-hub>=0.27",
-  "numpy>=1.26",
+  "numpy>=1.26,<2.5",
   "onnxruntime>=1.20",
   "sentencepiece>=0.2",
 ]
@@ -97,11 +97,16 @@ packages = ["polymorph"]
 
 [[tool.mypy.overrides]]
 module = [
+  "huggingface_hub",
+  "huggingface_hub.*",
   "onnxruntime",
   "onnxruntime.*",
+  "numpy",
+  "numpy.*",
   "pyarrow",
   "pyarrow.*",
   "sentencepiece",
   "sentencepiece.*",
 ]
 ignore_missing_imports = true
+follow_imports = "skip"

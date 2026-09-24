@@ -281,13 +281,21 @@ class SnapshotFileIdentity:
 
     @classmethod
     def from_stat(cls, metadata: os.stat_result) -> SnapshotFileIdentity:
+        # On Windows/Python 3.12, lstat and fstat may report subtly different deprecated
+        # st_ctime values for the same inode. Birth time is the stable Windows identity field;
+        # POSIX retains ctime so in-place metadata changes still invalidate the snapshot.
+        stable_change_time = (
+            int(getattr(metadata, "st_birthtime_ns", metadata.st_ctime_ns))
+            if os.name == "nt"
+            else metadata.st_ctime_ns
+        )
         return cls(
             device=metadata.st_dev,
             inode=metadata.st_ino,
             mode=stat.S_IFMT(metadata.st_mode),
             size_bytes=metadata.st_size,
             mtime_ns=metadata.st_mtime_ns,
-            ctime_ns=metadata.st_ctime_ns,
+            ctime_ns=stable_change_time,
             file_attributes=int(getattr(metadata, "st_file_attributes", 0)),
         )
 
