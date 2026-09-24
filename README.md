@@ -64,6 +64,7 @@ Stable protocol and persisted-state namespaces are intentionally decoupled from 
 | **Try Polymorph locally** | `python scripts/dev.py demo --open` | Builds a self-contained synthetic HTML walkthrough. No account, network, model or destination write. |
 | **Embed Polymorph** | [`docs/PRODUCT_API.md`](docs/PRODUCT_API.md) | Use the explicit `move(...).prepare()` then `execute()` API, product events and structured outcomes. |
 | **Evaluate the security model** | [`SECURITY.md`](SECURITY.md) | Review trust boundaries, honest limitations, failure semantics and hardening status before deployment. |
+| **Prepare a CapabilityFabric inventory** | [`docs/CAPABILITY_FABRIC.md`](docs/CAPABILITY_FABRIC.md) | Build a digest-bound, secret-free account metadata plan; credentials never enter Polymorph. |
 
 Connector authors can start at [`docs/CONNECTORS.md`](docs/CONNECTORS.md). Installed third-party
 connector code is never discovered or imported unless the host explicitly opts in.

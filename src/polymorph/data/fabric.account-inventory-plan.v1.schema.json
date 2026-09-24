@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://angusu.de/schemas/fabric.account-inventory-plan.v1.schema.json",
+  "title": "CapabilityFabric account inventory plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["entries", "mapping", "plan_digest", "schema", "source"],
+  "properties": {
+    "schema": {"const": "fabric.account-inventory-plan.v1"},
+    "plan_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["connector", "kind", "name", "schema_fingerprint", "sha256", "size_bytes"],
+      "properties": {
+        "connector": {"enum": ["csv", "json", "excel"]},
+        "kind": {"enum": ["delimited_text", "json", "json5", "xlsx"]},
+        "name": {"type": "string", "minLength": 1, "maxLength": 256},
+        "schema_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "size_bytes": {"type": "integer", "minimum": 1, "maximum": 2147483648}
+      }
+    },
+    "mapping": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 6,
+      "contains": {
+        "type": "object",
+        "required": ["target"],
+        "properties": {"target": {"const": "origin"}}
+      },
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["authority", "source_field_id", "source_name", "target"],
+        "properties": {
+          "authority": {"enum": ["deterministic", "operator"]},
+          "source_field_id": {"type": "string", "minLength": 1, "maxLength": 256},
+          "source_name": {"type": "string", "minLength": 1, "maxLength": 256},
+          "target": {
+            "enum": [
+              "origin",
+              "label",
+              "username",
+              "password_policy",
+              "risk_tier",
+              "mutation_approval"
+            ]
+          }
+        }
+      }
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entry",
+          "label",
+          "mutation_approval",
+          "origin",
+          "password_policy",
+          "risk_tier"
+        ],
+        "properties": {
+          "entry": {"type": "integer", "minimum": 1, "maximum": 10000},
+          "label": {"type": "string", "minLength": 1, "maxLength": 256},
+          "origin": {"type": "string", "minLength": 8, "maxLength": 2048},
+          "username": {"type": "string", "minLength": 1, "maxLength": 320},
+          "password_policy": {"enum": ["compatible", "strong", "maximum"]},
+          "risk_tier": {"enum": ["normal", "sensitive", "critical"]},
+          "mutation_approval": {
+            "enum": ["trusted-user", "preauthorized-agent", "manual-only"]
+          }
+        }
+      }
+    }
+  }
+}

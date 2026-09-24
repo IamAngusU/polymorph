@@ -26,6 +26,11 @@ from .benchmark import (
     benchmark_call,
     benchmark_mapping_cases,
 )
+from .capability_fabric import (
+    build_account_inventory_plan,
+    parse_field_overrides,
+    write_account_inventory_plan,
+)
 from .connector_registry import CONNECTOR_PLUGIN_API_VERSION, default_connector_registry
 from .connectors.base import SourceConnector
 from .connectors.csv_file import CsvConnector
@@ -1872,6 +1877,30 @@ def _demo(args: argparse.Namespace) -> None:
     _emit(write_demo(args.output, locale=args.locale, open_browser=args.open))
 
 
+def _fabric_inventory_plan(args: argparse.Namespace) -> None:
+    _protect_write_path(args.output, args.source)
+    overrides = parse_field_overrides(args.field_maps)
+    plan = build_account_inventory_plan(
+        args.source,
+        field_overrides=overrides,
+        max_entries=args.max_entries,
+    )
+    write_account_inventory_plan(args.output, plan)
+    entries = plan["entries"]
+    if not isinstance(entries, list):
+        raise PolymorphError("generated CapabilityFabric inventory plan has invalid entries")
+    _emit(
+        {
+            "entries": len(entries),
+            "output": str(Path(args.output).expanduser().resolve()),
+            "plan_digest": plan["plan_digest"],
+            "schema": plan["schema"],
+            "secret_material": False,
+            "write_authority": False,
+        }
+    )
+
+
 def _add_output(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output", "-o")
 
@@ -2040,6 +2069,33 @@ def build_parser() -> argparse.ArgumentParser:
     trust.add_argument("--output", "-o", required=True)
     trust.add_argument("--open", action="store_true", help="open the local Trust Center")
     trust.set_defaults(func=_trust)
+
+    fabric = sub.add_parser(
+        "fabric",
+        help="prepare secret-free metadata artifacts for CapabilityFabric",
+    )
+    fabric_sub = fabric.add_subparsers(dest="fabric_command", required=True)
+    fabric_inventory = fabric_sub.add_parser(
+        "inventory-plan",
+        help="prepare a digest-bound account metadata plan without destination writes",
+    )
+    fabric_inventory.add_argument("source")
+    fabric_inventory.add_argument("--output", "-o", required=True)
+    fabric_inventory.add_argument(
+        "--map",
+        dest="field_maps",
+        action="append",
+        default=[],
+        metavar="TARGET=SOURCE",
+        help="explicitly map a reviewed source field; repeat for more fields",
+    )
+    fabric_inventory.add_argument(
+        "--max-entries",
+        type=int,
+        default=10_000,
+        help="hard account-entry limit (default and maximum: 10000)",
+    )
+    fabric_inventory.set_defaults(func=_fabric_inventory_plan)
 
     inspect_parser = sub.add_parser("inspect", help="inspect a source schema locally")
     inspect_sub = inspect_parser.add_subparsers(dest="kind", required=True)

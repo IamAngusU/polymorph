@@ -61,6 +61,26 @@ def test_cli_exposes_primary_trial_and_trust_commands() -> None:
     assert trust.output == "trust-center"
 
 
+def test_cli_exposes_secret_free_capability_fabric_inventory_plan() -> None:
+    args = build_parser().parse_args(
+        [
+            "fabric",
+            "inventory-plan",
+            "accounts.csv",
+            "--output",
+            "account-plan.json",
+            "--map",
+            "origin=portal",
+            "--map",
+            "username=handle",
+        ]
+    )
+    assert args.source == "accounts.csv"
+    assert args.output == "account-plan.json"
+    assert args.field_maps == ["origin=portal", "username=handle"]
+    assert args.max_entries == 10_000
+
+
 def test_event_commands_accept_the_writer_stream_budget() -> None:
     parser = build_parser()
     summary = parser.parse_args(
