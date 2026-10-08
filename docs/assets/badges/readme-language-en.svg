@@ -1,7 +1,20 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="54" height="54" viewBox="0 0 54 54" role="img" aria-label="Read this README in English" data-badge-system="IamAngusU/Badges" data-badge-layout="squircle">
+<svg xmlns="http://www.w3.org/2000/svg" width="54" height="54" viewBox="0 0 54 54" role="img" aria-label="Read this README in English" data-badge-system="IamAngusU/Badges" data-badge-layout="squircle" data-badge-foil="union-jack" data-badge-pattern="union-jack">
   <title>Read this README in English</title>
-  <style>.badge-bg{fill:#fff;stroke:#dfe3e9}.badge-label{fill:#11151b}.badge-accent{fill:#526dff}@media(prefers-color-scheme:dark){.badge-bg{fill:#0b0f14;stroke:#303741}.badge-label{fill:#f7f8fa}}</style>
+  <desc>A restrained navy, white and red foil inspired by the Union Jack. Motion stops when reduced motion is preferred.</desc>
+  <defs>
+    <pattern id="badge-foil-read-english" patternUnits="userSpaceOnUse" width="54" height="54">
+      <rect width="54" height="54" fill="#012169"/>
+      <path d="M-4-4L58 58M58-4L-4 58" stroke="#FFFFFF" stroke-width="14"/>
+      <path d="M-4-4L58 58M58-4L-4 58" stroke="#C8102E" stroke-width="5"/>
+      <path d="M27-4V58M-4 27H58" stroke="#FFFFFF" stroke-width="18"/>
+      <path d="M27-4V58M-4 27H58" stroke="#C8102E" stroke-width="9"/>
+    </pattern>
+    <clipPath id="badge-surface-read-english"><rect x="2" y="2" width="50" height="50" rx="15"/></clipPath>
+  </defs>
+  <style>.badge-bg{fill:#fff;stroke:#dfe3e9}.badge-label{fill:#11151b}:root{--label-halo:#ffffffb8}@keyframes badge-foil-sweep{0%,12%{transform:translateX(-76px)}54%,100%{transform:translateX(76px)}}.badge-foil{animation:badge-foil-sweep 7.6s cubic-bezier(.45,0,.55,1) infinite;opacity:.26;pointer-events:none}.badge-label{paint-order:stroke;stroke:var(--label-halo);stroke-width:.7px;stroke-linejoin:round}@media(prefers-reduced-motion:reduce){.badge-foil{animation:none;transform:translateX(0)}}@media(prefers-color-scheme:dark){.badge-bg{fill:#0b0f14;stroke:#303741}.badge-label{fill:#f7f8fa}:root{--label-halo:#0b0f14cc}.badge-foil{opacity:.36}}</style>
   <rect class="badge-bg" x="1" y="1" width="52" height="52" rx="16"/>
+  <g clip-path="url(#badge-surface-read-english)" aria-hidden="true">
+    <path class="badge-foil" d="M20-8h34L38 62H4z" fill="url(#badge-foil-read-english)" opacity=".26" transform="translate(0)"/>
+  </g>
   <text class="badge-label" x="27" y="34" text-anchor="middle" font-family="Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,Helvetica,sans-serif" font-size="20" font-weight="760" letter-spacing="0.4">EN</text>
-  <circle class="badge-accent" cx="27" cy="43" r="1.8"/>
 </svg>

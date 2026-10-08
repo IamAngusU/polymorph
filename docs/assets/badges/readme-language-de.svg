@@ -1,7 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="54" height="54" viewBox="0 0 54 54" role="img" aria-label="Diese README auf Deutsch lesen" data-badge-system="IamAngusU/Badges" data-badge-layout="squircle">
+<svg xmlns="http://www.w3.org/2000/svg" width="54" height="54" viewBox="0 0 54 54" role="img" aria-label="Diese README auf Deutsch lesen" data-badge-system="IamAngusU/Badges" data-badge-layout="squircle" data-badge-foil="black-red-gold" data-badge-pattern="bands-horizontal">
   <title>Diese README auf Deutsch lesen</title>
-  <style>.badge-bg{fill:#fff;stroke:#dfe3e9}.badge-label{fill:#11151b}.badge-accent{fill:#d39b20}@media(prefers-color-scheme:dark){.badge-bg{fill:#0b0f14;stroke:#303741}.badge-label{fill:#f7f8fa}}</style>
+  <desc>Eine zurückhaltende Folie in Schwarz, Rot und Gold, inspiriert von der deutschen Flagge. Bei reduzierter Bewegung steht sie still.</desc>
+  <defs>
+    <linearGradient id="badge-foil-read-german" x1="0.5" y1="0" x2="0.5" y2="1"><stop offset="0" stop-color="#000000" stop-opacity="1"/><stop offset="0.33" stop-color="#000000" stop-opacity="1"/><stop offset="0.33" stop-color="#DD0000" stop-opacity="1"/><stop offset="0.67" stop-color="#DD0000" stop-opacity="1"/><stop offset="0.67" stop-color="#FFCC00" stop-opacity="1"/><stop offset="1" stop-color="#FFCC00" stop-opacity="1"/></linearGradient>
+    <clipPath id="badge-surface-read-german"><rect x="2" y="2" width="50" height="50" rx="15"/></clipPath>
+  </defs>
+  <style>.badge-bg{fill:#fff;stroke:#dfe3e9}.badge-label{fill:#11151b}:root{--label-halo:#ffffffb8}@keyframes badge-foil-sweep{0%,12%{transform:translateX(-76px)}54%,100%{transform:translateX(76px)}}.badge-foil{animation:badge-foil-sweep 7.6s cubic-bezier(.45,0,.55,1) infinite;opacity:.26;pointer-events:none}.badge-label{paint-order:stroke;stroke:var(--label-halo);stroke-width:.7px;stroke-linejoin:round}@media(prefers-reduced-motion:reduce){.badge-foil{animation:none;transform:translateX(0)}}@media(prefers-color-scheme:dark){.badge-bg{fill:#0b0f14;stroke:#303741}.badge-label{fill:#f7f8fa}:root{--label-halo:#0b0f14cc}.badge-foil{opacity:.36}}</style>
   <rect class="badge-bg" x="1" y="1" width="52" height="52" rx="16"/>
+  <g clip-path="url(#badge-surface-read-german)" aria-hidden="true">
+    <path class="badge-foil" d="M20-8h34L38 62H4z" fill="url(#badge-foil-read-german)" opacity=".26" transform="translate(0)"/>
+  </g>
   <text class="badge-label" x="27" y="34" text-anchor="middle" font-family="Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,Helvetica,sans-serif" font-size="20" font-weight="760" letter-spacing="0.4">DE</text>
-  <circle class="badge-accent" cx="27" cy="43" r="1.8"/>
 </svg>
