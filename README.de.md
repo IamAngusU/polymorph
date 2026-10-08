@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Deutsch</strong> · <a href="README.md">English</a>
+  <a href="README.md"><img src="docs/assets/badges/readme-language-en.svg" height="40" alt="Read this README in English"></a>
 </p>
 
 <h1 align="center">Polymorph Bridge</h1>
