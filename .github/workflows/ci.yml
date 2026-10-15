@@ -286,7 +286,7 @@ jobs:
           tests/test_parser_worker.py tests/test_content_limits.py
           --strict-config --strict-markers
           --durations=0 --junitxml=parser-worker-isolation.xml
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: workflow-lab-evidence
@@ -375,7 +375,7 @@ jobs:
           "$RUNNER_TEMP/sdist-smoke/bin/polymorph" key certificate-accept --help
           "$RUNNER_TEMP/sdist-smoke/bin/python" -c "from polymorph.observability import EventStream; s=EventStream('$RUNNER_TEMP/sdist-events.jsonl', run_id='22'*16); c=s.correlation_id('workflow'); s.emit(component='workflow_benchmark', event_type='workflow_started', status='started', correlation_id=c, item_count=0); s.emit(component='workflow_benchmark', event_type='workflow_completed', status='passed', correlation_id=c, item_count=0)"
           "$RUNNER_TEMP/sdist-smoke/bin/polymorph" events check "$RUNNER_TEMP/sdist-events.jsonl" --run-id 22222222222222222222222222222222
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: polymorph-distributions
           path: dist/*
@@ -405,7 +405,7 @@ jobs:
           --output model-safety.json
       - name: Record model installation status
         run: python scripts/dev.py doctor > model-doctor.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: model-smoke-evidence
           path: |
